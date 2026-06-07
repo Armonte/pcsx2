@@ -854,6 +854,7 @@ set(pcsx2ImGuiSources
 	ImGui/ImGuiFullscreen.cpp
 	ImGui/ImGuiManager.cpp
 	ImGui/ImGuiOverlays.cpp
+	ImGui/SdbzOverlay.cpp
 )
 
 set(pcsx2ImGuiHeaders
@@ -863,6 +864,7 @@ set(pcsx2ImGuiHeaders
 	ImGui/ImGuiFullscreen.h
 	ImGui/ImGuiManager.h
 	ImGui/ImGuiOverlays.h
+	ImGui/SdbzOverlay.h
 )
 
 set(pcsx2InputSources
