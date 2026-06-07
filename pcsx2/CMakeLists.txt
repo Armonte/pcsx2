@@ -691,6 +691,8 @@ if(WIN32)
 		GS/Renderers/DX12/D3D12StreamBuffer.cpp
 		GS/Renderers/DX12/GSDevice12.cpp
 		GS/Renderers/DX12/GSTexture12.cpp
+		ImGui/backends/imgui_impl_win32.cpp
+		ImGui/backends/imgui_impl_dx11.cpp
 	)
 	list(APPEND pcsx2GSHeaders
 		GS/Renderers/DX11/D3D.h
