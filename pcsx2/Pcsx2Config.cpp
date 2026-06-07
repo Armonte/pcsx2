@@ -642,6 +642,7 @@ const char* Pcsx2Config::GSOptions::AspectRatioNames[(size_t)AspectRatioType::Ma
 	"4:3",
 	"16:9",
 	"10:7",
+	"8:7",
 	nullptr};
 
 const char* Pcsx2Config::GSOptions::FMVAspectRatioSwitchNames[(size_t)FMVAspectRatioSwitchType::MaxCount + 1] = {
@@ -650,6 +651,7 @@ const char* Pcsx2Config::GSOptions::FMVAspectRatioSwitchNames[(size_t)FMVAspectR
 	"4:3",
 	"16:9",
 	"10:7",
+	"8:7",
 	nullptr};
 
 const char* Pcsx2Config::GSOptions::BlendingLevelNames[] = {

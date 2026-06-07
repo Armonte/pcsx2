@@ -308,6 +308,8 @@ static float GetCurrentAspectRatioFloat(bool is_progressive)
 			return 16.0f / 9.0f;
 		case AspectRatioType::R10_7:
 			return 10.0f / 7.0f;
+		case AspectRatioType::R8_7:
+			return 8.0f / 7.0f;
 	}
 }
 
@@ -339,6 +341,10 @@ static GSVector4 CalculateDrawDstRect(s32 window_width, s32 window_height, const
 	else if (EmuConfig.CurrentAspectRatio == AspectRatioType::R10_7)
 	{
 		targetAr = 10.0f / 7.0f;
+	}
+	else if (EmuConfig.CurrentAspectRatio == AspectRatioType::R8_7)
+	{
+		targetAr = 8.0f / 7.0f;
 	}
 
 	const float crop_adjust = (static_cast<float>(src_rect.width()) / static_cast<float>(src_size.x)) /
@@ -994,6 +1000,14 @@ void GSTranslateWindowToDisplayCoordinates(float window_x, float window_y, float
 
 	*display_x = rel_x / draw_width;
 	*display_y = rel_y / draw_height;
+}
+
+void GSTranslateDisplayToWindowCoordinates(float display_x, float display_y, float* window_x, float* window_y)
+{
+	const float draw_width = s_last_draw_rect.z - s_last_draw_rect.x;
+	const float draw_height = s_last_draw_rect.w - s_last_draw_rect.y;
+	*window_x = s_last_draw_rect.x + display_x * draw_width;
+	*window_y = s_last_draw_rect.y + display_y * draw_height;
 }
 
 void GSSetDisplayAlignment(GSDisplayAlignment alignment)

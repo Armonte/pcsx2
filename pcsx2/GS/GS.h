@@ -104,6 +104,10 @@ void GSgetTitleStats(std::string& info);
 /// returned if the position lies outside the display area.
 void GSTranslateWindowToDisplayCoordinates(float window_x, float window_y, float* display_x, float* display_y);
 
+/// Inverse of the above: normalized display coordinates (0..1) -> window pixel position. Used by the
+/// SDBZ hitbox overlay to map the game's internal render-space onto the displayed image rectangle.
+void GSTranslateDisplayToWindowCoordinates(float display_x, float display_y, float* window_x, float* window_y);
+
 void GSUpdateConfig(const Pcsx2Config::GSOptions& new_config);
 void GSSetSoftwareRendering(bool software_renderer, GSInterlaceMode new_interlace);
 bool GSSaveSnapshotToMemory(u32 window_width, u32 window_height, bool apply_aspect, bool crop_borders,
