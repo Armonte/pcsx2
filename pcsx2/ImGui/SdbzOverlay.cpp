@@ -125,14 +125,26 @@ namespace
 		bool master = true;
 		bool show_hurt = true, show_attack = true, show_throw = true,
 			 show_prox = true, show_other = true, show_skel = false, show_state = true, show_shells = true;
+		bool show_labels = true; // draw per-box category/guard-height labels on active boxes
+		bool dbg_shells = false; // shell-field diff inspector readout (only shown while frozen)
 		bool hide_hud = false; // hide the game's HUD (combo/bars/timer) -- clears the scene-node +56 "always-on" flag
 		SdbzColor c_hurt   {0.24f, 0.86f, 0.35f, 0.70f};
-		SdbzColor c_attack {1.00f, 0.24f, 0.24f, 0.90f};
+		SdbzColor c_attack {1.00f, 0.24f, 0.24f, 0.90f}; // attack (mid / default)
 		SdbzColor c_throw  {0.86f, 0.27f, 0.86f, 0.86f};
 		SdbzColor c_prox   {1.00f, 0.78f, 0.16f, 0.74f};
-		SdbzColor c_other  {0.27f, 0.59f, 0.92f, 0.59f};
+		SdbzColor c_other  {0.27f, 0.59f, 0.92f, 0.59f}; // legacy "other" (unused by split categories; kept for migration)
 		SdbzColor c_skel   {0.47f, 0.90f, 0.47f, 0.78f};
 		SdbzColor c_shell  {1.00f, 0.50f, 0.10f, 0.85f};
+		// split-category colors (mask-driven, RE'd from CHit_ResolveHitRecords@0x1CC390)
+		SdbzColor c_atk_high {1.00f, 0.59f, 0.16f, 0.90f}; // overhead / high attack
+		SdbzColor c_atk_low  {0.94f, 0.88f, 0.22f, 0.90f}; // low attack
+		SdbzColor c_cmdgrab  {1.00f, 0.47f, 0.80f, 0.85f}; // command grab / guard-trigger (mask 0x100)
+		SdbzColor c_body     {0.35f, 0.65f, 1.00f, 0.72f}; // body / push volume (0x1000000)
+		SdbzColor c_clash    {0.65f, 0.65f, 0.69f, 0.66f}; // collision / clash / pushbox (0x8000000)
+		SdbzColor c_special  {0.31f, 0.90f, 0.82f, 0.80f}; // special volume (0x800)
+		// control-window pane open/collapsed states (persisted)
+		bool p_boxes = true, p_step = true, p_fcam = false, p_cam = false,
+			 p_aspect = false, p_deint = false, p_style = false, p_frame = false, p_train = false;
 		float box_thickness = 1.5f;
 		float skel_thickness = 1.0f;
 		int   sphere_segments = 20;     // UV-sphere resolution (latitude/longitude divisions)
@@ -143,6 +155,11 @@ namespace
 		float cam_hscale = 0.75f;       // horizontal scale: game default 0.75; ~0.875 = 1:1 on Native-8:7
 		float cam_zoom = 1.0f;          // FOV zoom: 1.0 = default, <1 = zoom out (wider), >1 = zoom in
 		bool  cam_link_zoom = false;    // link zoom to h-scale (zoom = 0.75/h-scale -> widening zooms out)
+		bool  cam_ortho = false;        // orthographic (parallel) projection -- for clean stage/capture shots
+		float ortho_dist = 40.0f;       // ortho focal distance d: X/Y scale = persp_scale / d (smaller d = bigger)
+		bool  fc_fix_cull = true;       // rebuild the cull frustum (cam+208/cam+560) from the freecam each frame
+		float cull_expand = 2.5f;       // frustum scale: 1=exact freecam FOV, >1 culls less at the edges
+		bool  no_cull = false;          // blow the frustum up huge -> nothing culls (for captures / ortho)
 		bool  show_window = false;      // control window visibility (toggle: Ctrl+J)
 		bool  popout = false;           // render the control panel in a separate OS window (not persisted)
 	};
@@ -177,15 +194,23 @@ namespace
 		b("master", s.master);
 		b("show_hurt", s.show_hurt); b("show_attack", s.show_attack); b("show_throw", s.show_throw);
 		b("show_prox", s.show_prox); b("show_other", s.show_other); b("show_skel", s.show_skel); b("show_state", s.show_state);
+		b("show_labels", s.show_labels);
+		b("dbg_shells", s.dbg_shells);
 		b("hide_hud", s.hide_hud);
 		b("show_shells", s.show_shells);
 		c("c_hurt", s.c_hurt); c("c_attack", s.c_attack); c("c_throw", s.c_throw);
 		c("c_prox", s.c_prox); c("c_other", s.c_other); c("c_skel", s.c_skel); c("c_shell", s.c_shell);
+		c("c_atk_high", s.c_atk_high); c("c_atk_low", s.c_atk_low); c("c_cmdgrab", s.c_cmdgrab);
+		c("c_body", s.c_body); c("c_clash", s.c_clash); c("c_special", s.c_special);
+		b("p_boxes", s.p_boxes); b("p_step", s.p_step); b("p_fcam", s.p_fcam); b("p_cam", s.p_cam);
+		b("p_aspect", s.p_aspect); b("p_deint", s.p_deint); b("p_style", s.p_style); b("p_frame", s.p_frame); b("p_train", s.p_train);
 		f("box_thickness", s.box_thickness); f("skel_thickness", s.skel_thickness);
 		i("sphere_segments", s.sphere_segments); i("frame_delay", s.frame_delay);
 		b("sphere_shaded", s.sphere_shaded); f("sphere_fill_alpha", s.sphere_fill_alpha);
 		b("cam_hscale_on", s.cam_hscale_on); f("cam_hscale", s.cam_hscale); f("cam_zoom", s.cam_zoom);
 		b("cam_link_zoom", s.cam_link_zoom);
+		b("cam_ortho", s.cam_ortho); f("ortho_dist", s.ortho_dist);
+		b("fc_fix_cull", s.fc_fix_cull); f("cull_expand", s.cull_expand); b("no_cull", s.no_cull);
 		f("fc_move_speed", g_fc.move_speed); f("fc_mouse_sens", g_fc.mouse_sens);
 		f("fc_look_speed", g_fc.look_speed); f("fc_look_smooth", g_fc.look_smooth);
 		b("fc_invert_y", g_fc.invert_y);
@@ -217,15 +242,23 @@ namespace
 		rd_b("master", s.master);
 		rd_b("show_hurt", s.show_hurt); rd_b("show_attack", s.show_attack); rd_b("show_throw", s.show_throw);
 		rd_b("show_prox", s.show_prox); rd_b("show_other", s.show_other); rd_b("show_skel", s.show_skel); rd_b("show_state", s.show_state);
+		rd_b("show_labels", s.show_labels);
+		rd_b("dbg_shells", s.dbg_shells);
 		rd_b("hide_hud", s.hide_hud);
 		rd_b("show_shells", s.show_shells);
 		rd_c("c_hurt", s.c_hurt); rd_c("c_attack", s.c_attack); rd_c("c_throw", s.c_throw);
 		rd_c("c_prox", s.c_prox); rd_c("c_other", s.c_other); rd_c("c_skel", s.c_skel); rd_c("c_shell", s.c_shell);
+		rd_c("c_atk_high", s.c_atk_high); rd_c("c_atk_low", s.c_atk_low); rd_c("c_cmdgrab", s.c_cmdgrab);
+		rd_c("c_body", s.c_body); rd_c("c_clash", s.c_clash); rd_c("c_special", s.c_special);
+		rd_b("p_boxes", s.p_boxes); rd_b("p_step", s.p_step); rd_b("p_fcam", s.p_fcam); rd_b("p_cam", s.p_cam);
+		rd_b("p_aspect", s.p_aspect); rd_b("p_deint", s.p_deint); rd_b("p_style", s.p_style); rd_b("p_frame", s.p_frame); rd_b("p_train", s.p_train);
 		rd_f("box_thickness", s.box_thickness); rd_f("skel_thickness", s.skel_thickness);
 		rd_i("sphere_segments", s.sphere_segments); rd_i("frame_delay", s.frame_delay);
 		rd_b("sphere_shaded", s.sphere_shaded); rd_f("sphere_fill_alpha", s.sphere_fill_alpha);
 		rd_b("cam_hscale_on", s.cam_hscale_on); rd_f("cam_hscale", s.cam_hscale); rd_f("cam_zoom", s.cam_zoom);
 		rd_b("cam_link_zoom", s.cam_link_zoom);
+		rd_b("cam_ortho", s.cam_ortho); rd_f("ortho_dist", s.ortho_dist);
+		rd_b("fc_fix_cull", s.fc_fix_cull); rd_f("cull_expand", s.cull_expand); rd_b("no_cull", s.no_cull);
 		rd_f("fc_move_speed", g_fc.move_speed); rd_f("fc_mouse_sens", g_fc.mouse_sens);
 		rd_f("fc_look_speed", g_fc.look_speed); rd_f("fc_look_smooth", g_fc.look_smooth);
 		rd_b("fc_invert_y", g_fc.invert_y);
@@ -240,7 +273,7 @@ namespace
 		ImVec2 a, b;    // line endpoints; for text a = position
 		ImU32 col;
 		float thick;
-		char text[28];
+		char text[160]; // long enough for the shell-inspector diff lines (was 28 -> truncated mid-field)
 		ImVec2 c;       // 3rd vertex for filled triangles
 	};
 	static inline void EmitLine(std::vector<SdbzPrim>& o, ImVec2 a, ImVec2 b, ImU32 col, float th) {
@@ -263,17 +296,22 @@ namespace
 		int SL = g_sdbz.sphere_segments;     if (SL < 6) SL = 6; if (SL > MAXSL - 1) SL = MAXSL - 1; // longitude
 		static ImVec2 scr[MAXST][MAXSL]; static float dep[MAXST][MAXSL]; static bool ok[MAXST][MAXSL];
 		static float nrm[MAXST][MAXSL][3]; // GS thread only, fully rewritten before read each call
+		// Engine-faithful placement (RE'd 1:1 from CHitData_GridInsert@0x1ADDD0, the authoritative collision
+		// geometry): the box CENTER is transformed by the FULL bone matrix W=node+240 (incl. any per-move bone
+		// SCALE -- e.g. Majin Buu stretch moves), but the RADIUS (hitobj+204) is used RAW in WORLD units; the
+		// engine NEVER scales r by the bone matrix. So transform the center ONCE here, then offset the sphere by
+		// r in world space. (The old code transformed (center + r*n) by W, which inflated r by the bone scale and
+		// drew a box far bigger than the real hit -- the "looks like it hits Vegeta but whiffs" bug.)
+		const float c4[4] = {cx, cy, cz, 1.0f}; float wc[4]; RowMul(c4, W, wc); // world center (bone-scaled, like the engine)
 		for (int i = 0; i <= ST; i++) {
 			const float th = 3.14159265f * static_cast<float>(i) / static_cast<float>(ST);
 			const float ct = std::cos(th), stt = std::sin(th);
 			for (int j = 0; j <= SL; j++) {
 				const float ph = 6.28318531f * static_cast<float>(j) / static_cast<float>(SL);
-				const float lnx = stt * std::cos(ph), lny = ct, lnz = stt * std::sin(ph); // local unit normal
-				const float lp[4] = {cx + r * lnx, cy + r * lny, cz + r * lnz, 1.0f};
-				float wp[4]; RowMul(lp, W, wp);
+				const float lnx = stt * std::cos(ph), lny = ct, lnz = stt * std::sin(ph); // unit normal (world; sphere is orientation-free)
+				const float wp[4] = {wc[0] + r * lnx, wc[1] + r * lny, wc[2] + r * lnz, 1.0f}; // world surface point: center + r in WORLD units
 				ImVec2 sv; ok[i][j] = WorldToWindow(WS, wp[0], wp[1], wp[2], sv); scr[i][j] = sv;
-				const float ln4[4] = {lnx, lny, lnz, 0.0f}; float wn[4]; RowMul(ln4, W, wn);
-				nrm[i][j][0] = wn[0]; nrm[i][j][1] = wn[1]; nrm[i][j][2] = wn[2];
+				nrm[i][j][0] = lnx; nrm[i][j][1] = lny; nrm[i][j][2] = lnz; // world normal = surface direction (radius unscaled)
 				dep[i][j] = wp[0] * WS[3] + wp[1] * WS[7] + wp[2] * WS[11] + WS[15]; // clip w = depth
 			}
 		}
@@ -366,24 +404,48 @@ namespace
 		const u32 grp = Ee32(player + 6204), cm = Ee32(player + 1976);
 		if (!EeValid(grp) || !EeValid(cm)) return;
 		const s32 frame = static_cast<s32>(Ee32(cm + 152));
-		auto entry = [&](u32 he, ImU32 col) {
+		// box center -> screen pixel (for category labels): same remap + bone world matrix as boneSphere.
+		auto boxScreen = [&](u32 bp, ImVec2& outpos) -> bool {
+			const u32 bone = Ee32(bp + 20); if (bone >= 23u) return false;
+			const u32 node = Ee32(skel + 12u + 4u * Ee32(SDBZ_REMAP + 4u * bone)); if (!EeValid(node)) return false;
+			float W[16]; EeMat(node + 240, W);
+			const float c4[4] = {EeF32(bp), EeF32(bp + 4), EeF32(bp + 8), 1.0f}; float wc[4]; RowMul(c4, W, wc);
+			return WorldToWindow(WS, wc[0], wc[1], wc[2], outpos);
+		};
+		auto entry = [&](u32 he, ImU32 col, const char* label) {
 			const u16 s = Ee16(he + 0x20), e = Ee16(he + 0x22);
 			if (frame < static_cast<s32>(s) || frame > static_cast<s32>(e)) return;
+			ImVec2 lpos; bool haveL = false;
 			for (int j = 0; j < 8; j++) {
 				const u32 bp = Ee32(he + 0x24 + 4u * j); if (!EeValid(bp)) continue;
 				boneSphere(Ee32(bp + 20), EeF32(bp), EeF32(bp + 4), EeF32(bp + 8), EeF32(bp + 16), col);
+				if (!haveL && label[0] && g_sdbz.show_labels) haveL = boxScreen(bp, lpos); // one label per entry, at its first box
 			}
+			if (haveL) EmitText(out, lpos, col, label);
 		};
+		// Categorize each active grp+8 entry by its HitEntry68 MASK (he+0x1c). Full taxonomy RE'd from
+		// CHit_ResolveHitRecords@0x1CC390: distinct color + label per category (no more single "other" lump).
+		// Attacks (physical strikes) are sub-coloured/labelled by GUARD HEIGHT (mask bits 29-30) + unblockable
+		// (0x1 clear) + non-damaging (0x40). Projectiles are the orange shells drawn separately (SdbzDrawShells).
 		for (int i = 0; i < 16; i++) { const u32 he = Ee32(grp + 8 + 4u * i); if (!EeValid(he)) continue;
 			const u32 mask = Ee32(he + 0x1c);
-			const bool is_throw = (mask & 0x480u) != 0;
-			const bool is_attack = !is_throw && (mask & 0x9000D80u) == 0;
-			if (is_throw) { if (g_sdbz.show_throw) entry(he, SdbzCol(g_sdbz.c_throw)); }      // throw / command grab
-			else if (is_attack) { if (g_sdbz.show_attack) entry(he, SdbzCol(g_sdbz.c_attack)); } // attack
-			else { if (g_sdbz.show_other) entry(he, SdbzCol(g_sdbz.c_other)); } }              // other / volume
+			ImU32 col; char lbl[28]; bool show;
+			if ((mask & 0x480u) != 0)          { col = SdbzCol(g_sdbz.c_throw);  std::snprintf(lbl, sizeof(lbl), "THROW");    show = g_sdbz.show_throw; }  // 0x80 start / 0x400 active
+			else if ((mask & 0x100u) != 0)     { col = SdbzCol(g_sdbz.c_cmdgrab); std::snprintf(lbl, sizeof(lbl), "CMD-GRAB"); show = g_sdbz.show_throw; } // command grab / guard-trigger
+			else if ((mask & 0x1000000u) != 0) { col = SdbzCol(g_sdbz.c_body);    std::snprintf(lbl, sizeof(lbl), "BODY");     show = g_sdbz.show_other; } // body / push volume
+			else if ((mask & 0x8000000u) != 0) { col = SdbzCol(g_sdbz.c_clash);   std::snprintf(lbl, sizeof(lbl), "CLASH");    show = g_sdbz.show_other; } // collision / clash / pushbox
+			else if ((mask & 0x800u) != 0)     { col = SdbzCol(g_sdbz.c_special); std::snprintf(lbl, sizeof(lbl), "SPECIAL");  show = g_sdbz.show_other; } // special volume
+			else { // ATTACK (physical strike) -- guard height (mask bits 29-30) drives colour + label
+				const u32 gh = mask & 0x60000000u;
+				const char* ghs = (gh == 0x40000000u) ? "-OH" : (gh == 0x20000000u) ? "-LO" : (gh == 0x60000000u) ? "-MD" : "";
+				col = (gh == 0x40000000u) ? SdbzCol(g_sdbz.c_atk_high) : (gh == 0x20000000u) ? SdbzCol(g_sdbz.c_atk_low) : SdbzCol(g_sdbz.c_attack);
+				std::snprintf(lbl, sizeof(lbl), "ATK%s%s%s", ghs, (mask & 0x1u) ? "" : "*UB", (mask & 0x40u) ? "*ND" : "");
+				show = g_sdbz.show_attack;
+			}
+			if (show) entry(he, col, lbl); }
 		if (g_sdbz.show_prox)
 			for (int i = 0; i < 8; i++) { const u32 he = Ee32(grp + 0x68 + 4u * i); if (!EeValid(he)) continue;
-				entry(he, SdbzCol(g_sdbz.c_prox)); } // proximity / guard-trigger
+				entry(he, SdbzCol(g_sdbz.c_prox), "PROX"); } // proximity / guard-trigger
 	}
 
 	// Projectile/shell hitboxes. Each player owns 16 shell slots @player+1820+4*i; active when shell+832 & 8
@@ -396,21 +458,40 @@ namespace
 		const float ident[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}; // shell positions are already world-space
 		for (int i = 0; i < 16; i++) {
 			const u32 shell = Ee32(player + 1820u + 4u * i);
-			if (!EeValid(shell) || (Ee32(shell + 832) & 8u) == 0) continue; // slot empty / inactive
+			if (!EeValid(shell) || (Ee32(shell + 832) & 8u) == 0) continue; // slot empty (832&8 = slot ALIVE / vfx playing)
+			// HIT-ACTIVE GATE: spawn/alive != can-deal-damage. shell+1440 bit8 (0x100) = the hitbox is ACTIVE this
+			// frame (empirically: it stays set across the whole active window and clears the frame the shot stops
+			// hitting; bit3/0x8 is the per-frame 'touched' flag CHitMgr clears, NOT the window). Don't draw the box
+			// during startup or lingering vfx. (Inspector still lists alive shells so you can see f1440 live.)
+			if ((Ee32(shell + 1440) & 0x100u) == 0) continue;
 			const u32 ho = Ee32(shell + 1384), segbuf = Ee32(shell + 1376), parbuf = Ee32(shell + 1388);
 			if (!EeValid(segbuf)) continue;
-			s32 count = EeValid(ho) ? static_cast<s32>(Ee32(ho + 12)) : 1;
+			// SEGMENT COUNT: ki-blast/beam expose it via *(ho+12); but multi-orb melee shells like Frieza's whip
+			// (class CShlSp373) leave ho NULL and store the count as a BYTE @shell+1381 (CShlSp373__m10 hardcodes 5;
+			// CShlCtrlKame mirrors its u16 count there too). Without this we read count=1 and draw only seg 0.
+			s32 count;
+			if (EeValid(ho)) count = static_cast<s32>(Ee32(ho + 12));
+			else { const u32 c = (Ee32(shell + 1380) >> 8) & 0xFFu; count = (c >= 1u && c <= 64u) ? static_cast<s32>(c) : 1; }
 			if (count < 1) count = 1; if (count > 64) count = 64;
 			for (int k = 0; k < count; k++) {
 				const u32 seg = segbuf + 48u * static_cast<u32>(k);
 				const float bx = EeF32(seg + 16), by = EeF32(seg + 20), bz = EeF32(seg + 24); // world point B (live tip)
-				if (!std::isfinite(bx) || !std::isfinite(by) || !std::isfinite(bz)) continue;
+				const float ax = EeF32(seg), ay = EeF32(seg + 4), az = EeF32(seg + 8);        // world point A (sweep start)
+				if (!std::isfinite(bx) || !std::isfinite(by) || !std::isfinite(bz) || !std::isfinite(ax)) continue;
+				// Skip UNPOPULATED segments: a freshly-allocated segbuf reads (0,0,0), so on the shell's startup
+				// frames an orb would render at STAGE ORIGIN (Frieza's whip showed a stray orb at 0,0,0 -- worse now
+				// that we draw all 5). Real hit points are never at the world origin -> drop endpoints that are ~origin.
+				const bool aOK = (ax * ax + ay * ay + az * az) >= 1.0f;
+				const bool bOK = (bx * bx + by * by + bz * bz) >= 1.0f;
+				if (!aOK && !bOK) continue;
+				// RADIUS: beam/ki-blast keep per-segment radius in parbuf (32B stride, +16); the whip keeps it IN the
+				// segment (uniform rA@seg+36 == rB@seg+40), with parbuf NULL. RE'd: CShlSp373__m01 + frieza_fissure dump.
 				float r = 1.5f;
 				if (EeValid(parbuf)) { const float pr = EeF32(parbuf + 32u * static_cast<u32>(k) + 16); if (pr > 0.05f && pr < 300.0f) r = pr; }
-				SdbzSphere(out, WS, ident, bx, by, bz, r, col);
-				const float ax = EeF32(seg), ay = EeF32(seg + 4), az = EeF32(seg + 8); // world point A (sweep start)
+				else { const float sr = EeF32(seg + 40); if (sr > 0.05f && sr < 300.0f) r = sr; }
+				if (bOK) SdbzSphere(out, WS, ident, bx, by, bz, r, col);
 				ImVec2 pa, pb;
-				if (WorldToWindow(WS, ax, ay, az, pa) && WorldToWindow(WS, bx, by, bz, pb)) EmitLine(out, pa, pb, col, g_sdbz.box_thickness);
+				if (aOK && bOK && WorldToWindow(WS, ax, ay, az, pa) && WorldToWindow(WS, bx, by, bz, pb)) EmitLine(out, pa, pb, col, g_sdbz.box_thickness);
 			}
 		}
 	}
@@ -526,8 +607,17 @@ namespace
 		if (down(VK_SHIFT)) spd *= 4.0f;
 		if (down(VK_CONTROL)) spd *= 0.25f;
 		float mx = 0, my = 0, mz = 0;
-		if (down('W')) { mx += fx; my += fy; mz += fz; }
-		if (down('S')) { mx -= fx; my -= fy; mz -= fz; }
+		if (g_sdbz.cam_ortho) {
+			// ortho: dollying forward/back doesn't change a parallel projection -> map W/S to zoom (ortho distance d)
+			float zr = 0.03f * dt60; if (down(VK_SHIFT)) zr *= 3.0f; if (down(VK_CONTROL)) zr *= 0.25f;
+			if (down('W')) g_sdbz.ortho_dist *= (1.0f - zr);   // zoom in  (smaller d = bigger image)
+			if (down('S')) g_sdbz.ortho_dist *= (1.0f + zr);   // zoom out
+			if (g_sdbz.ortho_dist < 2.0f) g_sdbz.ortho_dist = 2.0f;
+			if (g_sdbz.ortho_dist > 4000.0f) g_sdbz.ortho_dist = 4000.0f;
+		} else {
+			if (down('W')) { mx += fx; my += fy; mz += fz; }
+			if (down('S')) { mx -= fx; my -= fy; mz -= fz; }
+		}
 		if (down('D')) { mx += rx; mz += rz; }
 		if (down('A')) { mx -= rx; mz -= rz; }
 		if (down('E')) my += 1.0f;   // world-up
@@ -562,6 +652,30 @@ namespace
 					-(Sx * ex + Sy * ey + Sz * ez), -(Ux * ex + Uy * ey + Uz * ez), -(Fx * ex + Fy * ey + Fz * ez), 1.0f
 				};
 				for (int i = 0; i < 16; i++) EeStoreF(cam + 0x50u + 4u * static_cast<u32>(i), V[i]);
+
+				// --- FREECAM CULL FRUSTUM (RE'd from Camera_UpdateViewIfDirty@0x1C46A0 / Camera_BuildViewMatrix@0x1C48C0):
+				// the engine's per-object cull tests against the WORLD frustum @cam+560, built ONLY in the gated update
+				// (so it's stale-at-the-paused-cam when frozen) from the FOV template @cam+480 x the camera orientation
+				// @cam+208. Rebuild both from the freecam each frame so the cull follows the freecam. cull_expand scales
+				// the template -> wider frustum (>1 culls less); no_cull blows it up so nothing culls (incl. ortho).
+				if (g_sdbz.fc_fix_cull) {
+					const float Ot[16] = { Sx, Sy, Sz, 0.0f,  Ux, Uy, Uz, 0.0f,  fx, fy, fz, 0.0f,  0.0f, 0.0f, 0.0f, 1.0f }; // cam+208 = {right,up,fwd}
+					for (int i = 0; i < 16; i++) EeStoreF(cam + 208u + 4u * static_cast<u32>(i), Ot[i]);
+					// Graduated "expand" fine-tune: Cull_SphereVsFrustum culls when (point-eye).normal > radius, so
+					// scaling the normal by k shifts the threshold to radius/k -- k<1 (=1/expand) culls LESS. NOTE: only
+					// bites while FROZEN (unpaused the game rebuilds cam+560 from cam+208 each frame and clobbers this).
+					// The hard on/off ("Disable culling") is the SdbzApplyNoCull code patch, which is clobber-immune and
+					// also fires for ortho. So here we only do the in-between; no_cull/ortho are handled by the patch.
+					const float ex2 = (g_sdbz.cull_expand > 0.01f) ? 1.0f / g_sdbz.cull_expand : 1.0f;
+					for (int p = 0; p < 5; p++) {
+						const u32 src = cam + 480u + 16u * static_cast<u32>(p), dst = cam + 560u + 16u * static_cast<u32>(p);
+						const float t[4] = { EeF32(src) * ex2, EeF32(src + 4u) * ex2, EeF32(src + 8u) * ex2, EeF32(src + 12u) };
+						float w[4]; RowMul(t, Ot, w);
+						EeStoreF(dst, w[0]); EeStoreF(dst + 4u, w[1]); EeStoreF(dst + 8u, w[2]); EeStoreF(dst + 12u, w[3]);
+					}
+					EeStoreF(cam + 384u, fx); EeStoreF(cam + 388u, fy); EeStoreF(cam + 392u, fz);  // forward basis
+					EeStoreF(cam + 400u, Sx); EeStoreF(cam + 404u, Sy); EeStoreF(cam + 408u, Sz);  // right basis
+				}
 			}
 		}
 
@@ -577,15 +691,21 @@ namespace
 		dl->AddText(ImVec2(bx, by - 16.0f), IM_COL32(255, 255, 255, 220), buf);
 	}
 
-	// ================= SDBZ FRAMESTEP (hitstop + verified code-patch NOPs) ================
-	// Whole-battle freeze, every lever VERIFIED. FIGHTERS via the hitstop DATA timer (player+6224). Everything the
-	// hitstop doesn't cover is frozen by the redzep-style method "find the per-frame updater instruction and NOP it"
-	// -- applied as tiny code patches only while frozen (restored on unfreeze; recompiler invalidated via Cpu->Clear).
-	// The g_GameFreeze@0x5D4F90 bit-0x4 "native pause" flag was a DEAD END: poking it froze NOTHING (the round timer
-	// ran out with it set, confirmed live via PINE), so it's gone.
-	constexpr u32 SDBZ_PLAYERS[2] = {0x005ADFB0u, 0x005AFC80u};
-	constexpr u32 SDBZ_HOLD_OFF = 6224u;            // player+6224 frame-hold/hitstop timer (freezes the fighter)
-	constexpr u32 SDBZ_FREEZE_HOLD = 0x40000000u;   // large positive hold, re-asserted each frame
+	// ================= SDBZ FRAMESTEP (engine-native sim freeze) ================
+	// Whole-battle freeze via the engine's OWN pause flag: g_GameFreeze@0x5D4F90 bit 0x4 -- the exact bit the in-game
+	// pause menu (FightTrain_PauseMenu) sets. CGameMgr_ExecUpdate_SimGatedByFreeze@0x2D53A0 reads it and runs the
+	// scene-tree update with advance=0, freezing the ENTIRE fighter sim (positions, action gauge, blink/flash, swing
+	// bones, projectiles) while rendering keeps running. VERIFIED LIVE (PINE): setting bit 0x4 froze the per-frame sim
+	// counter @0x5AF83C AND the action bar; the bit STICKS frame-to-frame (the game never re-clears it on its own).
+	// This REPLACES the old 12-patch surgical method, which missed the airborne action-gauge drain and the blink.
+	// Two caveats handled below:
+	//  - The native pause menu shares bit 0x4, so its UNPAUSE clears our freeze -> we RE-ASSERT the bit every frame
+	//    while frozen, keeping our freeze authoritative regardless of the native menu.
+	//  - The ROUND TIMER is the one thing bit 0x4 does NOT gate (separate path in Round_FightStateUpdate). VERIFIED
+	//    LIVE: the clock kept ticking with bit 0x4 set. So we still NOP its decrement sub.s @0x3EA56C to stop it.
+	constexpr u32 SDBZ_PLAYERS[2] = {0x005ADFB0u, 0x005AFC80u};   // P1/P2 struct bases (box-drawing uses these)
+	constexpr u32 SDBZ_GAMEFREEZE = 0x005D4F90u;    // g_GameFreeze flags singleton; bit 0x4 = menu/sim freeze
+	constexpr u32 SDBZ_FREEZE_BIT = 0x4u;
 
 	// Deterministic "is this slot a live fighter" check that works for ANY character. SDBZ has one player
 	// CLASS PER CHARACTER (CPl01..CPl29), each with its OWN vtable -- the old ==0x4f2440 only matched CPl01,
@@ -616,38 +736,24 @@ namespace
 	}
 	static bool SdbzInBattle() { return SdbzCPlayerMgr() != 0u; }
 
-	// ===== CODE PATCHES: each entry's words overwrite EE code while frozen; restored on unfreeze. =====
-	// Found by the "NOP the per-frame updater" method. NON-fighter levers verified:
-	//  - ROUND TIMER: sub.s $f1,$f2 @0x3EA56C (timer -= delta, Round_FightStateUpdate) -> NOP. *** VERIFIED LIVE (PINE):
-	//    NOPing it stopped the on-screen timer. Same instruction redzep's "Freeze Timer" CT NOPs (subss xmm1,xmm3).
-	//  - COMBO "N hit": gate beqz $v0,0x1D4878 @0x1D47D8 (the `*(CGameMgr+96)&4` combo-advance test) -> force it
-	//    UNCONDITIONAL (0x10400027 -> 0x10000027) so the per-frame pop/recompute is skipped but the number stays drawn.
-	//  - HP/ENERGY BARS: per-frame HP-bar push jal HUD_SetHPBarFill_slot @0x1D03DC (+delay slot) -> NOP: bar holds its
-	//    last value, still drawn.
-	//  - JIGGLE/SWING BONES + projectile integrators (run AFTER the hitstop'd fighter update) -> jr $ra;nop early-return.
-	//  - DETACHED SHELLS CShellBase_Update/_LateUpdate -> return 1 (alive, no work) so fired blasts freeze in place.
-	static constexpr u32 P_NOP1[]  = {0x00000000u};                               // 1x NOP
-	static constexpr u32 P_NOP2[]  = {0x00000000u, 0x00000000u};                  // 2x NOP (jal + delay)
-	static constexpr u32 P_COMBO[] = {0x10000027u};                              // beqz $v0 -> unconditional b
-	static constexpr u32 P_JRRA[]  = {0x03E00008u, 0x00000000u};                  // jr $ra ; nop
-	static constexpr u32 P_RET1[]  = {0x24020001u, 0x03E00008u, 0x00000000u};     // li $v0,1 ; jr $ra ; nop
+	// ===== ROUND-TIMER CODE PATCH: bit 0x4 freezes the whole sim but NOT the round clock (separate path), so we
+	// also NOP the timer's per-frame decrement while frozen; restored on unfreeze (recompiler invalidated via
+	// Cpu->Clear). sub.s $f1,$f2 @0x3EA56C (timer -= delta, Round_FightStateUpdate). VERIFIED LIVE: NOPing it stops
+	// the on-screen clock. (Same instruction redzep's "Freeze Timer" cheat NOPs: subss xmm1,xmm3.)
+	static constexpr u32 P_NOP1[] = {0x00000000u};                                // 1x NOP
 	struct SdbzPatch { u32 addr; const u32* words; u8 n; };
 	static constexpr SdbzPatch SDBZ_PATCHES[] = {
-		{0x003EA56Cu, P_NOP1,  1}, // round-timer sub.s -> NOP  (VERIFIED live)
-		{0x001D47D8u, P_COMBO, 1}, // combo gate beqz -> b      (skip advance, "N hit" stays drawn)
-		{0x001D03DCu, P_NOP2,  2}, // HP-bar per-frame push (jal+delay) -> NOP
-		{0x0030FD10u, P_JRRA,  2}, // SwingBone_PreStep
-		{0x003107D0u, P_JRRA,  2}, // SwingBone_SolveChain
-		{0x003103A0u, P_JRRA,  2}, // swing solver (cape Lo / general)
-		{0x003111B0u, P_JRRA,  2}, // swing solver (cape Hi / Mant)
-		{0x00311D00u, P_JRRA,  2}, // swing solver (long-chain hair/tentacle)
-		{0x00302490u, P_JRRA,  2}, // CMotionObject_IntegrateMotion (ballistic)
-		{0x00302790u, P_JRRA,  2}, // CMotionObject__m16 (auto-aim ki-blasts)
-		{0x003D0E20u, P_RET1,  3}, // CShellBase_Update     -> return 1
-		{0x003D0EA0u, P_RET1,  3}, // CShellBase_LateUpdate -> return 1
+		{0x003EA56Cu, P_NOP1, 1}, // round-timer sub.s -> NOP (separate path from bit 0x4; VERIFIED live)
+		// JIGGLE/CLOTH FREEZE (RE'd from SwingBone_CharUpdate@0x3629B0): bit 0x4 gates the gameplay sim
+		// (CPlayerBase_Update_Frame@0x3629E4), but the cloth solver (PreStep + per-chain SolveChain) runs
+		// UNCONDITIONALLY right after it -> the jiggle/cloth bones keep settling every render tick while
+		// "paused" (very visible while flying the freecam). NOP the two swing calls so the bones hold their
+		// last pose under freeze; restored (recompiler-invalidated) on unfreeze. Gameplay call left intact.
+		{0x00362A38u, P_NOP1, 1}, // jal SwingBone_PreStep    -> NOP (delay slot 'lw $a0,8($s3)' is harmless)
+		{0x00362A48u, P_NOP1, 1}, // jal SwingBone_SolveChain -> NOP (delay slot 'move $a1,$s0' is harmless)
 	};
-	// total words = 1+1+2 + 2*7 + 3*2 = 24
-	struct SdbzFramestep { bool frozen = false; int run_frames = 0; u32 saved[24] = {0u}; bool patched = false; bool gated_req = false; };
+	// total words = 3
+	struct SdbzFramestep { bool frozen = false; int run_frames = 0; u32 saved[3] = {0u}; bool patched = false; bool gated_req = false; };
 	static SdbzFramestep g_step;
 
 	// CPU thread: apply (or restore) all code patches. Cpu->Clear invalidates the recompiled block at each site.
@@ -666,35 +772,132 @@ namespace
 		g_step.patched = on;
 	}
 
-	// Per-frame (GS thread): hold the fighters via hitstop; apply/lift the code patches on the idle<->advance edge
-	// (so a step advances everything one frame). Camera is never touched -> freecam keeps flying while frozen.
+	// HIDE HUD (general -- works any time, not just frozen). HUD_DrawPass@0x309280 draws the WHOLE battle HUD
+	// (HP/ki/AC bars, combo counter, round timer, name cards). Early-return it (jr $ra; nop at the entry) so none
+	// of it draws; restore on toggle off. Patching the first two prologue words returns before $sp/$ra are touched
+	// (entry: addiu $sp,-0x120 / lui / sd $ra) so the return is clean. CPU-thread + Cpu->Clear like the freeze patches.
+	static bool g_hud_patched = false;
+	static void SdbzApplyHudHide(bool on) {
+		if (on == g_hud_patched) return;
+		constexpr u32 A = 0x00309280u; // HUD_DrawPass entry
+		static u32 saved[2] = {0u, 0u};
+		if (on) { saved[0] = memRead32(A); saved[1] = memRead32(A + 4u); memWrite32(A, 0x03E00008u /*jr $ra*/); memWrite32(A + 4u, 0x00000000u /*nop*/); }
+		else { memWrite32(A, saved[0]); memWrite32(A + 4u, saved[1]); }
+		if (Cpu) Cpu->Clear(A, 8u);
+		g_hud_patched = on;
+	}
+	// Per-frame (GS thread): marshal the patch to the CPU thread only when the toggle CHANGES (no per-frame churn).
+	static void SdbzHudHideUpdate() {
+		static bool s_req = false;
+		if (g_sdbz.hide_hud != s_req) { s_req = g_sdbz.hide_hud; Host::RunOnCPUThread([on = s_req]() { SdbzApplyHudHide(on); }, false); }
+	}
+
+	// ================= NO-CULL: disable per-object frustum culling globally =================
+	// Cull_SphereVsFrustum@0x1C44F0 is THE per-object draw cull (sub_19C9C0 enqueues an object for draw iff it has
+	// the always-draw flag 0x1000 OR this returns non-zero). Writing the frustum @cam+560 is futile -- unpaused the
+	// game rebuilds it every frame from cam+208 (Camera_UpdateViewIfDirty), clobbering our scaling. So patch the
+	// FUNCTION: entry -> `jr $ra; li $v0,1` = always "visible". Skips the $sp decrement, so the early return is clean.
+	// Immune to the clobber; works live or paused, freecam or not. Ortho drives it too (its cone-from-eye test
+	// over-culls a parallel projection). Same CPU-thread + Cpu->Clear marshalling as the HUD/freeze patches.
+	static bool g_nocull_patched = false;
+	static void SdbzApplyNoCull(bool on) {
+		if (on == g_nocull_patched) return;
+		constexpr u32 A = 0x001C44F0u; // Cull_SphereVsFrustum entry
+		static u32 saved[2] = {0u, 0u};
+		if (on) { saved[0] = memRead32(A); saved[1] = memRead32(A + 4u); memWrite32(A, 0x03E00008u /*jr $ra*/); memWrite32(A + 4u, 0x24020001u /*addiu $v0,$zero,1*/); }
+		else { memWrite32(A, saved[0]); memWrite32(A + 4u, saved[1]); }
+		if (Cpu) Cpu->Clear(A, 8u);
+		g_nocull_patched = on;
+	}
+	static void SdbzNoCullUpdate() {
+		static bool s_req = false;
+		const bool want = g_sdbz.no_cull || g_sdbz.cam_ortho; // ortho's cull is invalid -> force-disable
+		if (want != s_req) { s_req = want; Host::RunOnCPUThread([on = s_req]() { SdbzApplyNoCull(on); }, false); }
+	}
+
+	// ================= TRAINING: live HP / AC / SP(ki) set + lock =================
+	// Authoritative per-player stat block (RE'd from a savestate; these are the RA-watched values). Two players,
+	// stride 0x38: P1 @0x5B1A54, P2 @0x5B1A1C. Per player: HP @+0 (int), AC @+4 (float), AC-max @+8, SP/ki @+16 (int).
+	// HUD bars read this block (HUD_DrawHPBar / sub_305F20 in HUD_DrawPass), so it IS the gameplay source. "Lock" writes
+	// the chosen value EVERY frame (infinite / fixed meter for practice); otherwise the slider sets it on change.
+	constexpr u32 TRAIN_HP[2] = {0x005B1A54u, 0x005B1A1Cu}; // P1, P2 (int)
+	constexpr u32 TRAIN_AC[2] = {0x005B1A58u, 0x005B1A20u}; // P1, P2 (float)
+	constexpr u32 TRAIN_SP[2] = {0x005B1A64u, 0x005B1A2Cu}; // P1, P2 (int, "Ki")
+	// MOVE CHARACTER: player node LOCAL position @player+48/+52/+56 (RE'd: SceneNode_UpdateWorldMatrix@0x1A0A00 ->
+	// world@+240 rebuilt from pos@+48 + quat@+64; child bones follow). Writing it teleports the character (live).
+	constexpr u32 SDBZ_PLAYER_LOCALPOS = 48u; // pos@player+48 (Vec3)
+	struct SdbzTraining {
+		bool lock_hp = false, lock_ac = false, lock_sp = false; int hp[2] = {250, 250}; float ac[2] = {80.0f, 80.0f}; int sp[2] = {240, 240};
+		bool lock_pos[2] = {false, false}; float pos[2][3] = {{0.0f, 16.0f, 0.0f}, {0.0f, 16.0f, 0.0f}};
+	};
+	static SdbzTraining g_train;
+	static void SdbzTrainPokePos(int p) { // write the 3 local-pos floats for player p
+		if (!eeMem) return; const u32 b = SDBZ_PLAYERS[p] + SDBZ_PLAYER_LOCALPOS;
+		EeStoreF(b, g_train.pos[p][0]); EeStoreF(b + 4u, g_train.pos[p][1]); EeStoreF(b + 8u, g_train.pos[p][2]);
+	}
+	static void SdbzTrainingUpdate() { // per-frame (GS thread): re-assert any locked stat / position
+		if (!eeMem || !SdbzInBattle()) return;
+		for (int p = 0; p < 2; p++) {
+			if (g_train.lock_hp) EeStore32(TRAIN_HP[p], static_cast<u32>(g_train.hp[p]));
+			if (g_train.lock_ac) EeStoreF(TRAIN_AC[p], g_train.ac[p]);
+			if (g_train.lock_sp) EeStore32(TRAIN_SP[p], static_cast<u32>(g_train.sp[p]));
+			if (g_train.lock_pos[p] && SdbzPlayerValid(SDBZ_PLAYERS[p])) SdbzTrainPokePos(p);
+		}
+	}
+
+	// GS-thread data write: set/clear bit 0x4 of g_GameFreeze (read-modify-write preserves the engine's other bits,
+	// e.g. an in-progress hitstop). Pure data, not code -> no Cpu->Clear and no CPU-thread marshalling needed.
+	static void SdbzSetGameFreeze(bool on) {
+		if (!eeMem) return;
+		u32 f = Ee32(SDBZ_GAMEFREEZE);
+		f = on ? (f | SDBZ_FREEZE_BIT) : (f & ~SDBZ_FREEZE_BIT);
+		EeStore32(SDBZ_GAMEFREEZE, f);
+	}
+
+	// Per-frame (GS thread): (re-)assert bit 0x4 to hold the sim, or clear it for a single frame to step. We re-assert
+	// EVERY frame so the native pause menu (which shares bit 0x4) can't strand our freeze. The round-timer NOP is held
+	// for the whole frozen session (see SdbzStepSetFrozen), not toggled per step -> the clock just stays stopped (one
+	// step not advancing it by 1/60s is imperceptible) and we avoid CPU-thread patch churn while stepping. Camera is
+	// never driven from here -> freecam (which writes the view matrix directly each frame) keeps flying while frozen.
+	// KEEP SHADOWS under freeze: the CShadowMgr scene node is skipped by CSceneFrame_ExecChildren when its sim
+	// update is frozen (active=0 & node+56=0), so the floor shadows vanish (same as the native pause). Poke its
+	// "always-on" byte node+56 = 1 each frozen frame to force the shadow subtree to draw; clear on unfreeze.
+	// Chain (RE'd from CGameMgr_BuildSceneTree@0x2D68E0): CShadowMgr = *(*(EE 0x63FE90)+36). VALIDATE vtable 0x4EFAC0
+	// (the earlier attempt poked an UNVALIDATED node -> garbage vtable 0x27BDFFE0 -> crash). node+56 is a plain byte
+	// inside a dword CShadowMgr_ctor zeroes (NOT a pointer) -> safe to poke.
+	static void SdbzKeepShadows(bool on) {
+		if (!eeMem) return;
+		const u32 base = Ee32(0x0063FE90u); if (!EeValid(base)) return;
+		const u32 mgr = Ee32(base + 36u);   if (!EeValid(mgr) || Ee32(mgr) != 0x004EFAC0u) return; // CShadowMgr vtable guard
+		EeStore8(mgr + 56u, on ? 1u : 0u);
+	}
 	static void SdbzStepUpdate() {
 		if (!g_step.frozen) return;
 		if (!SdbzInBattle()) { // safety: only freeze in a live battle (never leak into CSS/menus)
 			g_step.frozen = false; g_step.run_frames = 0;
+			SdbzSetGameFreeze(false);
+			SdbzKeepShadows(false);
 			if (g_step.gated_req) { g_step.gated_req = false; Host::RunOnCPUThread([]() { SdbzPhysFreeze(false); }, false); }
 			return;
 		}
 		const bool advance = g_step.run_frames > 0;
-		for (u32 p : SDBZ_PLAYERS) if (SdbzPlayerValid(p)) EeStore32(p + SDBZ_HOLD_OFF, advance ? 0u : SDBZ_FREEZE_HOLD);
-		const bool want_gated = !advance;
-		if (want_gated != g_step.gated_req) {
-			g_step.gated_req = want_gated;
-			Host::RunOnCPUThread([want_gated]() { SdbzPhysFreeze(want_gated); }, false);
-		}
+		SdbzSetGameFreeze(!advance); // clear for the step frame so the sim ticks once; otherwise re-hold the freeze
+		SdbzKeepShadows(true);       // re-assert the shadow always-on byte each frozen frame
 		if (advance) g_step.run_frames--;
 	}
 	static void SdbzStepSetFrozen(bool on) {
 		g_step.frozen = on; g_step.run_frames = 0; g_step.gated_req = on;
-		if (!on) for (u32 p : SDBZ_PLAYERS) if (SdbzPlayerValid(p)) EeStore32(p + SDBZ_HOLD_OFF, 0u);
-		Host::RunOnCPUThread([on]() { SdbzPhysFreeze(on); }, false);
+		SdbzSetGameFreeze(on);                                       // bit 0x4: data write (GS thread, immediate)
+		SdbzKeepShadows(on);                                         // floor shadows: force-draw under freeze (node+56)
+		Host::RunOnCPUThread([on]() { SdbzPhysFreeze(on); }, false); // round-timer NOP: code patch (CPU thread)
 	}
 	static void SdbzStepOnce(int n = 1) { if (g_step.frozen) g_step.run_frames += n; }
 
-	// HUD-VISIBLE-UNDER-FREEZE (deferred): the native freeze runs the node walk with advance=0, so the HUD hides
-	// (only nodes with the +56 "always-on" byte draw). Writing +56 on the HUD nodes (chain battle_mgr=*(0x5022A8)
-	// -> CPlayerMgr=*(bm+108) -> combo=*(+232)) crashed the earlier build, so it's removed until RE'd safely.
-	// For now the freeze gives a clean no-HUD inspection view. SDBZ_VT_COMBO / SDBZ_NODE_ALWAYSON kept for later.
+	// HUD UNDER FREEZE: bit 0x4 gates only the sim ADVANCE -- CSceneFrame_ExecChildren still DRAWS at advance=0, so the
+	// HUD (action bar, combo counter, HP) stays on-screen, just frozen. VERIFIED LIVE: the action bar drew and held
+	// while bit 0x4 was set. (An earlier bit-0x2 attempt hid the HUD and needed a +56 "always-on" byte on the nodes
+	// chain battle_mgr=*(0x5022A8) -> CPlayerMgr=*(bm+108) -> combo=*(+232); that crashed, and bit 0x4 makes it moot.)
+	// SDBZ_VT_COMBO / SDBZ_NODE_ALWAYSON retained for reference.
 
 	// ================= SDBZ camera HORIZONTAL SCALE (the 8:7 squish) -- LIVE =================
 	// The 0.75 squish is a PROJECTION PARAM stored in the camera object by sub_1C4C20: h-scale @cam+460 and its
@@ -712,6 +915,7 @@ namespace
 	// Both are written into the projection matrix @cam+0x10 each frame, scaled off the game's baked values.
 	static void SdbzCamScaleSync() {
 		static bool touched = false; static float base0 = 0.0f, base5 = 0.0f, last0 = 0.0f, last5 = 0.0f;
+		if (g_sdbz.cam_ortho) return; // ortho owns cam+0x10 (incl. X/Y scale); don't fight it
 		if (!g_sdbz.cam_hscale_on && !touched) return; // never touched -> leave the game alone
 		const u32 cam = Ee32(SDBZ_CAMOBJ_PTR);
 		if (!EeValid(cam)) return;
@@ -732,6 +936,35 @@ namespace
 		}
 	}
 
+	// ORTHOGRAPHIC PROJECTION (parallel) -- overwrites the projection matrix @cam+0x10 each frame, exactly like the
+	// h-scale sync. Perspective form (RE'd live, row-major): diag X=f*hscale, Y=f (f=1/tan(fov/2)); [2][3]=-1 (the
+	// perspective w-divide); [3][3]=0; [2][2]=-(far+near)/(far-near); [3][2]=-near*far/(far-near). ORTHO removes the
+	// divide ([2][3]=0,[3][3]=1), scales X/Y by 1/d (d=focal distance -> on-screen size), and remaps Z LINEARLY so the
+	// NDC-Z range matches the perspective ([2][2]=-1/(far-near), [3][2]=-near/(far-near)). Params read from cam+456 fov /
+	// +444 hscale / +448 near / +452 far (Camera_SetProjectionParams@0x1C4C20). On OFF, restore the perspective matrix
+	// once (the game only rebuilds cam+0x10 at camera setup, so we must put it back ourselves). Pairs with freecam for
+	// distortion-free stage captures.
+	static void SdbzOrthoSync() {
+		static int last = -1; // -1 uninit, 0 off, 1 on
+		const int want = g_sdbz.cam_ortho ? 1 : 0;
+		if (want == 0 && last <= 0) { last = 0; return; } // off and nothing to restore
+		const u32 cam = Ee32(SDBZ_CAMOBJ_PTR); if (!EeValid(cam)) return;
+		const float fov = EeF32(cam + 456), hsc = EeF32(cam + 444), nearp = EeF32(cam + 448), farp = EeF32(cam + 452);
+		const float fn = farp - nearp;
+		if (!(fn > 1.0f) || !(fov > 0.01f && fov < 3.1f) || !(hsc > 0.01f)) return; // params not valid yet
+		const float f = 1.0f / std::tan(fov * 0.5f);
+		float M[16] = {0};
+		if (want) {
+			const float d = (g_sdbz.ortho_dist > 0.5f) ? g_sdbz.ortho_dist : 0.5f;
+			M[0] = (f * hsc) / d; M[5] = f / d; M[10] = -1.0f / fn; M[14] = -nearp / fn; M[15] = 1.0f;
+			for (int i = 0; i < 16; i++) EeStoreF(cam + 0x10u + 4u * static_cast<u32>(i), M[i]);
+		} else if (last == 1) { // off-transition: rebuild the perspective matrix once
+			M[0] = f * hsc; M[5] = f; M[10] = -(farp + nearp) / fn; M[11] = -1.0f; M[14] = -nearp * farp / fn;
+			for (int i = 0; i < 16; i++) EeStoreF(cam + 0x10u + 4u * static_cast<u32>(i), M[i]);
+		}
+		last = want;
+	}
+
 	static void SdbzBlit(ImDrawList* dl, const std::vector<SdbzPrim>& v) {
 		// Pass 1: filled triangles, globally depth-sorted far->near (painter's; ImGui has no z-buffer), drawn
 		// UNDER the wireframe/text. thick carries each tri's clip-w depth.
@@ -739,10 +972,16 @@ namespace
 		for (int i = 0; i < static_cast<int>(v.size()); i++) if (v[i].kind == 2) tris.push_back(i);
 		std::sort(tris.begin(), tris.end(), [&](int x, int y) { return v[x].thick > v[y].thick; }); // far first
 		for (int i : tris) { const SdbzPrim& p = v[i]; dl->AddTriangleFilled(p.a, p.b, p.c, p.col); }
-		// Pass 2: lines + text on top.
+		// Pass 2: lines + text on top. Text gets a dark padded background box + 1px shadow so it stays readable
+		// over any scene (raw colored text on a bright/busy frame is unreadable -- the inspector lines especially).
 		for (const SdbzPrim& p : v) {
-			if (p.kind == 0) dl->AddLine(p.a, p.b, p.col, p.thick);
-			else if (p.kind == 1) dl->AddText(p.a, p.col, p.text);
+			if (p.kind == 0) { dl->AddLine(p.a, p.b, p.col, p.thick); continue; }
+			if (p.kind != 1) continue;
+			const ImVec2 ts = ImGui::CalcTextSize(p.text);
+			dl->AddRectFilled(ImVec2(p.a.x - 3.0f, p.a.y - 1.0f), ImVec2(p.a.x + ts.x + 3.0f, p.a.y + ts.y + 1.0f),
+			                  IM_COL32(0, 0, 0, 190), 2.0f);
+			dl->AddText(ImVec2(p.a.x + 1.0f, p.a.y + 1.0f), IM_COL32(0, 0, 0, 230), p.text); // shadow
+			dl->AddText(p.a, p.col, p.text);
 		}
 	}
 
@@ -751,83 +990,175 @@ namespace
 	// The control-panel BODY (widgets only, no Begin/End) -- shared by the in-game window and the popout window.
 	static void SdbzControlBody() {
 		SdbzSettings& s = g_sdbz;
-		ImGui::Checkbox("Master enabled (Ctrl+H)", &s.master);
-		ImGui::SameLine();
-		if (ImGui::Button("Save")) SdbzSaveSettings();
-		ImGui::SameLine();
-		if (ImGui::Button("Reload")) SdbzLoadSettings();
-		ImGui::SameLine();
+		// Top row (always visible): master + persistence + popout.
+		ImGui::Checkbox("Master (Ctrl+H)", &s.master); ImGui::SameLine();
+		if (ImGui::Button("Save")) SdbzSaveSettings(); ImGui::SameLine();
+		if (ImGui::Button("Reload")) SdbzLoadSettings(); ImGui::SameLine();
 		if (ImGui::Button("Defaults")) { const bool w = s.show_window, p = s.popout; s = SdbzSettings{}; s.show_window = w; s.popout = p; }
-		ImGui::SameLine();
-		ImGui::Checkbox("Pop out", &s.popout);
-
-		ImGui::SeparatorText("Frame delay (free-run only)");
-		ImGui::SliderInt("##delay", &s.frame_delay, 0, 8, "delay = %d frames");
-		ImGui::TextDisabled("EE runs ~1f ahead of the displayed image during free-run.\nIgnored while paused/stepping (then it's already frame-perfect).");
-
-		ImGui::SeparatorText("Box types");
+		ImGui::SameLine(); ImGui::Checkbox("Pop out", &s.popout);
+		// Collapsible pane: seed open-state from the saved bool once, then keep the bool in sync so it persists.
+		auto pane = [&](const char* label, bool& open) -> bool {
+			ImGui::SetNextItemOpen(open, ImGuiCond_Once);
+			open = ImGui::CollapsingHeader(label);
+			return open;
+		};
 		const ImGuiColorEditFlags cf = ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoInputs;
-		auto row = [&](const char* lbl, bool* on, SdbzColor* col) {
-			ImGui::Checkbox(lbl, on);
-			ImGui::SameLine(150.0f);
+		auto row  = [&](const char* lbl, bool* on, SdbzColor* col) {
+			ImGui::Checkbox(lbl, on); ImGui::SameLine(168.0f);
 			ImGui::ColorEdit4((std::string("##c") + lbl).c_str(), &col->r, cf);
 		};
-		row("Hurt (body)", &s.show_hurt, &s.c_hurt);
-		row("Attack", &s.show_attack, &s.c_attack);
-		row("Throw / grab", &s.show_throw, &s.c_throw);
-		row("Proximity", &s.show_prox, &s.c_prox);
-		row("Other / volume", &s.show_other, &s.c_other);
-		row("Projectiles", &s.show_shells, &s.c_shell);
-		row("Skeleton (Ctrl+K)", &s.show_skel, &s.c_skel);
-		ImGui::Checkbox("State HUD (invuln / parry / guard)", &s.show_state);
-		ImGui::Checkbox("Hide game HUD (while frozen)", &s.hide_hud);
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip(
-			"OFF (default): the game HUD stays drawn (frozen) during the Ctrl+P freeze -- no flicker.\n"
-			"ON: hides the HUD while frozen for a clean inspection view. Works by writing the HUD scene\n"
-			"nodes' +56 'always-on' flag each frame (the same flag that keeps the 3D scene drawn when frozen).");
+		auto crow = [&](const char* lbl, SdbzColor* col) { // colour-only sub-row (visibility follows its parent group)
+			ImGui::Indent(16.0f); ImGui::TextUnformatted(lbl); ImGui::Unindent(16.0f); ImGui::SameLine(168.0f);
+			ImGui::ColorEdit4((std::string("##c") + lbl).c_str(), &col->r, cf);
+		};
 
-		ImGui::SeparatorText("Aspect ratio (display)");
-		{
+		if (pane("Box types & colors", s.p_boxes)) {
+			ImGui::Checkbox("Labels (guard height / category)", &s.show_labels);
+			row("Hurt (body)", &s.show_hurt, &s.c_hurt);
+			row("Attack (mid)", &s.show_attack, &s.c_attack);
+			crow("overhead (OH)", &s.c_atk_high);
+			crow("low (LO)", &s.c_atk_low);
+			row("Throw / grab", &s.show_throw, &s.c_throw);
+			crow("command grab", &s.c_cmdgrab);
+			ImGui::Checkbox("Other volumes", &s.show_other); // group toggle for the 3 split colours below
+			crow("body / push", &s.c_body);
+			crow("clash / collision", &s.c_clash);
+			crow("special", &s.c_special);
+			row("Proximity", &s.show_prox, &s.c_prox);
+			row("Projectiles", &s.show_shells, &s.c_shell);
+			row("Skeleton (Ctrl+K)", &s.show_skel, &s.c_skel);
+			ImGui::Checkbox("State HUD (invuln / guard)", &s.show_state);
+			ImGui::Checkbox("Hide game HUD", &s.hide_hud);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip(
+				"Hides the whole battle HUD (HP/ki/AC bars, combo counter, round timer, name cards)\n"
+				"by early-returning HUD_DrawPass@0x309280. Works any time (not just frozen).");
+		}
+
+		if (pane("Framestep (Ctrl+P freeze, Ctrl+. step)", s.p_step)) {
+			bool fr = g_step.frozen;
+			if (ImGui::Checkbox("Freeze (fighters + bones + projectiles)", &fr)) SdbzStepSetFrozen(fr);
+			ImGui::SameLine();
+			if (ImGui::Button("Step")) { if (!g_step.frozen) SdbzStepSetFrozen(true); SdbzStepOnce(1); }
+			ImGui::SameLine();
+			if (ImGui::Button("+10")) { if (!g_step.frozen) SdbzStepSetFrozen(true); SdbzStepOnce(10); }
+			ImGui::TextDisabled("Freezes fighters while the engine keeps rendering,\nso freecam can orbit a frozen pose. PCSX2 stays unpaused.");
+			ImGui::Checkbox("Shell field inspector (debug)", &s.dbg_shells);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip(
+				"While frozen, lists each active shell's flag/state fields + a 'd:' line of every offset that\n"
+				"changed on the last step (+offset:old>new). Use it to find projectile active/property flags.");
+		}
+
+		if (pane("Training (HP / AC / SP)", s.p_train)) {
+			// per-stat: Lock (write every frame) + P1/P2 value (set-on-change). Writes the RA-watched stat block.
+			auto pokeI = [](u32 addr, int v) { if (eeMem) EeStore32(addr, static_cast<u32>(v)); };
+			auto pokeF = [](u32 addr, float v) { if (eeMem) EeStoreF(addr, v); };
+			ImGui::Checkbox("Lock HP", &g_train.lock_hp); ImGui::SameLine(110.0f);
+			if (ImGui::SliderInt("##hp1", &g_train.hp[0], 0, 250, "P1 %d")) pokeI(TRAIN_HP[0], g_train.hp[0]); ImGui::SameLine();
+			if (ImGui::SliderInt("##hp2", &g_train.hp[1], 0, 250, "P2 %d")) pokeI(TRAIN_HP[1], g_train.hp[1]);
+			ImGui::Checkbox("Lock AC", &g_train.lock_ac); ImGui::SameLine(110.0f);
+			if (ImGui::SliderFloat("##ac1", &g_train.ac[0], 0.0f, 80.0f, "P1 %.0f")) pokeF(TRAIN_AC[0], g_train.ac[0]); ImGui::SameLine();
+			if (ImGui::SliderFloat("##ac2", &g_train.ac[1], 0.0f, 80.0f, "P2 %.0f")) pokeF(TRAIN_AC[1], g_train.ac[1]);
+			ImGui::Checkbox("Lock SP", &g_train.lock_sp); ImGui::SameLine(110.0f);
+			if (ImGui::SliderInt("##sp1", &g_train.sp[0], 0, 240, "P1 %d")) pokeI(TRAIN_SP[0], g_train.sp[0]); ImGui::SameLine();
+			if (ImGui::SliderInt("##sp2", &g_train.sp[1], 0, 240, "P2 %d")) pokeI(TRAIN_SP[1], g_train.sp[1]);
+			ImGui::TextDisabled("Lock = hold the value every frame (infinite/fixed for practice). Drag a slider to set once.\nWrites the RA stat block (HP=0x5B1A54/+0x38, AC=+4 float, SP/ki=+16). In-battle only.");
+			ImGui::Separator();
+			ImGui::TextUnformatted("Move character (X / Y / Z):");
+			for (int p = 0; p < 2; p++) {
+				ImGui::PushID(p);
+				ImGui::Checkbox(p == 0 ? "Hold P1" : "Hold P2", &g_train.lock_pos[p]); ImGui::SameLine();
+				if (ImGui::Button("Grab")) { // read the live local pos into the sliders
+					const u32 b = SDBZ_PLAYERS[p] + SDBZ_PLAYER_LOCALPOS;
+					if (eeMem && SdbzPlayerValid(SDBZ_PLAYERS[p])) { g_train.pos[p][0] = EeF32(b); g_train.pos[p][1] = EeF32(b + 4u); g_train.pos[p][2] = EeF32(b + 8u); }
+				}
+				ImGui::SameLine(); ImGui::SetNextItemWidth(230.0f);
+				if (ImGui::SliderFloat3("##pos", g_train.pos[p], -60.0f, 60.0f, "%.1f")) SdbzTrainPokePos(p);
+				ImGui::PopID();
+			}
+			ImGui::TextDisabled("'Grab' captures the current spot, then drag to move. 'Hold' pins the character there every frame.\nWrites the node local pos (player+48); engine rebuilds the pose. Pair with freeze+freecam+ortho for captures.");
+		}
+
+		if (pane("Freecam (Ctrl+F)", s.p_fcam)) {
+			bool fc = g_fc.enabled;
+			if (ImGui::Checkbox("Enable freecam", &fc)) SdbzFcSetEnabled(fc);
+			ImGui::TextDisabled("Move WASD + Q/E (up/down), look arrows or RMB.\nShift=fast, Ctrl=slow. Free-run only (not paused).");
+			ImGui::SliderFloat("Move speed", &g_fc.move_speed, 0.25f, 16.0f, "%.2f");
+			ImGui::SliderFloat("Mouse sensitivity", &g_fc.mouse_sens, 0.0005f, 0.015f, "%.4f");
+			ImGui::SliderFloat("Look smoothing", &g_fc.look_smooth, 0.0f, 0.95f, "%.2f");
+			ImGui::SliderFloat("Look speed (arrows)", &g_fc.look_speed, 0.005f, 0.12f, "%.3f");
+			ImGui::Checkbox("Invert Y", &g_fc.invert_y);
+			if (ImGui::Button("Re-seed from game cam") && g_fc.enabled) { SdbzFcSetEnabled(false); SdbzFcSetEnabled(true); }
+			ImGui::Separator();
+			ImGui::Checkbox("Disable culling (no edge pop-in)", &s.no_cull);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip(
+				"Patches the per-object cull (Cull_SphereVsFrustum) to pass everything. Works ANY time -- live or\n"
+				"paused, freecam or not. This is the hard kill switch. Ortho enables it automatically (the engine's\n"
+				"cull is a cone-from-the-eye test that's invalid for a parallel projection and over-culls).");
+			ImGui::Separator();
+			ImGui::Checkbox("Fix cull (rebuild frustum from freecam)", &s.fc_fix_cull);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip(
+				"Rebuilds the cull frustum (cam+560) from the freecam so it stops culling from the paused viewpoint.");
+			ImGui::BeginDisabled(!s.fc_fix_cull || s.no_cull);
+			ImGui::SliderFloat("Cull expand", &s.cull_expand, 1.0f, 20.0f, "%.1fx");
+			ImGui::EndDisabled();
+			ImGui::TextDisabled("Expand = graduated 'cull a bit less' (1 = exact game). NOTE: only bites while FROZEN -- live, the\ngame rebuilds the frustum each frame. For a hard off any time, use 'Disable culling' above.");
+		}
+
+		if (pane("Camera scale (widescreen / FOV)", s.p_cam)) {
+			ImGui::Checkbox("Override camera (H-scale + zoom)", &s.cam_hscale_on);
+			ImGui::SliderFloat("H-scale", &s.cam_hscale, 0.45f, 1.10f, "%.3f");
+			ImGui::Checkbox("Link zoom to H-scale", &s.cam_link_zoom);
+			if (s.cam_link_zoom) {
+				float linked = 0.75f / ((s.cam_hscale > 0.05f) ? s.cam_hscale : 0.05f);
+				ImGui::BeginDisabled(); ImGui::SliderFloat("Zoom", &linked, 0.40f, 1.60f, "%.2f (linked)"); ImGui::EndDisabled();
+			} else { ImGui::SliderFloat("Zoom", &s.cam_zoom, 0.40f, 1.60f, "%.2f"); }
+			ImGui::TextDisabled("H-scale = 1/display-aspect: 0.75=4:3, 0.70=10:7, 0.875=8:7, 0.469=16:9.");
+			ImGui::Separator();
+			ImGui::Checkbox("Orthographic (parallel) projection", &s.cam_ortho);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Parallel projection -- no perspective, no depth foreshortening.\nGreat with freecam for clean stage/asset captures. Restores on toggle off.");
+			ImGui::BeginDisabled(!s.cam_ortho);
+			ImGui::SliderFloat("Ortho distance", &s.ortho_dist, 2.0f, 4000.0f, "%.1f", ImGuiSliderFlags_Logarithmic); // log = fine control near + huge range
+			ImGui::SameLine();
+			if (ImGui::Button("Match view")) { // set d = |eye - lookat| so the ortho size matches the current view
+				const u32 cam = Ee32(SDBZ_CAMOBJ_PTR);
+				if (EeValid(cam)) {
+					const float dx = EeF32(cam + 0x150) - EeF32(cam + 0x160), dy = EeF32(cam + 0x154) - EeF32(cam + 0x164), dz = EeF32(cam + 0x158) - EeF32(cam + 0x168);
+					const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+					if (d > 5.0f && d < 1000.0f) s.ortho_dist = d;
+				}
+			}
+			ImGui::EndDisabled();
+			ImGui::TextDisabled("Smaller distance = larger subject. 'Match view' sets it to the current eye->lookat distance.");
+		}
+
+		if (pane("Aspect ratio (display)", s.p_aspect)) {
 			static const char* const aspNames[] = {"Stretch (fill)", "Auto 4:3/3:2", "4:3 (PS2 hardware)", "16:9", "10:7 (true pixels)", "8:7"};
 			int a = static_cast<int>(EmuConfig.CurrentAspectRatio);
 			if (a < 0 || a >= IM_ARRAYSIZE(aspNames)) a = 2;
 			if (ImGui::Combo("Aspect", &a, aspNames, IM_ARRAYSIZE(aspNames))) {
 				EmuConfig.CurrentAspectRatio = static_cast<AspectRatioType>(a); GSConfig.AspectRatio = static_cast<AspectRatioType>(a);
 			}
-			// SDBZ renders a 640x448 framebuffer (= 10:7 pixel grid). Its DISPLAY register (GS_WriteCrtcRegs
-			// @0x104F20) stretches that buffer to DW+1=2560 = the full 4:3 NTSC raster. So:
-			//  - 4:3  = hardware-faithful: matches a real PS2/TV. 3D round (native proj h-scale 0.75), but the
-			//           2D sprites/HUD/FMV (authored on the square 640x448 grid) get squished ~7% horizontally.
-			//  - 10:7 = shows the raw 640x448 pixels SQUARE: 2D sprites/HUD/FMV are undistorted. The 3D then
-			//           needs h-scale 0.70 (= 1/(10/7)) to stay round. Both correct at once.
 			if (ImGui::Button("4:3 (PS2 hardware)")) {
-				EmuConfig.CurrentAspectRatio = AspectRatioType::R4_3; GSConfig.AspectRatio = AspectRatioType::R4_3;
-				s.cam_hscale_on = false; // native 0.75 projection is tuned for 4:3 output (2D ~7% squished, like real HW)
+				EmuConfig.CurrentAspectRatio = AspectRatioType::R4_3; GSConfig.AspectRatio = AspectRatioType::R4_3; s.cam_hscale_on = false;
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("10:7 (2D correct)")) {
 				EmuConfig.CurrentAspectRatio = AspectRatioType::R10_7; GSConfig.AspectRatio = AspectRatioType::R10_7;
-				s.cam_hscale_on = true; s.cam_hscale = 0.70f; s.cam_link_zoom = false; s.cam_zoom = 1.0f; // round 3D at 10:7
+				s.cam_hscale_on = true; s.cam_hscale = 0.70f; s.cam_link_zoom = false; s.cam_zoom = 1.0f;
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("Widescreen 16:9")) {
 				EmuConfig.CurrentAspectRatio = AspectRatioType::Stretch; GSConfig.AspectRatio = AspectRatioType::Stretch;
 				s.cam_hscale_on = true; s.cam_hscale = 0.46875f; s.cam_link_zoom = false; s.cam_zoom = 1.0f;
 			}
-			ImGui::TextDisabled("FB is 640x448 (10:7), stretched to 4:3 by the game's DISPLAY reg. '4:3' = real-HW look\n(2D ~7%% squished). '10:7' = 2D sprites/video undistorted + sets 3D h-scale 0.70 to match.");
-			// Live ground truth from the GS display-env globals (GS_BuildDisplayEnv @0x105670 sets these).
-			{
-				u32 fbw = Ee32(0x503100), fbh = Ee32(0x503104), magh = Ee32(0x503110), vmode = Ee32(0x5030F4);
-				if (fbw > 0 && fbw <= 1024 && fbh > 0 && fbh <= 1024) {
-					float grid = static_cast<float>(fbw) / static_cast<float>(fbh);
-					ImGui::Text("Live: FB %ux%u  grid %.3f  MAGH=%u (mag %u)  mode=%u  -> DISPLAY 4:3",
-						fbw, fbh, grid, magh, magh + 1u, vmode);
-				}
-			}
+			ImGui::TextDisabled("FB 640x448 (10:7) stretched to 4:3 by the DISPLAY reg. '10:7' = 2D undistorted + 3D h-scale 0.70.");
+			u32 fbw = Ee32(0x503100), fbh = Ee32(0x503104), magh = Ee32(0x503110), vmode = Ee32(0x5030F4);
+			if (fbw > 0 && fbw <= 1024 && fbh > 0 && fbh <= 1024)
+				ImGui::Text("Live: FB %ux%u  grid %.3f  MAGH=%u  mode=%u",
+					fbw, fbh, static_cast<float>(fbw) / static_cast<float>(fbh), magh, vmode);
 		}
 
-		ImGui::SeparatorText("Deinterlace");
-		{
+		if (pane("Deinterlace", s.p_deint)) {
 			static const char* const ilNames[] = {
 				"Automatic", "Off (no deinterlace)", "Weave TFF", "Weave BFF", "Bob TFF", "Bob BFF",
 				"Blend TFF", "Blend BFF", "Adaptive TFF", "Adaptive BFF" };
@@ -841,52 +1172,22 @@ namespace
 			if (ImGui::Checkbox("Disable interlace offset (kill half-line jitter)", &dio)) {
 				EmuConfig.GS.DisableInterlaceOffset = dio; GSConfig.DisableInterlaceOffset = dio;
 			}
-			ImGui::TextDisabled("'Off' = no deinterlace, stable image for frame-perfect inspection. The game's AUTO\nno-interlacing patch needs resources/patches.zip next to the exe (now bundled).");
+			ImGui::TextDisabled("'Off' = stable image for frame-perfect inspection. AUTO no-interlace patch needs resources/patches.zip (bundled).");
 		}
 
-		ImGui::SeparatorText("Camera scale (widescreen / FOV)");
-		ImGui::Checkbox("Override camera (H-scale + zoom)", &s.cam_hscale_on);
-		ImGui::SliderFloat("H-scale", &s.cam_hscale, 0.45f, 1.10f, "%.3f");
-		ImGui::Checkbox("Link zoom to H-scale", &s.cam_link_zoom);
-		if (s.cam_link_zoom) {
-			float linked = 0.75f / ((s.cam_hscale > 0.05f) ? s.cam_hscale : 0.05f);
-			ImGui::BeginDisabled();
-			ImGui::SliderFloat("Zoom", &linked, 0.40f, 1.60f, "%.2f (linked)");
-			ImGui::EndDisabled();
-		} else {
-			ImGui::SliderFloat("Zoom", &s.cam_zoom, 0.40f, 1.60f, "%.2f");
+		if (pane("Style", s.p_style)) {
+			ImGui::SliderFloat("Box thickness", &s.box_thickness, 0.5f, 4.0f, "%.1f");
+			ImGui::SliderFloat("Skeleton thickness", &s.skel_thickness, 0.5f, 4.0f, "%.1f");
+			ImGui::SliderInt("Sphere detail", &s.sphere_segments, 6, 40, "%d");
+			ImGui::Checkbox("Shaded fill", &s.sphere_shaded); ImGui::SameLine();
+			ImGui::SetNextItemWidth(120.0f);
+			ImGui::SliderFloat("##fillA", &s.sphere_fill_alpha, 0.05f, 1.0f, "fill %.2f");
 		}
-		ImGui::TextDisabled("H-scale = 1/display-aspect for round 3D: 0.75=4:3, 0.70=10:7, 0.875=8:7, 0.469=16:9 fill.\nZoom <1 = zoom OUT/wider FOV. Linked: widening h-scale zooms out.");
 
-		ImGui::SeparatorText("Style");
-		ImGui::SliderFloat("Box thickness", &s.box_thickness, 0.5f, 4.0f, "%.1f");
-		ImGui::SliderFloat("Skeleton thickness", &s.skel_thickness, 0.5f, 4.0f, "%.1f");
-		ImGui::SliderInt("Sphere detail", &s.sphere_segments, 6, 40, "%d");
-		ImGui::Checkbox("Shaded fill", &s.sphere_shaded);
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(120.0f);
-		ImGui::SliderFloat("##fillA", &s.sphere_fill_alpha, 0.05f, 1.0f, "fill %.2f");
-
-		ImGui::SeparatorText("Freecam (Ctrl+F)");
-		bool fc = g_fc.enabled;
-		if (ImGui::Checkbox("Enable freecam", &fc)) SdbzFcSetEnabled(fc);
-		ImGui::TextDisabled("Move WASD + Q/E (up/down), look arrows.\nShift=fast, Ctrl=slow. Free-run only (not paused).\nGame camera + boxes move together.");
-		ImGui::SliderFloat("Move speed", &g_fc.move_speed, 0.25f, 16.0f, "%.2f");
-		ImGui::SliderFloat("Mouse sensitivity", &g_fc.mouse_sens, 0.0005f, 0.015f, "%.4f");
-		ImGui::SliderFloat("Look smoothing", &g_fc.look_smooth, 0.0f, 0.95f, "%.2f");
-		ImGui::SliderFloat("Look speed (arrows)", &g_fc.look_speed, 0.005f, 0.12f, "%.3f");
-		ImGui::Checkbox("Invert Y", &g_fc.invert_y);
-		ImGui::TextDisabled("Tune, then 'Save' (top) to lock it in across runs.");
-		if (ImGui::Button("Re-seed from game cam") && g_fc.enabled) { SdbzFcSetEnabled(false); SdbzFcSetEnabled(true); }
-
-		ImGui::SeparatorText("Framestep (Ctrl+P freeze, Ctrl+. step)");
-		bool fr = g_step.frozen;
-		if (ImGui::Checkbox("Freeze (fighters + bones + projectiles)", &fr)) SdbzStepSetFrozen(fr);
-		ImGui::SameLine();
-		if (ImGui::Button("Step")) { if (!g_step.frozen) SdbzStepSetFrozen(true); SdbzStepOnce(1); }
-		ImGui::SameLine();
-		if (ImGui::Button("+10")) { if (!g_step.frozen) SdbzStepSetFrozen(true); SdbzStepOnce(10); }
-		ImGui::TextDisabled("Freezes fighters while the engine keeps rendering,\nso freecam can orbit a frozen pose. PCSX2 stays unpaused.");
+		if (pane("Frame delay (free-run only)", s.p_frame)) {
+			ImGui::SliderInt("##delay", &s.frame_delay, 0, 8, "delay = %d frames");
+			ImGui::TextDisabled("EE runs ~1f ahead during free-run. Ignored while paused/stepping.");
+		}
 	}
 
 	// In-game floating control window (drawn in PCSX2's main ImGui context).
@@ -1012,6 +1313,56 @@ namespace
 	static void SdbzPopoutRender() {}
 #endif // _WIN32
 
+	// TEMP shell-field inspector (shown only while FROZEN + show_shells): lists each ACTIVE shell's candidate
+	// "is the hit live" fields so a framestep through a projectile reveals exactly which one gates the hit window
+	// -- spawn != active. Also prints the segment count (=*(ho+12)), which diagnoses multi-orb attacks (e.g.
+	// Frieza's whip) that currently draw only segment 0. Offsets (RE'd): +832 slot/state flags (bit3/0x8=alive),
+	// +1456 controller state (CShlCtrlNorm__m01 inits it to 0), +1440 (CHitMgr clears bit3 each frame just before
+	// the per-shell hit-update), +928 hit-record count, vt@+0 = shell class. Framestep and watch which value flips
+	// as the box stops being able to hit -> that's the real active gate (then we bake it in + reuse for invuln/props).
+	static void SdbzShellInspect(std::vector<SdbzPrim>& out, u32 player, int pidx, float x, float y) {
+		const float rowh = ImGui::GetFontSize() + 2.0f;
+		// DIFF SCANNER: per active shell, scan a whole region of the struct and remember the LAST set of offsets
+		// whose u32 changed (vs the previous distinct frame). Framestep spawn->active->inactive and the "d:" line
+		// shows EXACTLY which offsets flipped at that step (+offset:old>new) -- so we see every flag, not just one.
+		constexpr u32 OFF0 = 800u, NW = 170u; // scan shell+800 .. +1480 (flags/state/hit region, before pos/matrix)
+		static u32  s_prev[2][16][NW];
+		static bool s_have[2][16] = {};
+		static char s_delta[2][16][176] = {};
+		int row = 0;
+		for (int i = 0; i < 16; i++) {
+			const u32 shell = Ee32(player + 1820u + 4u * i);
+			if (!EeValid(shell) || (Ee32(shell + 832) & 8u) == 0) continue; // slot alive (current vfx gate)
+			const u32 ho = Ee32(shell + 1384);
+			const s32 seg = EeValid(ho) ? static_cast<s32>(Ee32(ho + 12)) : 1;
+			const bool active = (Ee32(shell + 1440) & 0x100u) != 0; // current hit-active gate guess
+			char buf[160];
+			std::snprintf(buf, sizeof(buf),
+				"P%d S%d vt=%06X st1456=%d f832=%08X f1440=%08X rec=%d seg=%d %s",
+				pidx + 1, i, Ee32(shell) & 0xFFFFFFu, static_cast<int>(Ee32(shell + 1456)),
+				Ee32(shell + 832), Ee32(shell + 1440), static_cast<int>(Ee32(shell + 928)), seg,
+				active ? "ACTIVE" : "idle");
+			EmitText(out, ImVec2(x, y + static_cast<float>(row) * rowh),
+			         active ? IM_COL32(120, 255, 120, 255) : IM_COL32(255, 210, 90, 255), buf);
+			row++;
+			// scan the region; collect up to 6 changed offsets into a persistent delta string
+			char d[176]; int dl = 0, nch = 0;
+			for (u32 w = 0; w < NW; w++) {
+				const u32 v = Ee32(shell + OFF0 + 4u * w);
+				if (s_have[pidx][i] && v != s_prev[pidx][i][w] && nch < 6)
+					{ dl += std::snprintf(d + dl, sizeof(d) - static_cast<size_t>(dl), "+%u:%X>%X ", OFF0 + 4u * w, s_prev[pidx][i][w], v); nch++; }
+				s_prev[pidx][i][w] = v;
+			}
+			if (nch) std::snprintf(s_delta[pidx][i], sizeof(s_delta[pidx][i]), "%s", d);
+			s_have[pidx][i] = true;
+			if (s_delta[pidx][i][0]) {
+				char db[176]; std::snprintf(db, sizeof(db), "  d: %s", s_delta[pidx][i]);
+				EmitText(out, ImVec2(x, y + static_cast<float>(row) * rowh), IM_COL32(255, 255, 120, 255), db);
+				row++;
+			}
+		}
+	}
+
 	static void DrawSdbzHitboxOverlay() {
 		// Load persisted settings once.
 		static bool s_loaded = false;
@@ -1059,7 +1410,7 @@ namespace
 		// Freecam runs whenever SDBZ is up, independent of the box overlay's master toggle.
 		const bool sdbz_running = SdbzPlayerValid(SDBZ_PLAYERS[0]) || SdbzPlayerValid(SDBZ_PLAYERS[1]);
 		if (sdbz_running) {
-			SdbzStepUpdate(); SdbzFcUpdate(); SdbzCamScaleSync();
+			SdbzStepUpdate(); SdbzFcUpdate(); SdbzCamScaleSync(); SdbzOrthoSync(); SdbzHudHideUpdate(); SdbzNoCullUpdate(); SdbzTrainingUpdate();
 		}
 		else {
 			// Game/battle gone (CSS, menus, between rounds): tear down so the freeze never leaks. SdbzStepSetFrozen
@@ -1089,6 +1440,8 @@ namespace
 				SdbzDrawBoxes(cur, player, WS);
 				if (g_sdbz.show_shells) SdbzDrawShells(cur, player, WS);
 				if (g_sdbz.show_state) SdbzDrawStateHud(cur, player, idx == 0 ? "P1" : "P2", hudx, hudy + idx * hud_row);
+				// while frozen, dump active-shell candidate gate fields so framestepping reveals the real active flag
+				if (g_step.frozen && g_sdbz.dbg_shells) SdbzShellInspect(cur, player, idx, hudx, hudy + (4.0f + static_cast<float>(idx) * 5.0f) * hud_row);
 			}
 			idx++;
 		}
