@@ -9,6 +9,8 @@
 #include "SaveState.h"
 #include "PINE.h"
 #include "VMManager.h"
+#include "MTGS.h"
+#include "GS/Renderers/Common/GSRenderer.h"
 #include "common/Error.h"
 #include "common/Threading.h"
 
@@ -118,9 +120,10 @@ namespace PINEServer
 
 	/**
 	 * Maximum memory used by an IPC message reply.
-	 * Equivalent to 50,000 Read64 replies.
+	 * Bumped to 5 MiB so GS reads (MsgGrabDisplay framebuffer / MsgReadGSMem
+	 * raw GS local memory) fit in a single reply. Original value was 450000.
 	 */
-#define MAX_IPC_RETURN_SIZE 450000
+#define MAX_IPC_RETURN_SIZE (5 * 1024 * 1024)
 
 	/**
 	 * IPC return buffer.
@@ -159,6 +162,9 @@ namespace PINEServer
 		MsgUUID = 0xD, /**< Returns the game UUID. */
 		MsgGameVersion = 0xE, /**< Returns the game verion. */
 		MsgStatus = 0xF, /**< Returns the emulator status. */
+		MsgReadGSMem = 0x10, /**< Read raw GS local memory: arg u32 offset, u32 size -> size bytes. */
+		MsgGrabDisplay = 0x11, /**< Capture display framebuffer: arg u32 w, u32 h -> u32 ow, u32 oh, ow*oh*4 RGBA. */
+		MsgReadGSRegs = 0x12, /**< Read GS context/env registers -> 21 x u64 (see ParseCommand). */
 		MsgUnimplemented = 0xFF /**< Unimplemented IPC message. */
 	};
 
@@ -744,6 +750,123 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 
 				ToResultVector(ret_buffer, status, ret_cnt);
 				ret_cnt += 4;
+				break;
+			}
+			case MsgReadGSMem:
+			{
+				// Read raw GS local memory. arg: u32 byte offset, u32 size. reply: size bytes.
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 8, ret_cnt, 0, buf_size)) [[unlikely]]
+					goto error;
+				const u32 gs_off = FromSpan<u32>(buf, buf_cnt);
+				const u32 gs_size = FromSpan<u32>(buf, buf_cnt + 4);
+				buf_cnt += 8;
+				if (gs_size == 0 || gs_size > (4u * 1024 * 1024) ||
+					(static_cast<u64>(gs_off) + gs_size) > (4u * 1024 * 1024)) [[unlikely]]
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, gs_size, buf_size)) [[unlikely]]
+					goto error;
+				u8* const dst = &ret_buffer[ret_cnt];
+				bool gs_ok = false;
+				// The PINE thread must not touch the MTGS ring directly (single-producer =
+				// CPU thread), so hop to the CPU thread, then the GS thread, then sync.
+				Host::RunOnCPUThread([dst, gs_off, gs_size, &gs_ok]() {
+					MTGS::RunOnGSThread([dst, gs_off, gs_size, &gs_ok]() {
+						if (g_gs_renderer)
+						{
+							memcpy(dst, g_gs_renderer->m_mem.vm8() + gs_off, gs_size);
+							gs_ok = true;
+						}
+					});
+					MTGS::WaitGS(false, false, false);
+				}, true);
+				if (!gs_ok) [[unlikely]]
+					goto error;
+				ret_cnt += gs_size;
+				break;
+			}
+			case MsgGrabDisplay:
+			{
+				// Capture the composited display framebuffer. arg: u32 req_w, u32 req_h.
+				// reply: u32 out_w, u32 out_h, out_w*out_h*4 bytes RGBA (0xAABBGGRR).
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 8, ret_cnt, 8, buf_size)) [[unlikely]]
+					goto error;
+				const u32 req_w = FromSpan<u32>(buf, buf_cnt);
+				const u32 req_h = FromSpan<u32>(buf, buf_cnt + 4);
+				buf_cnt += 8;
+				u32 out_w = 0, out_h = 0;
+				std::vector<u32> pixels;
+				bool snap_ok = false;
+				Host::RunOnCPUThread([req_w, req_h, &out_w, &out_h, &pixels, &snap_ok]() {
+					snap_ok = MTGS::SaveMemorySnapshot(req_w, req_h, false, false, &out_w, &out_h, &pixels);
+				}, true);
+				const u32 px_bytes = out_w * out_h * 4u;
+				if (!snap_ok || px_bytes == 0 ||
+					static_cast<u64>(pixels.size()) * 4 < px_bytes) [[unlikely]]
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8 + px_bytes, buf_size)) [[unlikely]]
+					goto error;
+				ToResultVector<u32>(ret_buffer, out_w, ret_cnt);
+				ret_cnt += 4;
+				ToResultVector<u32>(ret_buffer, out_h, ret_cnt);
+				ret_cnt += 4;
+				memcpy(&ret_buffer[ret_cnt], pixels.data(), px_bytes);
+				ret_cnt += px_bytes;
+				break;
+			}
+			case MsgReadGSRegs:
+			{
+				// Read GS env/context registers. reply: 21 x u64 (little-endian), in order:
+				//   PRIM, PRMODECONT, PRMODE,
+				//   CTXT0: FRAME, ZBUF, XYOFFSET, SCISSOR, TEST, ALPHA, TEX0,
+				//   CTXT1: FRAME, ZBUF, XYOFFSET, SCISSOR, TEST, ALPHA, TEX0,
+				//   DISP0.DISPFB, DISP0.DISPLAY, DISP1.DISPFB, DISP1.DISPLAY
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 21 * 8, buf_size)) [[unlikely]]
+					goto error;
+				u8 gsregs[21 * 8] = {};
+				bool gr_ok = false;
+				Host::RunOnCPUThread([&gsregs, &gr_ok]() {
+					MTGS::RunOnGSThread([&gsregs, &gr_ok]() {
+						if (!g_gs_renderer)
+							return;
+						u8* p = gsregs;
+						auto put = [&p](const void* src) { memcpy(p, src, 8); p += 8; };
+						const GSDrawingEnvironment& e = g_gs_renderer->m_env;
+						put(&e.PRIM);
+						put(&e.PRMODECONT);
+						put(&e.PRMODE);
+						for (int i = 0; i < 2; i++)
+						{
+							const GSDrawingContext& c = e.CTXT[i];
+							put(&c.FRAME);
+							put(&c.ZBUF);
+							put(&c.XYOFFSET);
+							put(&c.SCISSOR);
+							put(&c.TEST);
+							put(&c.ALPHA);
+							put(&c.TEX0);
+						}
+						if (g_gs_renderer->m_regs)
+						{
+							for (int i = 0; i < 2; i++)
+							{
+								put(&g_gs_renderer->m_regs->DISP[i].DISPFB);
+								put(&g_gs_renderer->m_regs->DISP[i].DISPLAY);
+							}
+						}
+						gr_ok = true;
+					});
+					MTGS::WaitGS(false, false, false);
+				}, true);
+				if (!gr_ok) [[unlikely]]
+					goto error;
+				memcpy(&ret_buffer[ret_cnt], gsregs, sizeof(gsregs));
+				ret_cnt += sizeof(gsregs);
 				break;
 			}
 			default:
