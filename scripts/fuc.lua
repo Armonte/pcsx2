@@ -29,7 +29,8 @@ local A = {
 	RB_CAVE = 0x2A1128, RB_HOOK = 0x159F98, RB_HOOK_ORIG = 0x0C084498, RB_HOOK_NEW = 0x0C0A844A,
 	RB_RENDER_HOOKS = { { 0x159FC0, 0x0C08609C, 0x0C0A848A }, { 0x15A108, 0x0C08643C, 0x0C0A8492 } },
 	RB_TRACE_HOOKS = { { 0x20E740, 0x3C020052, 0x3C030026, 0x080A849A }, { 0x20E7D0, 0x3C020052, 0x3C034780, 0x080A84AA }, { 0x20E850, 0x3C020052, 0x00A41823, 0x080A84BA }, { 0x20E8C0, 0x3C020052, 0x9C452D80, 0x080A84CA } },
-	RB_CAVE_WORDS = { 0x27BDFFE0, 0xFFBF0000, 0xFFB00008, 0xFFB10010, 0x3C035DB2, 0x3463F00D, 0x24040001, 0x0000000C, 0x0040802D, 0x0000882D, 0x12300016, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040002, 0x0220282D, 0x0000000C, 0x0C084498, 0x00000000, 0x0C08444C, 0x24040008, 0x0C0BACA8, 0x00000000, 0x0C08643C, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040003, 0x0220282D, 0x0000000C, 0x26310001, 0x1000FFEA, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040004, 0x0000000C, 0x0C084498, 0x00000000, 0xDFBF0000, 0xDFB00008, 0xDFB10010, 0x03E00008, 0x27BD0020, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040005, 0x0000000C, 0x0808609C, 0x00000000, 0x00000000, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040006, 0x0000000C, 0x0808643C, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040010, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x3C030026, 0x080839D2, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040011, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x3C034780, 0x080839F6, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040012, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x00A41823, 0x08083A16, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040013, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x9C452D80, 0x08083A32, 0x00000000 },
+	RB_DETERMINISM_PATCHES = { { 0x165F64, 0x12E00011, 0x16E00002 }, { 0x165F68, 0x00000000, 0x3C023F80 }, { 0x165F6C, 0x3C023F80, 0x080A84DA } },
+	RB_CAVE_WORDS = { 0x27BDFFE0, 0xFFBF0000, 0xFFB00008, 0xFFB10010, 0x3C035DB2, 0x3463F00D, 0x24040001, 0x0000000C, 0x0040802D, 0x0000882D, 0x12300016, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040002, 0x0220282D, 0x0000000C, 0x0C084498, 0x00000000, 0x0C08444C, 0x24040008, 0x0C0BACA8, 0x00000000, 0x0C08643C, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040003, 0x0220282D, 0x0000000C, 0x26310001, 0x1000FFEA, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040004, 0x0000000C, 0x0C084498, 0x00000000, 0xDFBF0000, 0xDFB00008, 0xDFB10010, 0x03E00008, 0x27BD0020, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040005, 0x0000000C, 0x0808609C, 0x00000000, 0x00000000, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040006, 0x0000000C, 0x0808643C, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040010, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x3C030026, 0x080839D2, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040011, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x3C034780, 0x080839F6, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040012, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x00A41823, 0x08083A16, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040013, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x9C452D80, 0x08083A32, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x3C033F6B, 0x3463851F, 0x3C023F8A, 0x34423D71, 0x44836000, 0x0C0839D0, 0x44826800, 0x080597EB, 0x00000000 },
 	RB_CAVE_ORIG0  = 0x27BDFF20, -- first word of sub_2A1128 as shipped (addiu sp,-0xE0); install refuses otherwise
 	RB_INPUT_BLOCK = 0x522E20, RB_INPUT_LEN = 0x360, -- g_PadMerged + g_Pad[] + raw copies (0x522E20..0x523180)
 	CATCHUP_JAL    = 0x159F88, CATCHUP_WORD = 0x0C056898, -- jal Frame_CatchUpIfLagging (NOP = 1 sim tick/frame) [code]
@@ -438,6 +439,12 @@ local function rb_install()
 		rb_status_msg = string.format("rollback hook NOT installed: hook %08X cave %08X (unexpected code)", hook, first)
 		return false
 	end
+	for _, h in ipairs(A.RB_DETERMINISM_PATCHES) do
+		if rd32(h[1]) ~= h[2] then
+			rb_status_msg = string.format("rollback NOT installed: determinism patch %08X = %08X (unexpected code)", h[1], rd32(h[1]))
+			return false
+		end
+	end
 	for _, h in ipairs(A.RB_RENDER_HOOKS) do
 		if rd32(h[1]) ~= h[2] then
 			rb_status_msg = string.format("rollback hook NOT installed: render hook %08X = %08X (unexpected code)", h[1], rd32(h[1]))
@@ -447,6 +454,8 @@ local function rb_install()
 	for i, w in ipairs(A.RB_CAVE_WORDS) do engine.patch(A.RB_CAVE + 4 * (i - 1), w) end
 	-- hooks last: the routines are complete before anything can call them
 	for _, h in ipairs(A.RB_RENDER_HOOKS) do engine.patch(h[1], h[3]) end
+	-- netplay determinism patches (sim RNG draws independent of sound state); the stub is part of the cave
+	for _, h in ipairs(A.RB_DETERMINISM_PATCHES) do engine.patch(h[1], h[3]) end
 	engine.patch(A.RB_HOOK, A.RB_HOOK_NEW)
 	rb_installed = true
 	return true
@@ -471,6 +480,7 @@ local function rb_uninstall()
 	if not rb_installed then return end
 	engine.unpatch(A.RB_HOOK)
 	for _, h in ipairs(A.RB_RENDER_HOOKS) do engine.unpatch(h[1]) end
+	for _, h in ipairs(A.RB_DETERMINISM_PATCHES) do engine.unpatch(h[1]) end
 	rb_apply_trace(false)
 	for i = 1, #A.RB_CAVE_WORDS do engine.unpatch(A.RB_CAVE + 4 * (i - 1)) end
 	rb_installed = false
@@ -508,7 +518,8 @@ local function rb_start(mode)
 	rbdev.add_gate_stable(0x522D00, 0x18)                     -- g_LoadReq* (file load submissions)
 	rbdev.add_gate_stable(0x51A420, 0x170)                    -- stream channels (voice/BGM ADX streams)
 	rbdev.set_rng_split(A.RAND_SEED, 4)
-	rbdev.set_rng_trace(cfg.rb_trace)                       -- render passes (HUD flicker, Fx jitter, draw-pass script
+	rbdev.set_rng_trace(cfg.rb_trace)
+	rbdev.add_trace_alias(0x2A1384, 0x165FA0)                 -- hit-spark determinism stub == original pitch roll                       -- render passes (HUD flicker, Fx jitter, draw-pass script
 	                                                          -- events) get their own RNG stream; sim stream is render-free
 	rbdev.add_ignore(0x523EB4, 12)                            -- g_TaskEventArg0..2 (scratch set before render passes)
 	local camobj = rd32(A.OVERRIDE_CAM)
@@ -532,7 +543,9 @@ local function rb_start(mode)
 	rbdev.add_watch(0x51C900, 0xE20, "KeyReplay")
 	rbdev.add_watch(0x5231C0, 0x14, "Pause")
 	rbdev.add_watch(0x518410, 4, "g_NodePoolCursor")
-	rbdev.add_watch(0x51AC70, 0x120, "EffectPools")           -- shared-state/emitter/particle free lists + layer lists
+	rbdev.add_watch(0x51AC70, 0x10, "PtclSharedPool")         -- g_PtclSharedPoolMem / g_PtclSharedFree
+	-- (0x51AC80..0x51AD3F = particle DRAW-frame stamps, written by Particle_BeginDrawFrame: render state, not watched)
+	rbdev.add_watch(0x51AD40, 0x50, "EmitterPtclLists")       -- emitter cursor/free, particle free + 16 layer lists
 	rbdev.add_watch(0x3D6AC8, 4, "g_EmitterSerial")
 	cfg.one_tick = true -- exactly one sim tick per frame while rolling back
 	if not rb_install() then return end
