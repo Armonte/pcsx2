@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstring>
 #include <map>
+#include <tuple>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -85,6 +86,8 @@ namespace RollbackDevice
 		std::string s_trace_first_mismatch;
 		std::map<u64, u64> s_trace_other_sites;       // (fn<<32|ra) -> count, calls outside sim/render
 		std::map<u32, u32> s_trace_alias;             // stub ra -> original call-site ra
+		std::map<std::tuple<u32, u32, u32>, u64> s_trace_render_sites; // (fn, task pass, ra) -> count, render section
+		u32 s_trace_pass = 0;                         // last task pass reported by the pass marker (trace id 15)
 
 		std::vector<Range> s_stable;
 		std::vector<u64> s_stable_hash;            // [frame % INPUT_HISTORY]
@@ -388,6 +391,8 @@ namespace RollbackDevice
 		s_trace_other_first_ra = 0;
 		s_trace_first_mismatch.clear();
 		s_trace_other_sites.clear();
+		s_trace_render_sites.clear();
+		s_trace_pass = 0;
 		s_stable_hash.assign(INPUT_HISTORY, 0);
 		s_io_gated_frames = 0;
 		s_rng = s_cfg_rng;
@@ -594,6 +599,11 @@ namespace RollbackDevice
 			default:
 				if (cmd >= CMD_RNG_TRACE && cmd < CMD_RNG_TRACE + 16 && s_trace)
 				{
+					if (cmd == CMD_RNG_TRACE + TRACE_PASS_MARKER)
+					{
+						s_trace_pass = arg2; // Task_RunList(list, pass): attributes the following calls to a task pass
+						return 0;
+					}
 					const auto al = s_trace_alias.find(arg);
 					const u32 ra = (al != s_trace_alias.end()) ? al->second : arg;
 					const u64 key = (static_cast<u64>(cmd - CMD_RNG_TRACE) << 32) | ra;
@@ -605,6 +615,7 @@ namespace RollbackDevice
 							break;
 						case Phase::Render:
 							s_trace_calls_render++;
+							s_trace_render_sites[{cmd - CMD_RNG_TRACE, s_trace_pass, ra}]++;
 							break;
 						default:
 							s_trace_calls_other++;
@@ -655,6 +666,9 @@ namespace RollbackDevice
 		out += "\n## RNG calls outside the sim step and the render section ((fn, caller) -> count)\n";
 		for (const auto& [key, n] : s_trace_other_sites)
 			out += fmt::format("fn{} ra {:08X}  {}\n", key >> 32, static_cast<u32>(key), n);
+		out += "\n## traced calls in the render section ((fn, task pass, caller) -> count)\n";
+		for (const auto& [key, n] : s_trace_render_sites)
+			out += fmt::format("fn{} pass {:X} ra {:08X}  {}\n", std::get<0>(key), std::get<1>(key), std::get<2>(key), n);
 		out += fmt::format("\n## RNG trace first mismatch\n{}\n", s_trace_first_mismatch);
 		out += "\n## last frame's differing runs (addr len now/ref first bytes)\n";
 		for (const DiffRun& r : s_last_runs)
