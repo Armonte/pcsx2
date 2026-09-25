@@ -190,7 +190,6 @@ static std::array<float, 2> s_pointer_axis_dead_zone;
 static std::array<float, 2> s_pointer_axis_range;
 static std::array<float, 2> s_pointer_pos = {0.0f, 0.0f};
 static float s_pointer_inertia = 0.0f;
-static std::array<u32, InputManager::MAX_POINTER_DEVICES> s_pointer_button_state = {};
 
 using PointerMoveCallback = std::function<void(InputBindingKey key, float value)>;
 using KeyboardEventCallback = std::function<void(InputBindingKey key, float value)>;
@@ -1688,7 +1687,7 @@ bool InputManager::IsPointerButtonDown(u32 index, u32 button_index)
 {
 	if (index >= MAX_POINTER_DEVICES || button_index >= 32)
 		return false;
-	return (s_pointer_button_state[index] & (1u << button_index)) != 0;
+	return (s_pointer_button_state[index].load(std::memory_order_acquire) & (1u << button_index)) != 0;
 }
 
 void InputManager::UpdatePointerAbsolutePosition(u32 index, float x, float y)
