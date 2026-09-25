@@ -125,3 +125,6 @@ CMakeSettings.json
 /ci-artifacts/
 /out/
 /.cache/
+
+# per-user overlay settings written by scripts at runtime
+scripts/*.cfg
