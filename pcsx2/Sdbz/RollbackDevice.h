@@ -38,6 +38,8 @@ namespace RollbackDevice
 		CMD_RESIM_PRE = 2,
 		CMD_RESIM_POST = 3,
 		CMD_CUR_PRE = 4,
+		CMD_RENDER_BEGIN = 5, // game is about to run its render passes: switch g_RandSeed to the render stream
+		CMD_RENDER_END = 6,   // render passes done: save the render stream, restore the simulation stream
 	};
 
 	enum class Mode : int
@@ -63,6 +65,12 @@ namespace RollbackDevice
 	// simulation is live (e.g. the battle frame counter). A rollback happens only if it advanced on every frame of the
 	// window; menus, pauses, round transitions and loads (async IO that must not be rewound) are never rolled back.
 	void SetGate(u32 counter_addr);
+	// Split RNG: the game's single RNG state is also consumed by rendering (HUD flicker, particle jitter, script event
+	// handlers on draw passes). Re-simulation doesn't render, so the simulation stream would drift. With this set, the
+	// device swaps in a separate render stream between CMD_RENDER_BEGIN/END; the simulation stream then advances only
+	// in the simulation, identically in normal frames and in re-simulation. Active whenever the device is started
+	// (Capture or SyncTest), so every netplay peer runs the same split.
+	void SetRngSplit(u32 seed_addr, u32 size);
 
 	void Start(Mode mode, u32 rollback_frames, bool write_protect);
 	void Stop();

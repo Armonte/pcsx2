@@ -53,6 +53,7 @@ namespace RollbackDevice
 		std::vector<Watch> s_cfg_watches;
 		Range s_cfg_input;
 		u32 s_cfg_gate = 0;
+		Range s_cfg_rng;
 
 		// ---- runtime (EE thread) ----
 		Mode s_mode = Mode::Off;
@@ -62,6 +63,9 @@ namespace RollbackDevice
 		std::vector<Range> s_compare;              // regions - excludes - input - ignore
 		std::vector<Watch> s_watches;
 		Range s_input;
+		Range s_rng;                               // RNG state split into sim/render streams
+		std::vector<u8> s_rng_sim, s_rng_render;   // saved streams while the other one is live
+		bool s_in_render = false;
 		u32 s_gate = 0;
 		u32 s_gate_prev = 0;
 		std::vector<u8> s_gate_ok;                 // [frame % INPUT_HISTORY]: gate counter advanced into this frame
@@ -238,6 +242,12 @@ namespace RollbackDevice
 		}
 	} // namespace
 
+	void SetRngSplit(u32 seed_addr, u32 size)
+	{
+		std::lock_guard lk(s_mtx);
+		s_cfg_rng = {seed_addr & RAM_MASK, (seed_addr & RAM_MASK) + size};
+	}
+
 	void SetGate(u32 counter_addr)
 	{
 		std::lock_guard lk(s_mtx);
@@ -248,6 +258,7 @@ namespace RollbackDevice
 	{
 		std::lock_guard lk(s_mtx);
 		s_cfg_gate = 0;
+		s_cfg_rng = {};
 		s_cfg_regions.clear();
 		s_cfg_excludes.clear();
 		s_cfg_ignore.clear();
@@ -294,6 +305,10 @@ namespace RollbackDevice
 		s_write_protect = write_protect;
 		s_input = s_cfg_input;
 		s_gate = s_cfg_gate;
+		s_rng = s_cfg_rng;
+		s_in_render = false;
+		s_rng_sim.clear();
+		s_rng_render.clear();
 		s_gate_ok.assign(INPUT_HISTORY, 0);
 		s_gated_frames = 0;
 		s_watches = s_cfg_watches;
@@ -392,6 +407,33 @@ namespace RollbackDevice
 			case CMD_RESIM_POST:
 				if (s_resim_active && s_ring)
 					s_ring->Capture(s_resim_base + static_cast<s32>(arg) + 1);
+				return 0;
+
+			case CMD_RENDER_BEGIN:
+				if (s_rng.b > s_rng.a && !s_in_render)
+				{
+					const u32 n = s_rng.b - s_rng.a;
+					s_rng_sim.assign(Ram(s_rng.a), Ram(s_rng.a) + n);
+					if (s_rng_render.size() != n)
+					{
+						// first frame: derive a render stream from the sim stream (any value works; it is cosmetic)
+						s_rng_render = s_rng_sim;
+						for (u8& b : s_rng_render)
+							b ^= 0xA5;
+					}
+					std::memcpy(Ram(s_rng.a), s_rng_render.data(), n);
+					s_in_render = true;
+				}
+				return 0;
+
+			case CMD_RENDER_END:
+				if (s_in_render)
+				{
+					const u32 n = s_rng.b - s_rng.a;
+					s_rng_render.assign(Ram(s_rng.a), Ram(s_rng.a) + n);
+					std::memcpy(Ram(s_rng.a), s_rng_sim.data(), n);
+					s_in_render = false;
+				}
 				return 0;
 
 			case CMD_CUR_PRE:
