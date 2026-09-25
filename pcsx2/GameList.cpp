@@ -309,7 +309,7 @@ bool GameList::GetIsoSerialAndCRC(const std::string& path, s32* disc_type, std::
 
 	// TODO: we could include the version in the game list?
 	*disc_type = DoCDVDdetectDiskType();
-	cdvdGetDiscInfo(serial, nullptr, nullptr, crc, nullptr);
+	cdvdGetDiscInfo(serial, nullptr, nullptr, nullptr, crc, nullptr);
 	DoCDVDclose();
 	return true;
 }
@@ -1309,9 +1309,15 @@ std::string GameList::FormatTimestamp(std::time_t timestamp)
 		}
 		else
 		{
+#ifdef _WIN32
+			wchar_t buf[128];
+			std::wcsftime(buf, std::size(buf), L"%x", &ttime);
+			ret = StringUtil::WideStringToUTF8String(buf);
+#else
 			char buf[128];
 			std::strftime(buf, std::size(buf), "%x", &ttime);
 			ret.assign(buf);
+#endif
 		}
 	}
 
@@ -1448,6 +1454,12 @@ bool GameList::DownloadCovers(const std::vector<std::string>& url_templates, boo
 	if (!has_title && !has_file_title && !has_serial)
 	{
 		progress->DisplayError("URL template must contain at least one of ${title}, ${filetitle}, or ${serial}.");
+		return false;
+	}
+
+	if (!FileSystem::CreateDirectoryPath(EmuFolders::Covers.c_str(), false))
+	{
+		progress->DisplayError(fmt::format("Failed to create covers directory: {}", EmuFolders::Covers).c_str());
 		return false;
 	}
 

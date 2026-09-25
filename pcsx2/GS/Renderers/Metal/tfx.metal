@@ -13,6 +13,8 @@ constant uint SHUFFLE_READWRITE = 3;
 
 constant bool HAS_FBFETCH           [[function_constant(GSMTLConstantIndex_FRAMEBUFFER_FETCH)]];
 constant bool DEPTH_FEEDBACK        [[function_constant(GSMTLConstantIndex_DEPTH_FEEDBACK)]];
+constant bool ROV_NEEDS_R32         [[function_constant(GSMTLConstantIndex_ROV_NEEDS_R32)]];
+constant bool BROKEN_SHADER_DEPTH   [[function_constant(GSMTLConstantIndex_BROKEN_SHADER_DEPTH)]];
 constant bool FST                   [[function_constant(GSMTLConstantIndex_FST)]];
 constant bool IIP                   [[function_constant(GSMTLConstantIndex_IIP)]];
 constant bool VS_POINT_SIZE         [[function_constant(GSMTLConstantIndex_VS_POINT_SIZE)]];
@@ -75,17 +77,21 @@ constant uint PS_SCANMSK            [[function_constant(GSMTLConstantIndex_PS_SC
 constant uint PS_AA1_RAW            [[function_constant(GSMTLConstantIndex_PS_AA1)]];
 constant bool PS_ABE                [[function_constant(GSMTLConstantIndex_PS_ABE)]];
 constant uint PS_SW_ANISO           [[function_constant(GSMTLConstantIndex_PS_SW_ANISO)]];
+constant bool PS_ROV_COLOR          [[function_constant(GSMTLConstantIndex_PS_ROV_COLOR)]];
+constant uint PS_ROV_DEPTH_RAW      [[function_constant(GSMTLConstantIndex_PS_ROV_DEPTH)]];
 
 using GSShader::VSExpand;
 using AFAIL = GSShader::PS_AFAIL;
 using ATST = GSShader::PS_ATST;
 using GSShader::ZTST;
 using AA1 = GSShader::PS_AA1;
+using ROV_DEPTH = GSShader::PS_ROV_DEPTH;
 constant VSExpand VS_EXPAND_TYPE = static_cast<VSExpand>(VS_EXPAND_TYPE_RAW);
 constant AFAIL PS_AFAIL = static_cast<AFAIL>(PS_AFAIL_RAW);
 constant ATST  PS_ATST  = static_cast<ATST>(PS_ATST_RAW);
 constant ZTST  PS_ZTST  = static_cast<ZTST>(PS_ZTST_RAW);
 constant AA1   PS_AA1   = static_cast<AA1>(PS_AA1_RAW);
+constant ROV_DEPTH PS_ROV_DEPTH = static_cast<ROV_DEPTH>(PS_ROV_DEPTH_RAW);
 
 #if defined(__METAL_MACOS__) && __METAL_VERSION__ >= 220
 	#define PRIMID_SUPPORT 1
@@ -119,9 +125,9 @@ constant bool NEEDS_DEPTH_FOR_ZTST  = PS_ZTST == ZTST::GEQUAL || PS_ZTST == ZTST
 constant bool NEEDS_DEPTH_FOR_AA1   = PS_AA1 == AA1::TRIANGLE_SW_Z;
 constant bool SW_DEPTH = NEEDS_DEPTH_FOR_AFAIL || NEEDS_DEPTH_FOR_ZTST || NEEDS_DEPTH_FOR_AA1;
 
-constant bool PS_COLOR0 = !PS_NO_COLOR;
-constant bool PS_COLOR1 = !PS_NO_COLOR1;
-constant bool PS_ZOUTPUT = PS_ZCLAMP || PS_ZFLOOR || SW_DEPTH;
+constant bool PS_OUTPUT_COLOR0 = !PS_NO_COLOR  && !PS_ROV_COLOR;
+constant bool PS_OUTPUT_COLOR1 = !PS_NO_COLOR1 && !PS_ROV_COLOR;
+constant bool PS_ZOUTPUT = (PS_ZCLAMP || PS_ZFLOOR || SW_DEPTH) && PS_ROV_DEPTH == ROV_DEPTH::NONE;
 constant bool PS_ZOUTPUT_LESS = PS_ZOUTPUT && !SW_DEPTH;
 constant bool PS_ZOUTPUT_ANY  = PS_ZOUTPUT && SW_DEPTH;
 constant bool PS_ZOUTPUT_COLOR = PS_ZOUTPUT_ANY && !DEPTH_FEEDBACK;
@@ -165,21 +171,32 @@ struct MainPSIn
 	uint interior [[function_constant(PS_INTERIOR)]];
 };
 
+struct MainResult
+{
+	float4 c0;
+	float4 c1;
+	float depth;
+};
+
 struct MainPSOut
 {
-	float4 c0 [[color(0), index(0), function_constant(PS_COLOR0)]];
-	float4 c1 [[color(0), index(1), function_constant(PS_COLOR1)]];
+	float4 c0 [[color(0), index(0), function_constant(PS_OUTPUT_COLOR0)]];
+	float4 c1 [[color(0), index(1), function_constant(PS_OUTPUT_COLOR1)]];
 	float depthColor [[color(1), function_constant(PS_ZOUTPUT_COLOR)]];
 	float depthLess [[depth(less), function_constant(PS_ZOUTPUT_LESS)]];
 	float depthAny  [[depth(any),  function_constant(PS_ZOUTPUT_ANY)]];
-	void setDepth(float depth)
+	MainPSOut(MainResult res)
 	{
+		if (PS_OUTPUT_COLOR0)
+			c0 = res.c0;
+		if (PS_OUTPUT_COLOR1)
+			c1 = res.c1;
 		if (PS_ZOUTPUT_LESS)
-			depthLess = depth;
+			depthLess = res.depth;
 		if (PS_ZOUTPUT_ANY)
-			depthAny = depth;
+			depthAny = res.depth;
 		if (PS_ZOUTPUT_COLOR)
-			depthColor = depth;
+			depthColor = res.depth;
 	}
 };
 
@@ -231,6 +248,14 @@ static MainVSOut vs_main_run(thread const MainVSIn& v, constant GSMTLMainVSUnifo
 
 	if (VS_POINT_SIZE)
 		out.point_size = cb.point_size.x;
+
+	// Apple GPUs use slightly different algorithms to calculate the Z they send to the shader vs the Z they use in hardware.
+	// This breaks a lot of things (the most common is conservative depth rejecting pixels that should have depth equal to current depth but now don't).
+	// Work around by always routing depth through the shader, and never using hardware depth values.
+	// To allow us to continue to use [[depth(less)]] optimizations, add a bit in the VS and subtract it off in the FS,
+	// so that "equal" depth doesn't ever fail a hardware depth test.
+	if (BROKEN_SHADER_DEPTH)
+		out.p.z += exp_min32;
 
 	return out;
 }
@@ -398,16 +423,11 @@ vertex MainVSOut vs_main_expand(
 			// Use bottom minus top for delta regardless of which vertex we are expanding.
 			float2 line_delta = is_bottom ? point.p.xy - other.p.xy : other.p.xy - point.p.xy;
 			float2 line_vector = normalize(line_delta / cb.vertex_scale);
-			float2 line_expand;
-			if (VS_EXPAND_TYPE == VSExpand::Line)
-			{
-				line_expand = float2(line_vector.y, -line_vector.x);
-			}
-			else
-			{
-				// Expand in y direction for shallow lines and x direction for steep lines.
-				line_expand = abs(line_vector.x) >= abs(line_vector.y) ? float2(0, 2) : float2(2, 0);
-			}
+			float2 line_expand = float2(line_vector.y, -line_vector.x);
+
+			if (VS_EXPAND_TYPE == VSExpand::LineAA1)
+				line_expand *= 2.f * cb.line_aa1_width;
+
 			float2 line_width = (line_expand * cb.point_size) / 2;
 			float2 offset = is_right ? line_width : -line_width;
 			point.p.xy += offset;
@@ -544,12 +564,6 @@ vertex MainVSOut vs_main_expand(
 				out.inv_cov = is_near_corner ? 0.0f : 1.0f; // Full coverage at near corner, otherwise none.
 			
 				out.interior = 0;
-
-				if (NOT_IIP)
-				{
-					// Get the provoking vertex color (first vertex in Metal)
-					out.fc = i0 == 0 ? out.fc : (i1 == 0 ? other.fc : opposite.fc);
-				}
 			}
 
 			return out;
@@ -569,10 +583,36 @@ struct PSMain
 	float4 current_color;
 	float current_depth;
 	uint prim_id;
+	bool color_discarded = false;
+	bool depth_discarded = false;
 	const thread MainPSIn& in;
 	constant GSMTLMainPSUniform& cb;
 
 	PSMain(const thread MainPSIn& in, constant GSMTLMainPSUniform& cb): in(in), cb(cb) {}
+
+	void discard()
+	{
+		if (PS_ROV_COLOR || PS_ROV_DEPTH != ROV_DEPTH::NONE)
+			color_discarded = depth_discarded = true;
+		else
+			discard_fragment();
+	}
+
+	void discard_color(thread float4& output)
+	{
+		if (PS_ROV_COLOR)
+			color_discarded = true;
+		else
+			output = current_color;
+	}
+
+	void discard_depth(thread float& output)
+	{
+		if (PS_ROV_DEPTH == ROV_DEPTH::READ_WRITE)
+			depth_discarded = true;
+		else
+			output = current_depth;
+	}
 
 	template <typename... Args>
 	float4 sample_tex(Args... args)
@@ -616,22 +656,27 @@ struct PSMain
 	float4 sample_c_af(float2 uv, float uv_w)
 	{
 		// HW sampler will reject bad UVs, match that here.
-		uv = any(isnan(uv) | isinf(uv)) ? float2(0, 0) : uv;
+		uv = any(isnan(uv) | isinf(uv)) ? float2(0.0f, 0.0f) : uv;
 
 		// Large floating point values risk NaN/Inf values.
 		// Above this value floats lose decimal precision, so seems a resonable limit for UVs.
 		uv = clamp(uv, -8388608.0f, 8388608.0f);
 
 		// Below taken from https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm#7.18.11%20LOD%20Calculations
+		// And https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_filter_anisotropic.txt
 		// With guidance from https://pema.dev/2025/05/09/mipmaps-too-much-detail/
 		float2 sz = float2(get_tex_dims());
 		float2 dX = dfdx(uv) * sz;
 		float2 dY = dfdy(uv) * sz;
 
+		float length_x = length(dX);
+		float length_y = length(dY);
+
 		// Calculate Ellipse Transform
-		bool d_zero = length(dX) == 0 || length(dY) == 0;
-		bool d_par = (dX.x * dY.y - dY.x * dX.y) == 0;
-		bool d_per = dot(dX, dY) == 0;
+		bool d_zero = length_x < 0.001f || length_y < 0.001f;
+		float f = (dX.x * dY.y - dX.y * dY.x);
+		bool d_par = f < 0.001f;
+		bool d_per = dot(dX, dY) < 0.001f;
 		bool d_inf_nan = any(isinf(dX) | isinf(dY) | isnan(dX) | isnan(dY));
 
 		if (!(d_zero || d_par || d_per || d_inf_nan))
@@ -639,21 +684,30 @@ struct PSMain
 			float A = dX.y * dX.y + dY.y * dY.y;
 			float B = -2 * (dX.x * dX.y + dY.x * dY.y);
 			float C = dX.x * dX.x + dY.x * dY.x;
-			float f = (dX.x * dY.y - dY.x * dX.y);
 			float F = f * f;
 
 			float p = A - C;
 			float q = A + C;
 			float t = sqrt(p * p + B * B);
 
+			float signB = sign(B);
+			float denom_plus  = t * (q + t);
+			float denom_minus = t * (q - t);
+
+			float sqrtA = sqrt(F * (t + p));
+			float sqrtB = sqrt(F * (t - p));
+
+			float inv_sqrt_denom_plus  = rsqrt(denom_plus);
+			float inv_sqrt_denom_minus = rsqrt(denom_minus);
+
 			float2 new_dX = float2(
-				sqrt(F * (t + p) / (t * (q + t))),
-				sqrt(F * (t - p) / (t * (q + t))) * sign(B)
+				sqrtA * inv_sqrt_denom_plus,
+				sqrtB * inv_sqrt_denom_plus * signB
 			);
 
 			float2 new_dY = float2(
-				sqrt(F * (t - p) / (t * (q - t))) * -sign(B),
-				sqrt(F * (t + p) / (t * (q - t)))
+				sqrtB * inv_sqrt_denom_minus * -signB,
+				sqrtA * inv_sqrt_denom_minus
 			);
 
 			d_inf_nan = any(isinf(new_dX) | isinf(new_dY) | isnan(new_dX) | isnan(new_dY));
@@ -661,16 +715,15 @@ struct PSMain
 			{
 				dX = new_dX;
 				dY = new_dY;
+				length_x = length(dX);
+				length_y = length(dY);
 			}
 		}
 
 		// Compute AF values
-		float squared_length_x = dX.x * dX.x + dX.y * dX.y;
-		float squared_length_y = dY.x * dY.x + dY.y * dY.y;
-		float determinant = abs(dX.x * dY.y - dX.y * dY.x);
-		bool is_major_x = squared_length_x > squared_length_y;
-		float squared_length_major = is_major_x ? squared_length_x : squared_length_y;
-		float length_major = sqrt(squared_length_major);
+		bool is_major_x = length_x > length_y;
+		float length_major = is_major_x ? length_x : length_y;
+		float length_minor = is_major_x ? length_y : length_x;
 
 		float aniso_ratio;
 		float length_lod;
@@ -682,41 +735,25 @@ struct PSMain
 			// Perform isotropic filtering instead.
 			aniso_ratio = 1.0f;
 			length_lod = length_major;
-			aniso_line = float2(0, 0);
+			aniso_line = float2(0.0f, 0.0f);
 		}
 		else
 		{
-			float norm_major = 1.0f / length_major;
+			float2 aniso_line_dir = is_major_x ? dX : dY;
 
-			float2 aniso_line_dir = float2(
-				(is_major_x ? dX.x : dY.x) * norm_major,
-				(is_major_x ? dX.y : dY.y) * norm_major
-			);
-
-			aniso_ratio = squared_length_major / determinant;
-
-			// Calculate the minor length of the ellipse for Lod, while also clamping the ratio of anisotropy.
-			if (aniso_ratio > PS_SW_ANISO)
-			{
-				// ratio is clamped - Lod is based on ratio (preserves area)
-				aniso_ratio = PS_SW_ANISO;
-				length_lod = length_major / PS_SW_ANISO;
-			}
-			else
-			{
-				// ratio not clamped - Lod is based on area
-				length_lod = determinant / length_major;
-			}
+			aniso_ratio = min(length_major / length_minor, float(PS_SW_ANISO));
+			length_lod = length_major / aniso_ratio;
 
 			// clamp to top Lod
 			if (length_lod < 1.0f)
 				aniso_ratio = max(1.0f, aniso_ratio * length_lod);
 
 			aniso_ratio = round(aniso_ratio);
-			aniso_line = aniso_line_dir * 0.5f * length_major * (1.0f / sz);
+
+			aniso_line = aniso_line_dir * 0.5f * (1.0f / sz);
 		}
 
-		float lod = PS_AUTOMATIC_LOD ? log2(length_lod) : PS_MANUAL_LOD ? manual_lod(uv_w) : 0;
+		float lod = PS_AUTOMATIC_LOD ? log2(length_lod) : PS_MANUAL_LOD ? manual_lod(uv_w) : 0.0f;
 
 		float4 colour;
 		if (aniso_ratio == 1.0f)
@@ -725,10 +762,11 @@ struct PSMain
 		}
 		else
 		{
-			float4 num = float4(0, 0, 0, 0);
+			float4 num = float4(0.0f, 0.0f, 0.0f, 0.0f);
+			float2 segment = (2.0f * aniso_line) / aniso_ratio;
 			for (int i = 0; i < aniso_ratio; i++)
 			{
-				float2 d = -aniso_line + (0.5f + i) * (2.0f * aniso_line) / aniso_ratio;
+				float2 d = -aniso_line + (0.5f + i) * segment;
 				float2 uv_sample = uv + d;
 				float4 sample_colour = sample_tex(tex_sampler, uv_sample, level(lod));
 				num += sample_colour;
@@ -1074,7 +1112,7 @@ struct PSMain
 		{
 			uint4 rt = uint4(fetch_raw_color() * 255.5f);
 			uint green = (rt.g >> cb.channel_shuffle.green_shift) & cb.channel_shuffle.green_mask;
-			uint blue  = (rt.b >> cb.channel_shuffle.blue_shift)  & cb.channel_shuffle.blue_mask;
+			uint blue  = (rt.b << cb.channel_shuffle.blue_shift)  & cb.channel_shuffle.blue_mask;
 			return float4(green | blue);
 		}
 	}
@@ -1266,8 +1304,12 @@ struct PSMain
 	{
 		if (PS_FBMASK)
 		{
-			float multi = PS_COLCLIP_HW ? 65535.0 : 255.5;
-			C = float4((uint4(int4(C)) & (cb.fbmask ^ 0xff)) | (uint4(current_color * float4(multi, multi, multi, 255)) & cb.fbmask));
+			float multi_rgb = PS_COLCLIP_HW ? 65535.0 : 255.5;
+			float multi_a = PS_RTA_CORRECTION ? 128.0 : 255.0;
+			float4 RT = current_color;
+			RT.rgb = RT.rgb * multi_rgb;
+			RT.a = round(RT.a * multi_a);
+			C = float4((uint4(int4(C)) & (cb.fbmask ^ 0xff)) | (uint4(RT) & cb.fbmask));
 		}
 	}
 
@@ -1461,25 +1503,27 @@ struct PSMain
 		}
 	}
 
-	MainPSOut ps_main()
+	MainResult ps_main()
 	{
-		MainPSOut out = {};
+		MainResult out = {};
 		float input_z = in.p.z;
+		if (BROKEN_SHADER_DEPTH)
+			input_z -= 0x1p-32;
 		if (PS_ZFLOOR)
 			input_z = floor(input_z * 0x1p32) * 0x1p-32;
 
 		if (PS_ZTST == ZTST::GEQUAL || PS_ZTST == ZTST::GREATER)
 		{
 			if (PS_ZTST == ZTST::GEQUAL && input_z < current_depth)
-				discard_fragment();
+				discard();
 			if (PS_ZTST == ZTST::GREATER && input_z <= current_depth)
-				discard_fragment();
+				discard();
 		}
 
 		if (PS_SCANMSK & 2)
 		{
 			if ((uint(in.p.y) & 1) == (PS_SCANMSK & 1))
-				discard_fragment();
+				discard();
 		}
 
 		if (PS_DATE >= 5)
@@ -1489,7 +1533,7 @@ struct PSMain
 			bool bad = PS_RTA_CORRECTION ? ((PS_DATE & 3) == 1 ? (rt_a > (254.5f / 255.f)) : (rt_a < (254.5f / 255.f))) : ((PS_DATE & 3) == 1 ? (rt_a > 0.5) : (rt_a < 0.5));
 
 			if (bad)
-				discard_fragment();
+				discard();
 		}
 
 		if (PS_DATE == 3)
@@ -1498,7 +1542,7 @@ struct PSMain
 			// Note prim_id == stencil_ceil will be the primitive that will update
 			// the bad alpha value so we must keep it.
 			if (float(prim_id) > stencil_ceil)
-				discard_fragment();
+				discard();
 		}
 
 		float4 C = ps_color();
@@ -1507,7 +1551,9 @@ struct PSMain
 
 		if (PS_AA1 != AA1::NONE)
 		{
-			float cov = saturate(1.f - abs(in.inv_cov));
+			float cov = PS_AA1 == AA1::LINE
+				? saturate(cb.line_cov_scale * (1.f - abs(in.inv_cov))) // Blur only outer part of the line by scaling coverage.
+				: saturate(1.f - abs(in.inv_cov));
 			if (!PS_ABE || floor(C.a) == 128.f) // The coverage is only used if the fragment alpha is 128.
 				C.a = 128.f * cov;
 		}
@@ -1519,7 +1565,7 @@ struct PSMain
 
 		bool atst_pass = atst(C);
 		if (PS_AFAIL == AFAIL::KEEP && !atst_pass)
-			discard_fragment();
+			discard();
 
 		float4 alpha_blend = float4(0.f);
 		if (SW_AD_TO_HW)
@@ -1625,32 +1671,32 @@ struct PSMain
 		if (PS_AFAIL == AFAIL::RGB_ONLY_DSB)
 			alpha_blend.a = float(atst_pass);
 
-		if (PS_COLOR0)
+		if (!PS_NO_COLOR)
 		{
 			out.c0.a = PS_RTA_CORRECTION ? C.a / 128.f : C.a / 255.f;
 			out.c0.rgb = PS_COLCLIP_HW ? float3(C.rgb / 65535.f) : C.rgb / 255.f;
 		}
-		if (PS_COLOR1)
+		if (!PS_NO_COLOR1)
 			out.c1 = alpha_blend;
 
 		if (PS_ZCLAMP)
 			input_z = min(input_z, cb.max_depth);
 
 		if (PS_AA1 == AA1::TRIANGLE_SW_Z && !in.interior)
-			input_z = current_depth; // No depth update for triangle edges.
+			discard_depth(input_z); // No depth update for triangle edges.
 
 		if (!atst_pass)
 		{
 			if (PS_AFAIL == AFAIL::RGB_ONLY_SW_Z || PS_AFAIL == AFAIL::RGB_ONLY)
-				out.c0.a = current_color.a;
+				out.c0.a = current_color.a; // discard alpha
 			else if (PS_AFAIL == AFAIL::ZB_ONLY)
-				out.c0 = current_color;
+				discard_color(out.c0);
 
 			if (PS_AFAIL == AFAIL::RGB_ONLY_SW_Z || PS_AFAIL == AFAIL::FB_ONLY)
-				input_z = current_depth;
+				discard_depth(input_z);
 		}
 
-		out.setDepth(input_z);
+		out.depth = input_z;
 
 		return out;
 	}
@@ -1662,16 +1708,19 @@ fragment float4 fbfetch_test(float4 in [[color(0), raster_order_group(0)]])
 	return in * 2;
 }
 
-constant bool NEEDS_RT_TEX = NEEDS_RT && !HAS_FBFETCH;
-constant bool NEEDS_RT_FBF = NEEDS_RT &&  HAS_FBFETCH;
-constant bool NEEDS_DS_FBF = SW_DEPTH &&  HAS_FBFETCH && !DEPTH_FEEDBACK;
+constant bool NEEDS_RT_TEX = NEEDS_RT && !HAS_FBFETCH && !PS_ROV_COLOR;
+constant bool NEEDS_RT_FBF = NEEDS_RT &&  HAS_FBFETCH && !PS_ROV_COLOR;
+constant bool NEEDS_DS_FBF = SW_DEPTH &&  HAS_FBFETCH && !DEPTH_FEEDBACK && PS_ROV_DEPTH == ROV_DEPTH::NONE;
 #else
-constant bool NEEDS_RT_TEX = NEEDS_RT;
+constant bool NEEDS_RT_TEX = NEEDS_RT && !PS_ROV_COLOR;
 constant bool NEEDS_DS_FBF = false;
 constant float ds_fbf = 0;
 #endif
-constant bool NEEDS_DS_TEX   = SW_DEPTH && !DEPTH_FEEDBACK && !NEEDS_DS_FBF;
-constant bool NEEDS_DS_DEPTH = SW_DEPTH && DEPTH_FEEDBACK || NEEDS_DS_FBF;
+constant bool NEEDS_DS_TEX   = SW_DEPTH && !DEPTH_FEEDBACK && !NEEDS_DS_FBF && PS_ROV_DEPTH == ROV_DEPTH::NONE;
+constant bool NEEDS_DS_DEPTH = (SW_DEPTH && DEPTH_FEEDBACK || NEEDS_DS_FBF) && PS_ROV_DEPTH == ROV_DEPTH::NONE;
+constant bool NEEDS_RT_ROV = PS_ROV_COLOR && !ROV_NEEDS_R32;
+constant bool NEEDS_RT_U32 = PS_ROV_COLOR &&  ROV_NEEDS_R32;
+constant bool NEEDS_DS_ROV = PS_ROV_DEPTH != ROV_DEPTH::NONE;
 
 fragment MainPSOut ps_main(
 	MainPSIn in [[stage_in]],
@@ -1690,7 +1739,10 @@ fragment MainPSOut ps_main(
 	texture2d<float> rt        [[texture(GSMTLTextureIndexRenderTarget), function_constant(NEEDS_RT_TEX)]],
 	texture2d<float> primidtex [[texture(GSMTLTextureIndexPrimIDs),      function_constant(PS_PRIM_CHECKING_READ)]],
 	texture2d<float> ds_tex    [[texture(GSMTLTextureIndexDepthTarget),  function_constant(NEEDS_DS_TEX)]],
-	depth2d<float>   ds_depth  [[texture(GSMTLTextureIndexDepthTarget),  function_constant(NEEDS_DS_DEPTH)]])
+	depth2d<float>   ds_depth  [[texture(GSMTLTextureIndexDepthTarget),  function_constant(NEEDS_DS_DEPTH)]],
+	texture2d<float, access::read_write> rt_rov [[texture(GSMTLTextureIndexRenderTarget), raster_order_group(0), function_constant(NEEDS_RT_ROV)]],
+	texture2d<uint,  access::read_write> rt_u32 [[texture(GSMTLTextureIndexRenderTarget), raster_order_group(0), function_constant(NEEDS_RT_U32)]],
+	texture2d<float, access::read_write> ds_rov [[texture(GSMTLTextureIndexDepthTarget),  raster_order_group(1), function_constant(NEEDS_DS_ROV)]])
 {
 	PSMain main(in, cb);
 	main.tex_sampler = s;
@@ -1711,7 +1763,9 @@ fragment MainPSOut ps_main(
 
 	if (SW_DEPTH)
 	{
-		if (DEPTH_FEEDBACK)
+		if (PS_ROV_DEPTH != ROV_DEPTH::NONE)
+			main.current_depth = ds_rov.read(coord).x;
+		else if (DEPTH_FEEDBACK)
 			main.current_depth = ds_depth.read(coord);
 		else if (NEEDS_DS_FBF)
 			main.current_depth = ds_fbf < 0 ? ds_depth.read(coord) : ds_fbf;
@@ -1721,18 +1775,76 @@ fragment MainPSOut ps_main(
 
 	if (NEEDS_RT)
 	{
+		if (PS_ROV_COLOR)
+		{
+			if (ROV_NEEDS_R32)
+				main.current_color = unpack_unorm4x8_to_float(rt_u32.read(coord).x);
+			else
+				main.current_color = rt_rov.read(coord);
+		}
+		else
+		{
 #if FBFETCH_SUPPORT
-		main.current_color = HAS_FBFETCH ? rt_fbf : rt.read(coord);
+			main.current_color = HAS_FBFETCH ? rt_fbf : rt.read(coord);
 #else
-		main.current_color = rt.read(coord);
+			main.current_color = rt.read(coord);
 #endif
+		}
 	}
 	else
 	{
 		main.current_color = 0;
 	}
 
-	return main.ps_main();
+	MainResult out = main.ps_main();
+	if (PS_ROV_DEPTH == ROV_DEPTH::READ_WRITE && !main.depth_discarded)
+		ds_rov.write(out.depth, coord);
+	if (PS_ROV_COLOR && !main.color_discarded)
+	{
+		if (ROV_NEEDS_R32)
+			rt_u32.write(pack_float_to_unorm4x8(out.c0), coord);
+		else
+			rt_rov.write(out.c0, coord);
+	}
+	return out;
+}
+
+// Metal doesn't let you toggle eft with function constants so we need a separate function for it
+[[early_fragment_tests]]
+fragment void ps_main_rov_eft(
+	MainPSIn in [[stage_in]],
+	constant GSMTLMainPSUniform& cb [[buffer(GSMTLBufferIndexHWUniforms)]],
+	sampler s [[sampler(0)]],
+	texture2d<float> tex     [[texture(GSMTLTextureIndexTex),     function_constant(PS_TEX_IS_COLOR)]],
+	depth2d<float>   depth   [[texture(GSMTLTextureIndexTex),     function_constant(PS_TEX_IS_DEPTH)]],
+	texture2d<float> palette [[texture(GSMTLTextureIndexPalette), function_constant(PS_HAS_PALETTE)]],
+	texture2d<float, access::read_write> rt_rov [[texture(GSMTLTextureIndexRenderTarget), raster_order_group(0), function_constant(NEEDS_RT_ROV)]],
+	texture2d<uint,  access::read_write> rt_u32 [[texture(GSMTLTextureIndexRenderTarget), raster_order_group(0), function_constant(NEEDS_RT_U32)]])
+{
+	PSMain main(in, cb);
+	main.tex_sampler = s;
+	if (PS_TEX_IS_COLOR)
+		main.tex = tex;
+	else
+		main.tex_depth = depth;
+	if (PS_HAS_PALETTE)
+		main.palette = palette;
+
+	uint2 coord = uint2(in.p.xy);
+	if (ROV_NEEDS_R32)
+		main.current_color = unpack_unorm4x8_to_float(rt_u32.read(coord).x);
+	else
+		main.current_color = rt_rov.read(coord);
+	MainPSOut out = main.ps_main();
+	if (!main.color_discarded)
+	{
+		if (!PS_FBMASK)
+			out.c0 = select(out.c0, main.current_color, cb.fbmask == 0xff);
+		if (ROV_NEEDS_R32)
+			rt_u32.write(pack_float_to_unorm4x8(out.c0), coord);
+		else
+			rt_rov.write(out.c0, coord);
+	}
 }
 
 #if PRIMID_SUPPORT

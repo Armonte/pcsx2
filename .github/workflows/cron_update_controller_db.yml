@@ -9,7 +9,7 @@ jobs:
     if: github.repository == 'PS2Homebrew-arcade/pcsx2x6'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Get Latest DB and Prepare DB File
         run: |

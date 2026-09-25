@@ -1072,8 +1072,6 @@ void DEV9readDMA8Mem(u32* pMem, int size)
 	//if (!EmuConfig.DEV9.EthEnable && !EmuConfig.DEV9.HddEnable)
 	//	return;
 
-	size >>= 1;
-
 	//DevCon.WriteLn("DEV9: *%s: size %x", __FUNCTION__, size);
 	// Instant ATAPI DMA: data was pre-read into a buffer during the ATAPI command.
 	if (ACATAPI::dma_read(pMem, size)) {
@@ -1128,7 +1126,7 @@ void DEV9readDMA8Mem(u32* pMem, int size)
 
 void DEV9writeDMA8Mem(u32* pMem, int size)
 {
-	size >>= 1;
+	// size is in bytes since upstream b67a81f6e (callers pass blocks*words*4); the old >>= 1 is gone
 	if (ACCORE::DMA::PendTrasnfType == ACCORE::DMA::ATA_WRITE) {
 		ACATA::TH::IO_Write(pMem, size);
 		ACCORE::DMA::PendTrasnfType = ACCORE::DMA::NONE;

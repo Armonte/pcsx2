@@ -73,6 +73,7 @@ std::vector<SmallString> s_software_thread_lines;
 SmallString s_capture_line;
 SmallString s_gpu_usage_line;
 SmallString s_gpu_debug_info_line;
+SmallString s_gpu_stats_line;
 SmallString s_speed_icon;
 
 constexpr ImU32 white_color = IM_COL32(255, 255, 255, 255);
@@ -154,32 +155,6 @@ namespace ImGuiManager
 	static void DrawTextureReplacementsOverlay(float& position_y, float scale, float margin, float spacing);
 	static void DrawIndicatorsOverlay(float& position_y, float scale, float margin, float spacing);
 } // namespace ImGuiManager
-
-static std::tuple<float, float> GetMinMax(std::span<const float> values)
-{
-	GSVector4 vmin(GSVector4::load<false>(values.data()));
-	GSVector4 vmax(vmin);
-
-	const u32 count = static_cast<u32>(values.size());
-	const u32 aligned_count = Common::AlignDownPow2(count, 4);
-	u32 i = 4;
-	for (; i < aligned_count; i += 4)
-	{
-		const GSVector4 v(GSVector4::load<false>(&values[i]));
-		vmin = vmin.min(v);
-		vmax = vmax.max(v);
-	}
-
-	float min = std::min(vmin.x, std::min(vmin.y, std::min(vmin.z, vmin.w)));
-	float max = std::max(vmax.x, std::max(vmax.y, std::max(vmax.z, vmax.w)));
-	for (; i < count; i++)
-	{
-		min = std::min(min, values[i]);
-		max = std::max(max, values[i]);
-	}
-
-	return std::tie(min, max);
-}
 
 __ri void ImGuiManager::FormatProcessorStat(SmallStringBase& text, double usage, double time)
 {
@@ -364,7 +339,7 @@ __ri void ImGuiManager::DrawPerformanceOverlay(float& position_y, float scale, f
 			}
 
 			if (GSConfig.OsdShowVPS)
-				s_speed_line.append_format("{}VPS: {:.2f}", s_speed_line.empty() ? "" : " | ", PerformanceMetrics::GetFPS());
+				s_speed_line.append_format("{}VPS: {:.2f} (Avg. {:.2f})", s_speed_line.empty() ? "" : " | ", PerformanceMetrics::GetFPS(), PerformanceMetrics::GetAvgVPS());
 
 			if (GSConfig.OsdShowSpeed)
 			{
@@ -429,7 +404,7 @@ __ri void ImGuiManager::DrawPerformanceOverlay(float& position_y, float scale, f
 					const CPUInfo& info = GetCPUInfo();
 					const bool has_small = info.num_small_cores > 0;
 					const bool has_smt = info.num_threads != info.num_big_cores + info.num_small_cores;
-					s_hardware_info_cpu_line.format("CPU: {}", info.name);
+					s_hardware_info_cpu_line.format("CPU: {}", !info.name.empty() ? info.name : "Unknown");
 					if (has_smt && has_small)
 						s_hardware_info_cpu_line.append_format(" ({}P/{}E/{}T)", info.num_big_cores, info.num_small_cores, info.num_threads);
 					else if (has_small)
@@ -441,7 +416,23 @@ __ri void ImGuiManager::DrawPerformanceOverlay(float& position_y, float scale, f
 				DRAW_LINE(osd_font, font_size, s_hardware_info_cpu_line.c_str(), white_color);
 
 				// GPU
-				s_hardware_info_gpu_line.format("GPU: {}{}", g_gs_device->GetName(), GSConfig.UseDebugDevice ? " (Debug)" : "");
+				const char* gpu_suffix = "";
+
+				if (GSConfig.Renderer != GSRendererType::SW)
+				{
+					if (GSConfig.UseDebugDevice && GSConfig.HWROV)
+						gpu_suffix = " (Debug & ROV)";
+					else if (GSConfig.UseDebugDevice)
+						gpu_suffix = " (Debug)";
+					else if (GSConfig.HWROV)
+						gpu_suffix = " (ROV)";
+				}
+
+				s_hardware_info_gpu_line.format(
+					"GPU: {}{}",
+					g_gs_device->GetName(),
+					gpu_suffix);
+
 				DRAW_LINE(osd_font, font_size, s_hardware_info_gpu_line.c_str(), white_color);
 			}
 
@@ -506,6 +497,24 @@ __ri void ImGuiManager::DrawPerformanceOverlay(float& position_y, float scale, f
 				}
 #endif
 			}
+
+			if (GSConfig.OsdShowGPUStats)
+			{
+				const auto FormatUnits = [](double val) {
+					if (val >= 1e9)
+						return fmt::format("{:.5}B", val / 1e9);
+					if (val >= 1e6)
+						return fmt::format("{:.5}M", val / 1e6);
+					if (val >= 1e3)
+						return fmt::format("{:.5}K", val / 1e3);
+					return fmt::format("{:.5}", val);
+				};
+
+				s_gpu_stats_line.format("VSI: {} | PSI: {}",
+					FormatUnits(PerformanceMetrics::GetGPUAverageVSInvocations()),
+					FormatUnits(PerformanceMetrics::GetGPUAveragePSInvocations()));
+				DRAW_LINE(osd_font, font_size, s_gpu_stats_line.c_str(), white_color);
+			}
 		}
 		// No refresh yet. Display cached lines.
 		else
@@ -557,6 +566,11 @@ __ri void ImGuiManager::DrawPerformanceOverlay(float& position_y, float scale, f
 				if (g_gs_device->GetRenderAPI() == RenderAPI::D3D12)
 					DRAW_LINE(osd_font, font_size, s_gpu_debug_info_line.c_str(), white_color);
 #endif
+			}
+
+			if (GSConfig.OsdShowGPUStats)
+			{
+				DRAW_LINE(osd_font, font_size, s_gpu_stats_line.c_str(), white_color);
 			}
 		}
 
@@ -890,6 +904,8 @@ __ri void ImGuiManager::DrawSettingsOverlay(float scale, float margin, float spa
 		APPEND("MTVU ");
 	if (EmuConfig.GS.VsyncEnable)
 		APPEND("VSYNC ");
+	if (EmuConfig.GS.AdvancedFrameDisplay)
+		APPEND("AFD ");
 
 	APPEND("EER={} EEC={} VUR={} VUC={} VQS={} ", static_cast<unsigned>(EmuConfig.Cpu.FPUFPCR.GetRoundMode()),
 		EmuConfig.Cpu.Recompiler.GetEEClampMode(), static_cast<unsigned>(EmuConfig.Cpu.VU0FPCR.GetRoundMode()),
@@ -914,7 +930,7 @@ __ri void ImGuiManager::DrawSettingsOverlay(float scale, float margin, float spa
 
 		if (GSConfig.HWAccurateAlphaTest)
 			APPEND("AAT ");
-		
+
 		if (GSConfig.HWAA1)
 			APPEND("AA1 ");
 
@@ -982,7 +998,9 @@ __ri void ImGuiManager::DrawSettingsOverlay(float scale, float margin, float spa
 		if (GSConfig.UserHacks_EstimateTextureRegion)
 			APPEND("ETR ");
 		if (GSConfig.UserHacks_DrawBuffering)
-			APPEND("DRWB");
+			APPEND("DRWB ");
+		if (GSConfig.UserHacks_RewriteLargeSTCoords)
+			APPEND("RWST ");
 		if (GSConfig.HWSpinGPUForReadbacks)
 			APPEND("RBSG ");
 		if (GSConfig.HWSpinCPUForReadbacks)
@@ -1601,8 +1619,8 @@ void SaveStateSelectorUI::Draw()
 			ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoTitleBar |
 				ImGuiWindowFlags_NoScrollbar))
 	{
-		// Leave 2 lines for the legend
-		const float legend_margin = ImGui::GetFontSize() * 3.0f + ImGui::GetStyle().ItemSpacing.y * 3.0f;
+		// Leave room for the legend.
+		const float legend_margin = ImGui::GetTextLineHeightWithSpacing() * 4.0f;
 		const float padding = 10.0f * scale;
 
 		ImGui::BeginChild("##item_list", ImVec2(0, -legend_margin), false,

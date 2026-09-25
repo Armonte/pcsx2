@@ -607,20 +607,6 @@ bool GSHwHack::GSC_TalesOfLegendia(GSRendererHW& r, int& skip)
 	return true;
 }
 
-bool GSHwHack::GSC_UltramanFightingEvolution(GSRendererHW& r, int& skip)
-{
-	if (skip == 0)
-	{
-		if (!s_nativeres && RTME && RFBP == 0x2a00 && RFPSM == PSMZ24 && RTBP0 == 0x1c00 && RTPSM == PSMZ24)
-		{
-			// Don't enable hack on native res if crc is below aggressive.
-			skip = 5; // blur
-		}
-	}
-
-	return true;
-}
-
 bool GSHwHack::GSC_TalesofSymphonia(GSRendererHW& r, int& skip)
 {
 	if (skip == 0)
@@ -1135,9 +1121,9 @@ bool GSHwHack::OI_SonicUnleashed(GSRendererHW& r, GSTexture* rt, GSTexture* ds, 
 		rt_again->m_valid.y /= 2;
 		rt_again->m_valid.w /= 2;
 		rt_again->m_TEX0.PSM = PSMCT32;
-		GSTexture* tex = g_gs_device->CreateRenderTarget(
-			rt_again->m_unscaled_size.x * rt_again->m_scale, rt_again->m_unscaled_size.y * rt_again->m_scale,
-			GSTexture::Format::Color, false);
+		GSTexture* tex = g_gs_device->CreateCompatible(rt_again->m_texture,
+			static_cast<int>(rt_again->m_unscaled_size.x * rt_again->m_scale),
+			static_cast<int>(rt_again->m_unscaled_size.y * rt_again->m_scale), false);
 
 		if (!tex)
 			return false;
@@ -1468,9 +1454,6 @@ const GSHwHack::Entry<GSRendererHW::GSC_Ptr> GSHwHack::s_get_skip_count_function
 
 	// Depth Issue
 	CRC_F(GSC_BurnoutGames),
-
-	// Upscaling hacks
-	CRC_F(GSC_UltramanFightingEvolution),
 };
 
 const GSHwHack::Entry<GSRendererHW::OI_Ptr> GSHwHack::s_before_draw_functions[] = {

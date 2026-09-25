@@ -7,6 +7,7 @@
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QScrollArea>
 #include <algorithm>
+#include <array>
 #include "fmt/format.h"
 
 #include "common/Console.h"
@@ -15,6 +16,7 @@
 #include "pcsx2/Host.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/DEV9/ACJV.h"
+#include "pcsx2/SIO/Sio.h"
 
 #include "Settings/ControllerBindingWidget.h"
 #include "Settings/ControllerSettingsWindow.h"
@@ -42,7 +44,18 @@ ControllerBindingWidget::ControllerBindingWidget(QWidget* parent, ControllerSett
 	, m_port_number(port)
 {
 	m_ui.setupUi(this);
-	m_ui.groupBox->setTitle(tr("Controller Port %1").arg(port + 1));
+
+	const auto [pad_port, pad_slot] = sioConvertPadToPortAndSlot(port);
+	const bool mtap_enabled = m_dialog->getBoolValue("Pad", (pad_port == 0) ? "MultitapPort1" : "MultitapPort2", false);
+	if (mtap_enabled)
+	{
+		static constexpr const std::array<char, 4> s_mtap_slot_names = {{'A', 'B', 'C', 'D'}};
+		m_ui.groupBox->setTitle(tr("Controller Port %1%2").arg(pad_port + 1).arg(s_mtap_slot_names[pad_slot]));
+	}
+	else
+	{
+		m_ui.groupBox->setTitle(tr("Controller Port %1").arg(pad_port + 1));
+	}
 
 	populateControllerTypes();
 	onTypeChanged();
@@ -299,7 +312,20 @@ ControllerMacroWidget::ControllerMacroWidget(ControllerBindingWidget* parent)
 	: QWidget(parent)
 {
 	m_ui.setupUi(this);
-	setWindowTitle(tr("Controller Port %1 Macros").arg(parent->getPortNumber() + 1u));
+
+	const u32 port = parent->getPortNumber();
+	const auto [pad_port, pad_slot] = sioConvertPadToPortAndSlot(port);
+	const bool mtap_enabled = parent->getDialog()->getBoolValue("Pad", (pad_port == 0) ? "MultitapPort1" : "MultitapPort2", false);
+	if (mtap_enabled)
+	{
+		static constexpr const std::array<char, 4> s_mtap_slot_names = {{'A', 'B', 'C', 'D'}};
+		setWindowTitle(tr("Controller Port %1%2 Macros").arg(pad_port + 1).arg(s_mtap_slot_names[pad_slot]));
+	}
+	else
+	{
+		setWindowTitle(tr("Controller Port %1 Macros").arg(pad_port + 1));
+	}
+
 	createWidgets(parent);
 }
 
@@ -457,7 +483,7 @@ void ControllerMacroEditWidget::updateFrequencyText()
 	if (m_frequency == 0)
 		m_ui.frequencyText->setText(tr("Macro will not repeat."));
 	else
-		m_ui.frequencyText->setText(tr("Macro will toggle buttons every %1 frames.").arg(m_frequency));
+		m_ui.frequencyText->setText(tr("Macro will toggle buttons every %n frames.", nullptr, m_frequency));
 }
 
 void ControllerMacroEditWidget::updateBinds()

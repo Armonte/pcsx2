@@ -168,6 +168,7 @@
     </widget>
     <addaction name="actionViewToolbar"/>
     <addaction name="actionViewLockToolbar"/>
+    <addaction name="actionCustomizeToolbar"/>
     <addaction name="actionViewStatusBar"/>
     <addaction name="actionViewStatusBarVerbose"/>
     <addaction name="separator"/>
@@ -179,6 +180,7 @@
     <addaction name="menuWindowSize"/>
     <addaction name="separator"/>
     <addaction name="actionGridViewShowTitles"/>
+    <addaction name="actionGridViewShowFullTitles"/>
     <addaction name="actionGridViewZoomIn"/>
     <addaction name="actionGridViewZoomOut"/>
     <addaction name="actionGridViewRefreshCovers"/>
@@ -738,6 +740,11 @@
     <string>Loc&amp;k Toolbar</string>
    </property>
   </action>
+  <action name="actionCustomizeToolbar">
+   <property name="text">
+    <string>&amp;Customize Toolbar...</string>
+   </property>
+  </action>
   <action name="actionViewStatusBar">
    <property name="checkable">
     <bool>true</bool>
@@ -810,6 +817,20 @@
    </property>
    <property name="text">
     <string>Show Titl&amp;es (Grid View)</string>
+   </property>
+  </action>
+  <action name="actionGridViewShowFullTitles">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset theme="price-tag-2-line"/>
+   </property>
+   <property name="text">
+    <string>Show F&amp;ull Titles (Grid View)</string>
    </property>
   </action>
   <action name="actionGridViewZoomIn">

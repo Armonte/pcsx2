@@ -218,7 +218,12 @@
               "minimum": 0,
               "maximum": 1
             },
-			"drawBuffering": {
+            "drawBuffering": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "rewriteLargeSTCoords": {
               "type": "integer",
               "minimum": 0,
               "maximum": 1
@@ -239,6 +244,16 @@
               "maximum": 2
             },
             "accurateAlphaTest": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "recommendedAccurateAlphaTest": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "recommendedHWAA1": {
               "type": "integer",
               "minimum": 0,
               "maximum": 1

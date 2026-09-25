@@ -222,7 +222,7 @@ bool CubebAudioStream::Initialize(
 	}
 
 	cubeb_devid selected_device = nullptr;
-	cubeb_device_collection devices;
+	cubeb_device_collection devices = {};
 	bool devices_valid = false;
 	if (device_name && *device_name)
 	{
@@ -442,7 +442,7 @@ std::vector<AudioStream::DeviceInfo> AudioStream::GetCubebOutputDevices(const ch
 
 	ScopedGuard context_cleanup([context]() { cubeb_destroy(context); });
 
-	cubeb_device_collection devices;
+	cubeb_device_collection devices = {};
 	rv = cubeb_enumerate_devices(context, CUBEB_DEVICE_TYPE_OUTPUT, &devices);
 	if (rv != CUBEB_OK)
 	{

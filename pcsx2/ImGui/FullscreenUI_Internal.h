@@ -9,6 +9,8 @@
 #include "common/Timer.h"
 #include "Input/InputManager.h"
 
+#include <thread>
+
 #define TR_CONTEXT "FullscreenUI"
 
 template <size_t L>
@@ -215,6 +217,10 @@ namespace FullscreenUI
 	void CopyTextToClipboard(std::string title, const std::string_view text);
 	void DrawAboutWindow();
 	void OpenAboutWindow();
+	void DrawCoverDownloaderWindow();
+	void OpenCoverDownloaderWindow();
+	void CloseCoverDownloaderWindow();
+	void CoverDownloaderThreadFunc(const std::vector<std::string>& urls);
 	void GetStandardSelectionFooterText(SmallStringBase& dest, bool back_instead_of_cancel);
 	void ApplyLayoutSettings(const SettingsInterface* bsi = nullptr);
 
@@ -238,6 +244,18 @@ namespace FullscreenUI
 	inline char s_achievements_login_username[256] = {};
 	inline char s_achievements_login_password[256] = {};
 	inline Achievements::LoginRequestReason s_achievements_login_reason = Achievements::LoginRequestReason::UserInitiated;
+
+	// cover downloader dialog state
+	inline bool s_cover_downloader_open = false;
+	inline std::array<char, 4096> s_cover_downloader_urls_buffer = {};
+	inline bool s_cover_downloader_use_title_filenames = false;
+	inline bool s_cover_downloader_downloading = false;
+	inline std::unique_ptr<std::thread> s_cover_downloader_thread;
+	inline std::mutex s_cover_downloader_mutex;
+	inline std::string s_cover_downloader_status;
+	inline bool s_cover_downloader_has_error = false;
+	inline s32 s_cover_downloader_progress_max = 0;
+	inline s32 s_cover_downloader_progress_value = 0;
 
 	// local copies of the currently-running game
 	inline std::string s_current_game_title;
@@ -351,6 +369,9 @@ namespace FullscreenUI
 	inline std::vector<const GameList::Entry*> s_game_list_sorted_entries;
 	inline GameListView s_game_list_view = GameListView::Grid;
 
+	// Cached list of unsorted game list entries; used to detect changes and re-sort when needed
+	inline std::vector<const GameList::Entry*> s_last_unsorted_entries;
+
 	//////////////////////////////////////////////////////////////////////////
 	// Background
 	//////////////////////////////////////////////////////////////////////////
@@ -391,7 +412,7 @@ namespace FullscreenUI
 	void DrawMemoryCardSettingsPage();
 	void DrawNetworkHDDSettingsPage();
 	void DrawFoldersSettingsPage();
-	void DrawAchievementsSettingsPage(std::unique_lock<std::mutex>& settings_lock);
+	void DrawAchievementsSettingsPage();
 	void DrawControllerSettingsPage();
 	void DrawHotkeySettingsPage();
 	void DrawAdvancedSettingsPage();
@@ -405,6 +426,7 @@ namespace FullscreenUI
 	void SetSettingsChanged(SettingsInterface* bsi);
 	bool GetEffectiveBoolSetting(SettingsInterface* bsi, const char* section, const char* key, bool default_value);
 	s32 GetEffectiveIntSetting(SettingsInterface* bsi, const char* section, const char* key, s32 default_value);
+	std::string GetEffectiveStringSetting(SettingsInterface* bsi, const char* section, const char* key, const char* default_value);
 	void DoCopyGameSettings();
 	void DoClearGameSettings();
 	void ResetControllerSettings();
@@ -446,6 +468,10 @@ namespace FullscreenUI
 		std::pair<ImFont*, float> summary_font = g_medium_font, const char* translation_ctx = "FullscreenUI");
 	void DrawStringListSetting(SettingsInterface* bsi, const char* title, const char* summary, const char* section, const char* key,
 		const char* default_value, SettingInfo::GetOptionsCallback options_callback, bool enabled = true,
+		float height = ImGuiFullscreen::LAYOUT_MENU_BUTTON_HEIGHT, std::pair<ImFont*, float> font = g_large_font, std::pair<ImFont*, float> summary_font = g_medium_font);
+	void DrawStringListSetting(SettingsInterface* bsi, const char* title, const char* summary, const char* section, const char* key,
+		const char* default_value, const std::vector<std::pair<std::string, std::string>>& items, bool enabled = true,
+		std::vector<std::string> dependent_keys = {},
 		float height = ImGuiFullscreen::LAYOUT_MENU_BUTTON_HEIGHT, std::pair<ImFont*, float> font = g_large_font, std::pair<ImFont*, float> summary_font = g_medium_font);
 	void DrawIPAddressSetting(SettingsInterface* bsi, const char* title, const char* summary, const char* section, const char* key,
 		const char* default_value, bool enabled = true, float height = ImGuiFullscreen::LAYOUT_MENU_BUTTON_HEIGHT,

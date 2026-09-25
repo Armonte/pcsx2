@@ -61,6 +61,7 @@ namespace GameDatabaseSchema
 		NativePaletteDraw,
 		EstimateTextureRegion,
 		DrawBuffering,
+		RewriteLargeSTCoords,
 		PCRTCOffsets,
 		PCRTCOverscan,
 
@@ -81,6 +82,8 @@ namespace GameDatabaseSchema
 		MinimumBlendingLevel,
 		MaximumBlendingLevel,
 		RecommendedBlendingLevel,
+		RecommendedAccurateAlphaTest,
+		RecommendedHWAA1,
 		GetSkipCount,
 		BeforeDraw,
 		MoveHandler,

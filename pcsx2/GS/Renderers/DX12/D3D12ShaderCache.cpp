@@ -56,7 +56,6 @@ bool D3D12ShaderCache::CacheIndexKey::operator!=(const CacheIndexKey& key) const
 
 bool D3D12ShaderCache::Open(D3D::ShaderModel shader_model, bool debug)
 {
-	// Only support SM5.1 for now, which is the minimum for D3D12.
 	pxAssert(shader_model >= D3D::ShaderModel::SM51);
 	m_shader_model = shader_model;
 	m_debug = debug;
@@ -605,6 +604,6 @@ bool D3D12ShaderCache::AddPipelineToBlob(const CacheIndexKey& key, ID3D12Pipelin
 		return false;
 	}
 
-	m_shader_index.emplace(key, data);
+	m_pipeline_index.emplace(key, data);
 	return true;
 }

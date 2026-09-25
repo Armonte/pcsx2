@@ -35,7 +35,7 @@ jobs:
     outputs:
       new_tag: ${{ steps.tag_version.outputs.new_tag }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Docs - https://github.com/mathieudutour/github-tag-action
       - name: Bump Version and Push Tag
@@ -121,10 +121,16 @@ jobs:
     secrets: inherit
 
   # Windows
+  build_windows_deps:
+    if: github.repository == 'PCSX2/pcsx2'
+    name: "Windows Dependencies"
+    uses: ./.github/workflows/windows_deps_build.yml
+
   build_windows_qt:
     if: github.repository == 'PS2Homebrew-arcade/pcsx2x6'
     needs:
       - cut-release
+      - build_windows_deps
     name: "Windows"
     uses: ./.github/workflows/windows_build_qt.yml
     with:
@@ -177,7 +183,7 @@ jobs:
     name: "Upload Artifacts"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Prepare Artifact Folder
         run: mkdir ./ci-artifacts/
@@ -218,7 +224,7 @@ jobs:
           echo "TAG_VAL=${TAG_VAL}"
           gh release edit ${TAG_VAL} --draft=false --repo PS2Homebrew-arcade/pcsx2x6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 

@@ -215,7 +215,7 @@ private:
 	void DrawPrims(GSTextureCache::Target* rt, GSTextureCache::Target* ds, GSTextureCache::Source* tex, const TextureMinMaxResult& tmm);
 
 	void ResetStates();
-	void HandleProvokingVertexFirst();
+	void HandleFlatShadedVertices();
 	void SetupIA(float target_scale, float sx, float sy, bool req_vert_backup, const bool no_rt);
 	void EmulateTextureShuffleAndFbmask(GSTextureCache::Target* rt, GSTextureCache::Source* tex);
 	u32 EmulateChannelShuffle(GSTextureCache::Target* src, bool test_only, GSTextureCache::Target* rt = nullptr);
@@ -256,8 +256,8 @@ private:
 	void GetForcedROVUsage(bool& color_cov, bool& depth_rov); // Whether having color or depth with the current config forces the other.
 	void DetermineROVUsage(GSTextureCache::Target* rt, GSTextureCache::Target* ds); // Heuristics to determine whether to enable/disable ROV
 	void ConfigureROV(bool color_rov, bool depth_rov); // Actual config for ROV
-	void SetUnorderedAccessFlag(GSTextureCache::Target* rt); // Set flag for DX11 ROV heuristic to work.
-	void ConvertDepthFormatROV(GSTextureCache::Target* ds); // Convert between depth and depth color if needed.
+	void ConvertTextureTypeROV(GSTextureCache::Target* rt, GSTextureCache::Target* ds); // Convert to RW capable textures if needed.
+	void ConvertTextureTypeROVSingle(GSTextureCache::Target* tgt, bool shader_write); // Helper to do the above.
 
 	void SetTCOffset();
 	bool NextDrawColClip() const;
@@ -364,7 +364,7 @@ public:
 	void ExpandLineIndices();
 	GSVector4 RealignTargetTextureCoordinate(const GSTextureCache::Source* tex);
 	GSVector4i ComputeBoundingBoxRT(const GSVector2i& rtsize, float rtscale);
-	GSVector4i ComputeBoundingBoxTex(const GSVector2i& texsize, const GSVector4i& region, float texscale);
+	GSVector4i ComputeBoundingBoxTex(const GSVector2i& texsize, const GSVector4i& coverage, const GSVector4i& region, float texscale);
 	void MergeSprite(GSTextureCache::Source* tex);
 	float GetTextureScaleFactor() override;
 	GSVector2i GetValidSize(const GSTextureCache::Source* tex = nullptr, const bool is_shuffle = false);

@@ -12,8 +12,9 @@ layout(std140, binding = 1) uniform cb20
 	vec2  TextureOffset;
 
 	vec2  PointSize;
+
 	uint  MaxDepth;
-	uint  pad_cb20;
+	float LineAA1Width;
 };
 
 #ifdef VERTEX_SHADER
@@ -83,7 +84,13 @@ void vs_main()
 	// example: 133.0625 (133 + 1/16) should start from line 134, ceil(133.0625 - 0.05) still above 133
 	gl_Position.xy = vec2(i_p) - vec2(0.05f, 0.05f);
 	gl_Position.xy = gl_Position.xy * VertexScale - VertexOffset;
-	gl_Position.z = float(z) * exp_min32;
+
+	#if HAS_CLIP_CONTROL
+		gl_Position.z = float(z) * exp_min32;
+	#else
+		gl_Position.z = (float(z) * exp_min32) * 2.0f - 1.0f;
+	#endif
+
 	gl_Position.w = 1.0f;
 
 	texture_coord();
@@ -138,7 +145,8 @@ uint load_index(uint _i)
 {
 	uint i = _i + BaseIndex;
 	// i is even => load lower 16 bits; i odd => load upper 16 bits.
-	uint shift = (i & 1u) << 4u;
+	// uint shift = (i & 1u) << 4u;
+	uint shift = (i & 1u) != 0u ? 16u : 0u;
 	return (index_buffer[i >> 1u] >> shift) & 0xFFFFu;
 }
 
@@ -160,7 +168,13 @@ ProcessedVertex load_vertex(uint index)
 	uint z = min(i_z, MaxDepth);
 	vtx.p.xy = vec2(i_p) - vec2(0.05f, 0.05f);
 	vtx.p.xy = vtx.p.xy * VertexScale - VertexOffset;
-	vtx.p.z = float(z) * exp_min32;
+
+	#if HAS_CLIP_CONTROL
+		vtx.p.z = float(z) * exp_min32;
+	#else
+		vtx.p.z = (float(z) * exp_min32) * 2.0f - 1.0f;
+	#endif
+
 	vtx.p.w = 1.0f;
 
 	vec2 uv = vec2(i_uv) - TextureOffset;
@@ -311,11 +325,9 @@ void main()
 	// Use bottom minus top for delta regardless of which vertex we are expanding.
 	vec2 line_delta = is_bottom ? (vtx.p.xy - other.p.xy) : (other.p.xy - vtx.p.xy);
 	vec2 line_vector = normalize(line_delta / VertexScale);
-#if VS_EXPAND == VS_EXPAND_LINE
 	vec2 line_expand = vec2(line_vector.y, -line_vector.x);
-#elif VS_EXPAND == VS_EXPAND_LINE_AA1
-	// Expand in y direction for shallow lines and x direction for steep lines.
-	vec2 line_expand = abs(line_vector.x) >= abs(line_vector.y) ? vec2(0.0f, 2.0f) : vec2(2.0f, 0.0f);
+#if VS_EXPAND == VS_EXPAND_LINE_AA1
+	line_expand *= 2.0f * LineAA1Width;
 #endif
 	vec2 line_width = (line_expand * PointSize) / 2;
 	vec2 offset = is_right ? line_width : -line_width;
@@ -444,11 +456,6 @@ void main()
 		VSout.inv_cov = is_near_corner ? 0.0f : 1.0f; // Full coverage at near corner, otherwise none.
 	
 		VSout.interior = 0;
-
-		#if !VS_IIP
-			// Get the provoking vertex color (last vertex in GL)
-			vtx.c = i0 == 2 ? vtx.c : (i1 == 2 ? other.c : opposite.c);
-		#endif
 	}
 
 #endif

@@ -315,7 +315,7 @@ __forceinline void CheckDMAProgress(int cid)
 static uint TickInterval = 768;
 static constexpr int SanityInterval = 4800;
 
-__forceinline void TimeUpdate(u32 cClocks)
+__forceinline void TimeUpdate(u64 cClocks)
 {
 	u32 dClocks = cClocks - lClocks;
 

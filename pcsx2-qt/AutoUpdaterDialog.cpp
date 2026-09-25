@@ -145,6 +145,12 @@ QString AutoUpdaterDialog::getCurrentVersionDate()
 	return QString(BuildVersion::GitDate);
 }
 
+QString AutoUpdaterDialog::getCurrentVersionLocalDate()
+{
+	QDateTime t = QDateTime::fromString(getCurrentVersionDate() + " +0000", QStringLiteral("ddd MMM d HH:mm:ss yyyy tt"));
+	return QLocale::system().toString(t.toLocalTime(), QLocale::LongFormat);
+}
+
 QString AutoUpdaterDialog::getCurrentUpdateTag() const
 {
 	if (!isSupported())
@@ -564,8 +570,8 @@ void AutoUpdaterDialog::checkIfUpdateNeeded()
 		return;
 	}
 
-	m_ui.currentVersion->setText(tr("Current Version: %1 (%2)").arg(getCurrentVersion()).arg(getCurrentVersionDate()));
-	m_ui.newVersion->setText(tr("New Version: %1 (%2)").arg(m_latest_version).arg(m_latest_version_timestamp.toString()));
+	m_ui.currentVersion->setText(tr("Current Version: %1 (%2)").arg(getCurrentVersion()).arg(getCurrentVersionLocalDate()));
+	m_ui.newVersion->setText(tr("New Version: %1 (%2)").arg(m_latest_version).arg(QLocale::system().toString(m_latest_version_timestamp.toLocalTime(), QLocale::LongFormat)));
 	m_ui.downloadSize->setText(tr("Download Size: %1 MB").arg(static_cast<double>(m_download_size) / 1048576.0, 0, 'f', 2));
 	m_ui.updateNotes->setText(tr("Loading..."));
 	queueGetChanges();
