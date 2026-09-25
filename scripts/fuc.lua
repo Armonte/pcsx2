@@ -516,7 +516,9 @@ local function snap_commands()
 		elseif c == "rb_synctest" then cfg.rb_frames = tonumber(arg) or cfg.rb_frames; rb_start(2)
 		elseif c == "rb_capture" then rb_start(1)
 		elseif c == "rb_off" then rb_start(0)
-		elseif c == "rb_report" and rbdev then rbdev.report(CMD_DIR .. "/rb_report.txt")
+		elseif c == "rb_report" and rbdev then
+			local rf = io.open(CMD_DIR .. "/rb_report.txt", "w")
+			if rf then rf:write(rbdev.report()); rf:close() end
 		end
 	end
 	local o = io.open(CMD_DIR .. "/snap_status.txt", "w")

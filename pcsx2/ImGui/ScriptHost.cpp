@@ -166,7 +166,7 @@ namespace
 		rd.set_function("start", [](int mode, uint32_t frames, bool wp) { RollbackDevice::Start(static_cast<RollbackDevice::Mode>(mode), frames, wp); });
 		rd.set_function("stop", []() { RollbackDevice::Stop(); });
 		rd.set_function("status", []() { return RollbackDevice::Status(); });
-		rd.set_function("report", [](const std::string& path) { return RollbackDevice::WriteReport(path); });
+		rd.set_function("report", []() { return RollbackDevice::ReportText(); });
 		rd.set("MAGIC", RollbackDevice::MAGIC);
 
 		auto proj = lua.create_named_table("project");
