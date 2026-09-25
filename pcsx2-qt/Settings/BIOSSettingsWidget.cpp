@@ -117,6 +117,14 @@ void BIOSSettingsWidget::populateList(QTreeWidget* list, const std::string& dire
 				item->setIcon(0, QIcon(QStringLiteral("%1/icons/flags/mx.svg").arg(res_path)));
 				break;
 
+			case 11: // arcade
+			// we can only diff 256 from 246. python1 cant be spotted. neither super256 from 256
+				if (bios_description.find("20040519-145634") != std::string::npos)
+					item->setIcon(0, QIcon(QStringLiteral("%1/icons/flags/256.svg").arg(res_path)));
+				else
+					item->setIcon(0, QIcon(QStringLiteral("%1/icons/flags/246B.svg").arg(res_path)));
+				break;
+
 			case 8: // T10K
 			case 9: // Test
 			case 10: // Free

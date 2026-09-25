@@ -9,3 +9,6 @@
 
 ### Did you use AI to help find, test, or implement this issue or feature?
 <!-- Answer yes or no. If you answer yes, please provide a brief explanation as to how you used it. Please see the Large Language Model (LLM) Usage Policy for more information: https://pcsx2.net/docs/contributing/#large-language-model-llm-usage-policy -->
+
+### Related GameIDs
+> IF your PR aims to deal with issues/features specific to specific games, please list the related gameIDs (eg: `NM00007`)

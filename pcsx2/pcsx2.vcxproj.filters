@@ -905,6 +905,36 @@
     <ClCompile Include="DEV9\DEV9.cpp">
       <Filter>System\Ps2\DEV9</Filter>
     </ClCompile>
+    <ClCompile Include="DEV9\ACRAM.cpp">
+      <Filter>System\Ps2\ACMMIO</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACSRAM.cpp">
+      <Filter>System\Ps2\ACMMIO</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACATA.cpp">
+      <Filter>System\Ps2\ACMMIO</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACATA_IO.cpp">
+      <Filter>System\Ps2\ACMMIO</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACATA_IO_CHD.cpp">
+      <Filter>System\Ps2\ACMMIO</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACATAPI.cpp">
+      <Filter>System\Ps2\ACMMIO</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACJV.cpp">
+      <Filter>System\Ps2\ACMMIO</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACUART.cpp">
+      <Filter>System\Ps2\ACMMIO</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACUART_GLUE.cpp">
+      <Filter>System\Ps2\ACMMIO</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACCORE.cpp">
+      <Filter>System\Ps2\ACMMIO</Filter>
+    </ClCompile>
     <ClCompile Include="DEV9\flash.cpp">
       <Filter>System\Ps2\DEV9</Filter>
     </ClCompile>
@@ -1362,6 +1392,9 @@
       <Filter>Misc\Input</Filter>
     </ClCompile>
     <ClCompile Include="Input\XInputSource.cpp">
+      <Filter>Misc\Input</Filter>
+    </ClCompile>
+    <ClCompile Include="Input\RawInputSource.cpp">
       <Filter>Misc\Input</Filter>
     </ClCompile>
     <ClCompile Include="Host.cpp">
@@ -2338,6 +2371,9 @@
       <Filter>Misc\Input</Filter>
     </ClInclude>
     <ClInclude Include="Input\XInputSource.h">
+      <Filter>Misc\Input</Filter>
+    </ClInclude>
+    <ClInclude Include="Input\RawInputSource.h">
       <Filter>Misc\Input</Filter>
     </ClInclude>
     <ClInclude Include="Host.h">

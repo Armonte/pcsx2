@@ -836,7 +836,7 @@ namespace QtUtils
 			else
 			{
 				// Copy PCSX2 icon
-				icon_name = "PCSX2";
+				icon_name = "PCSX2x6";
 				const std::string icon_dest = fmt::format("{}/icons/hicolor/512x512/apps/", QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation).toStdString());
 				const std::string icon_path_dest = fmt::format("{}/{}.png", icon_dest, icon_name);
 				if (FileSystem::EnsureDirectoryExists(icon_dest.c_str(), true))

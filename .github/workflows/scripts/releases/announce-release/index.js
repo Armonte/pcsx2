@@ -65,12 +65,11 @@ if (process.env.FLATHUB_FAILURE === undefined)
 
   // Publish Webhook
   embed = new MessageEmbed()
-    .setColor('#FF8000')
-    .setTitle('New PCSX2 Nightly Build Available!')
-    .setDescription("To download the latest or previous builds, [visit the official downloads page](https://pcsx2.net/downloads/).")
+    .setColor('#FF0000')
+    .setTitle('New PCSX2x6 Nightly Build Available!')
+    .setDescription("To download the latest or previous builds, [visit the official downloads page](https://ps2homebrew-arcade.github.io/pcsx2x6/).")
     .addFields(
       { name: 'Version', value: releaseInfo.tag_name, inline: true },
-      { name: 'Installation Steps', value: '[See Here](https://pcsx2.net/docs/category/setup)', inline: true },
       { name: 'Included Changes', value: releaseInfo.body, inline: false }
     );
   console.log(embed);
@@ -81,7 +80,7 @@ else
 
   embed = new MessageEmbed()
     .setColor('#FF0000')
-    .setTitle('PCSX2 Failed to Build/Upload to FlatHub')
+    .setTitle('PCSX2x6 Failed to Build/Upload to FlatHub')
     .setDescription("Please check the latest Flathub build job to determine the root cause.")
   console.log(embed);
 }
@@ -89,9 +88,12 @@ else
 // Get all webhooks, simple comma-sep string
 const webhookUrls = process.env.DISCORD_BUILD_WEBHOOK.split(",");
 
+const ROLE_ID = "1513000483583824032"; // PCSX2x6 @follower role
+
 for (const url of webhookUrls) {
   const webhookClient = new WebhookClient({ url: url });
   await webhookClient.send({
+    content: `<@&${ROLE_ID}>`,
     embeds: [embed],
   });
 }

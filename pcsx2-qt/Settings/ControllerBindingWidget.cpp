@@ -17,6 +17,7 @@
 
 #include "pcsx2/Host.h"
 #include "pcsx2/SIO/Pad/Pad.h"
+#include "pcsx2/DEV9/ACJV.h"
 #include "pcsx2/SIO/Sio.h"
 
 #include "Settings/ControllerBindingWidget.h"
@@ -83,7 +84,11 @@ QIcon ControllerBindingWidget::getIcon() const
 void ControllerBindingWidget::populateControllerTypes()
 {
 	for (const auto& [name, display_name] : Pad::GetControllerTypeNames())
-		m_ui.controllerType->addItem(QString::fromUtf8(display_name), QString::fromUtf8(name));
+	{
+		const std::string_view sv(name);
+		if (sv == "None" || sv == "DualShock2")
+			m_ui.controllerType->addItem(QString::fromUtf8(display_name), QString::fromUtf8(name));
+	}
 }
 
 void ControllerBindingWidget::onTypeChanged()
@@ -1076,10 +1081,20 @@ QIcon USBDeviceWidget::getIcon() const
 	return QIcon::fromTheme("usb-fill");
 }
 
+// Hide arcade USB devices (light gun/wheel/drums) from the USB tab
+static bool isHiddenUsbDeviceType(const std::string_view type)
+{
+	return type == "guncon2" || type == "Pad" || type == "RBDrumKit";
+}
+
 void USBDeviceWidget::populateDeviceTypes()
 {
 	for (const auto& [name, display_name] : USB::GetDeviceTypes())
+	{
+		if (isHiddenUsbDeviceType(name))
+			continue;
 		m_ui.deviceType->addItem(qApp->translate("USB", display_name), QString::fromUtf8(name));
+	}
 }
 
 void USBDeviceWidget::populatePages()
@@ -1107,6 +1122,15 @@ void USBDeviceWidget::populatePages()
 		m_ui.stackedWidget->removeWidget(m_settings_widget);
 		delete m_settings_widget;
 		m_settings_widget = nullptr;
+	}
+
+	if (isHiddenUsbDeviceType(m_device_type))
+	{
+		m_ui.deviceSubtype->setVisible(false);
+		m_ui.bindings->setEnabled(false);
+		m_ui.settings->setEnabled(false);
+		updateHeaderToolButtons();
+		return;
 	}
 
 	const std::span<const InputBindingInfo> bindings(USB::GetDeviceBindings(m_device_type, m_device_subtype));
@@ -1460,6 +1484,101 @@ USBBindingWidget* USBBindingWidget::createInstance(
 	{
 		Ui::USBBindingWidget_GunCon2().setupUi(widget);
 		has_template = true;
+
+		// Embed crosshair settings directly on the bindings page (no Settings subtab).
+		QGridLayout* mainLayout = qobject_cast<QGridLayout*>(widget->layout());
+		if (mainLayout)
+		{
+			QGroupBox* crosshairGroup = new QGroupBox(qApp->translate("USB", "Crosshair"), widget);
+			QGridLayout* chLayout = new QGridLayout(crosshairGroup);
+			chLayout->setColumnStretch(0, 0);
+			chLayout->setColumnStretch(1, 1);
+			SettingsInterface* sif = parent->getDialog()->getProfileSettingsInterface();
+			const std::string& config_section = parent->getConfigSection();
+			const std::string prefix = std::string(parent->getDeviceType()) + "_";
+
+			// Cursor Path
+			QLineEdit* cursorPath = new QLineEdit(crosshairGroup);
+			cursorPath->setObjectName(QStringLiteral("cursor_path"));
+			QPushButton* browseBtn = new QPushButton(qApp->translate("USB", "Browse..."), crosshairGroup);
+			ControllerSettingWidgetBinder::BindWidgetToInputProfileString(
+				sif, cursorPath, config_section, prefix + "cursor_path", "");
+			QObject::connect(browseBtn, &QPushButton::clicked, [widget, cursorPath]() {
+				const QString path(QDir::toNativeSeparators(QFileDialog::getOpenFileName(widget, qApp->translate("USB", "Select File"))));
+				if (!path.isEmpty())
+					cursorPath->setText(path);
+			});
+			QHBoxLayout* pathHBox = new QHBoxLayout();
+			pathHBox->addWidget(cursorPath, 1);
+			pathHBox->addWidget(browseBtn);
+			chLayout->addWidget(new QLabel(qApp->translate("USB", "Cursor Path"), crosshairGroup), 0, 0);
+			chLayout->addLayout(pathHBox, 0, 1);
+
+			// Cursor Scale
+			QDoubleSpinBox* cursorScale = new QDoubleSpinBox(crosshairGroup);
+			cursorScale->setObjectName(QStringLiteral("cursor_scale"));
+			cursorScale->setMinimum(1);
+			cursorScale->setMaximum(1000);
+			cursorScale->setSingleStep(1);
+			cursorScale->setSuffix(QStringLiteral("%"));
+			cursorScale->setDecimals(0);
+			ControllerSettingWidgetBinder::BindWidgetToInputProfileFloat(
+				sif, cursorScale, config_section, prefix + "cursor_scale", 1.0f, 100.0f);
+			chLayout->addWidget(new QLabel(qApp->translate("USB", "Cursor Scale"), crosshairGroup), 1, 0);
+			chLayout->addWidget(cursorScale, 1, 1);
+
+			// Cursor Color
+			QLineEdit* cursorColor = new QLineEdit(crosshairGroup);
+			cursorColor->setObjectName(QStringLiteral("cursor_color"));
+			ControllerSettingWidgetBinder::BindWidgetToInputProfileString(
+				sif, cursorColor, config_section, prefix + "cursor_color", "#ffffff");
+			chLayout->addWidget(new QLabel(qApp->translate("USB", "Cursor Color"), crosshairGroup), 2, 0);
+			chLayout->addWidget(cursorColor, 2, 1);
+
+			// Insert crosshair group before the vertical spacer (last item)
+			int spacerRow = mainLayout->rowCount();
+			mainLayout->addWidget(crosshairGroup, spacerRow, 0, 1, mainLayout->columnCount());
+
+			// Sinden Lightgun Border — only on USB Port 1
+			if (parent->getPortNumber() == 0)
+			{
+				QGroupBox* sindenGroup = new QGroupBox(qApp->translate("USB", "Light Gun Border (Sinden)"), widget);
+				QGridLayout* sindenLayout = new QGridLayout(sindenGroup);
+				sindenLayout->setColumnStretch(0, 0);
+				sindenLayout->setColumnStretch(1, 1);
+
+				QCheckBox* sindenEnabled = new QCheckBox(qApp->translate("USB", "Enable white border"), sindenGroup);
+				sindenEnabled->setToolTip(qApp->translate("USB",
+					"Display a white border around the screen for Sinden Lightgun tracking. Only active for lightgun games."));
+				ControllerSettingWidgetBinder::BindWidgetToInputProfileBool(
+					sif, sindenEnabled, ACJV::CONFIG_SECTION, "SindenBorderEnabled", false);
+				sindenLayout->addWidget(sindenEnabled, 0, 0, 1, 2);
+
+				QComboBox* sindenMode = new QComboBox(sindenGroup);
+				sindenMode->addItem(qApp->translate("USB", "4:3 (Game Surface)"));
+				sindenMode->addItem(qApp->translate("USB", "Fullscreen (Entire Window)"));
+				sindenMode->setToolTip(qApp->translate("USB",
+					"4:3 frames the rendered game surface. Fullscreen fills the entire emulator window."));
+				ControllerSettingWidgetBinder::BindWidgetToInputProfileInt(
+					sif, sindenMode, ACJV::CONFIG_SECTION, "SindenBorderMode", 0);
+				sindenLayout->addWidget(new QLabel(qApp->translate("USB", "Border Mode"), sindenGroup), 1, 0);
+				sindenLayout->addWidget(sindenMode, 1, 1);
+
+				QSpinBox* sindenThickness = new QSpinBox(sindenGroup);
+				sindenThickness->setMinimum(1);
+				sindenThickness->setMaximum(100);
+				sindenThickness->setValue(10);
+				sindenThickness->setSuffix(QStringLiteral(" px"));
+				sindenThickness->setToolTip(qApp->translate("USB", "Border thickness in pixels (1-100)"));
+				ControllerSettingWidgetBinder::BindWidgetToInputProfileInt(
+					sif, sindenThickness, ACJV::CONFIG_SECTION, "SindenBorderThickness", 10);
+				sindenLayout->addWidget(new QLabel(qApp->translate("USB", "Border Thickness"), sindenGroup), 2, 0);
+				sindenLayout->addWidget(sindenThickness, 2, 1);
+
+				int sindenRow = mainLayout->rowCount();
+				mainLayout->addWidget(sindenGroup, sindenRow, 0, 1, mainLayout->columnCount());
+			}
+		}
 	}
 	else if (type == "RealPlay")
 	{

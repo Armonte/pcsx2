@@ -7,9 +7,11 @@
 #include "Settings/ControllerBindingWidget.h"
 #include "Settings/FireWireDeviceWidget.h"
 #include "Settings/HotkeySettingsWidget.h"
+#include "Settings/JVSControlsWidget.h"
 
 #include "pcsx2/FireWire/FireWire.h"
 #include "pcsx2/INISettingsInterface.h"
+#include "pcsx2/DEV9/ACJV.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SIO/Sio.h"
 #include "pcsx2/VMManager.h"
@@ -133,6 +135,7 @@ void ControllerSettingsWindow::onNewProfileClicked()
 			Pad::CopyConfiguration(&temp_si, *Host::Internal::GetBaseSettingsLayer(), true, true, copy_hotkey_bindings);
 			USB::CopyConfiguration(&temp_si, *Host::Internal::GetBaseSettingsLayer(), true, true);
 			FireWire::CopyConfiguration(&temp_si, *Host::Internal::GetBaseSettingsLayer(), true);
+			ACJV::CopyConfiguration(&temp_si, *Host::Internal::GetBaseSettingsLayer(), true, true);
 		}
 		else
 		{
@@ -142,6 +145,7 @@ void ControllerSettingsWindow::onNewProfileClicked()
 			Pad::CopyConfiguration(&temp_si, *m_profile_interface, true, true, copy_hotkey_bindings);
 			USB::CopyConfiguration(&temp_si, *m_profile_interface, true, true);
 			FireWire::CopyConfiguration(&temp_si, *m_profile_interface, true);
+			ACJV::CopyConfiguration(&temp_si, *m_profile_interface, true, true);
 		}
 	}
 
@@ -173,6 +177,7 @@ void ControllerSettingsWindow::onApplyProfileClicked()
 		Pad::CopyConfiguration(Host::Internal::GetBaseSettingsLayer(), *m_profile_interface, true, true, copy_hotkey_bindings);
 		USB::CopyConfiguration(Host::Internal::GetBaseSettingsLayer(), *m_profile_interface, true, true);
 		FireWire::CopyConfiguration(Host::Internal::GetBaseSettingsLayer(), *m_profile_interface, true);
+		ACJV::CopyConfiguration(Host::Internal::GetBaseSettingsLayer(), *m_profile_interface, true, true);
 	}
 	Host::CommitBaseSettingChanges();
 
@@ -278,6 +283,7 @@ void ControllerSettingsWindow::onRestoreDefaultsClicked()
 void ControllerSettingsWindow::onInputDevicesEnumerated(const QList<QPair<QString, QString>>& devices)
 {
 	m_device_list = devices;
+	m_global_settings->clearDeviceList(); // full enumeration replaces the list, it doesn't stack on it
 	for (const QPair<QString, QString>& device : devices)
 		m_global_settings->addDeviceToList(device.first, device.second);
 }
@@ -426,6 +432,7 @@ void ControllerSettingsWindow::createWidgets()
 
 	m_global_settings = nullptr;
 	m_firewire_binding = nullptr;
+	m_jvs_controls = nullptr;
 	m_hotkey_settings = nullptr;
 
 	{
@@ -476,6 +483,8 @@ void ControllerSettingsWindow::createWidgets()
 		item->setIcon(m_port_bindings[global_slot]->getIcon());
 		item->setData(Qt::UserRole, QVariant(global_slot));
 		m_ui.settingsCategory->addItem(item);
+		// Arcade input is in the JVS Controls tab; hide the controller-port entries (the widget stays built to keep the row index mapping).
+		item->setHidden(true);
 	}
 
 	// USB ports
@@ -504,6 +513,17 @@ void ControllerSettingsWindow::createWidgets()
 		item->setIcon(m_firewire_binding->getIcon());
 		item->setData(Qt::UserRole, QVariant(static_cast<u32>(MAX_PORTS) + static_cast<u32>(USB::NUM_PORTS)));
 		m_ui.settingsCategory->addItem(item);
+	}
+
+	// JVS (Namco System 246/256 I/O)
+	{
+		QListWidgetItem* item = new QListWidgetItem();
+		item->setText(tr("JVS Controls"));
+		item->setIcon(QIcon::fromTheme("buzz-controller-line"));
+		m_ui.settingsCategory->addItem(item);
+
+		m_jvs_controls = new JVSControlsWidget(m_ui.settingsContainer, this);
+		m_ui.settingsContainer->addWidget(m_jvs_controls);
 	}
 
 	// only add hotkeys if we're editing global settings

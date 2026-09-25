@@ -143,6 +143,9 @@ target_sources(pcsx2-qt PRIVATE
 	Settings/InputBindingDialog.ui
 	Settings/InputBindingWidget.cpp
 	Settings/InputBindingWidget.h
+	Settings/JVSControlsWidget.cpp
+	Settings/JVSControlsWidget.h
+	Settings/JVSControlsWidget.ui
 	Settings/InterfaceSettingsWidget.cpp
 	Settings/InterfaceSettingsWidget.h
 	Settings/InterfaceSettingsWidget.ui

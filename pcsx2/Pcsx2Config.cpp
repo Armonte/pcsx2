@@ -683,6 +683,13 @@ bool Pcsx2Config::McdOptions::operator!=(const McdOptions& right) const
 {
 	return !this->operator==(right);
 }
+const char* Pcsx2Config::GSOptions::BezelFitModeNames[] = {
+	"Fit",
+	"Fill",
+	"Stretch",
+	"Center",
+	nullptr,
+};
 
 const char* Pcsx2Config::GSOptions::BlendingLevelNames[] = {
 	"Minimum",
@@ -854,6 +861,14 @@ bool Pcsx2Config::GSOptions::OptionsAreEqual(const GSOptions& right) const
 		OpEqu(Crop[2]) &&
 		OpEqu(Crop[3]) &&
 
+		OpEqu(BezelEnabled) &&
+		OpEqu(BezelPath) &&
+		OpEqu(BezelOpacity) &&
+		OpEqu(BezelScale) &&
+		OpEqu(BezelFitMode) &&
+		OpEqu(BezelShowInFullscreen) &&
+		OpEqu(BezelShowInBigPicture) &&
+
 		OpEqu(OsdScale) &&
 		OpEqu(OsdMargin) &&
 		OpEqu(OsdFontPath) &&
@@ -1007,6 +1022,14 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapEntryEx(Crop[1], "CropTop");
 	SettingsWrapEntryEx(Crop[2], "CropRight");
 	SettingsWrapEntryEx(Crop[3], "CropBottom");
+
+	SettingsWrapBitBool(BezelEnabled);
+	SettingsWrapEntry(BezelPath);
+	SettingsWrapEntry(BezelOpacity);
+	SettingsWrapEntry(BezelScale);
+	SettingsWrapEnumEx(BezelFitMode, "BezelFitMode", BezelFitModeNames);
+	SettingsWrapBitBool(BezelShowInFullscreen);
+	SettingsWrapBitBool(BezelShowInBigPicture);
 
 	// Unfortunately, because code in the GS still reads the setting by key instead of
 	// using these variables, we need to use the old names. Maybe post 2.0 we can change this.
@@ -2173,6 +2196,7 @@ void Pcsx2Config::LoadSaveCore(SettingsWrapper& wrap)
 	SettingsWrapBitBool(ManuallySetRealTimeClock);
 	SettingsWrapBitBool(UseSystemLocaleFormat);
 
+
 	// Process various sub-components:
 
 	Speedhacks.LoadSave(wrap);
@@ -2180,6 +2204,7 @@ void Pcsx2Config::LoadSaveCore(SettingsWrapper& wrap)
 	GS.LoadSave(wrap);
 	SPU2.LoadSave(wrap);
 	DEV9.LoadSave(wrap);
+	Arcade.LoadSave(wrap);
 	Gamefixes.LoadSave(wrap);
 	Profiler.LoadSave(wrap);
 	Savestate.LoadSave(wrap);
@@ -2387,6 +2412,7 @@ std::string EmuFolders::GetPortableModePath()
 	return std::string(trimmed_path);
 }
 
+///TODOX: decide if fork needs a dedicated folder to be alone
 bool EmuFolders::SetDataDirectory(Error* error)
 {
 	// Portable mode has the absolute priority.
@@ -2396,44 +2422,44 @@ bool EmuFolders::SetDataDirectory(Error* error)
 		if (EmuConfig.CustomDataPath.empty())
 		{
 #if defined(_WIN32)
-			// On Windows, use My Documents\PCSX2 to match old installs.
-			PWSTR documents_directory;
-			if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, NULL, &documents_directory)))
-			{
-				if (std::wcslen(documents_directory) > 0)
-					DataRoot = Path::Combine(StringUtil::WideStringToUTF8String(documents_directory), "PCSX2");
-				CoTaskMemFree(documents_directory);
-			}
+		// On Windows, use My Documents\PCSX2 to match old installs.
+		PWSTR documents_directory;
+		if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, NULL, &documents_directory)))
+		{
+			if (std::wcslen(documents_directory) > 0)
+				DataRoot = Path::Combine(StringUtil::WideStringToUTF8String(documents_directory), "PCSX2x6");
+			CoTaskMemFree(documents_directory);
+		}
 #elif defined(__linux__) || defined(__FreeBSD__)
-			// Use $XDG_CONFIG_HOME/PCSX2 if it exists.
-			const char* xdg_config_home = getenv("XDG_CONFIG_HOME");
-			if (xdg_config_home && Path::IsAbsolute(xdg_config_home))
-			{
-				DataRoot = Path::RealPath(Path::Combine(xdg_config_home, "PCSX2"));
-			}
-			else
-			{
-				// Use ~/PCSX2 for non-XDG, and ~/.config/PCSX2 for XDG.
-				const char* home_dir = getenv("HOME");
-				if (home_dir)
-				{
-					// ~/.config should exist, but just in case it doesn't and this is a fresh profile..
-					const std::string config_dir(Path::Combine(home_dir, ".config"));
-					if (!FileSystem::DirectoryExists(config_dir.c_str()))
-						FileSystem::CreateDirectoryPath(config_dir.c_str(), false);
-
-					DataRoot = Path::RealPath(Path::Combine(config_dir, "PCSX2"));
-				}
-			}
-#elif defined(__APPLE__)
-			static constexpr char MAC_DATA_DIR[] = "Library/Application Support/PCSX2";
+		// Use $XDG_CONFIG_HOME/PCSX2 if it exists.
+		const char* xdg_config_home = getenv("XDG_CONFIG_HOME");
+		if (xdg_config_home && Path::IsAbsolute(xdg_config_home))
+		{
+			DataRoot = Path::RealPath(Path::Combine(xdg_config_home, "PCSX2x6"));
+		}
+		else
+		{
+			// Use ~/PCSX2 for non-XDG, and ~/.config/PCSX2 for XDG.
 			const char* home_dir = getenv("HOME");
 			if (home_dir)
-				DataRoot = Path::RealPath(Path::Combine(home_dir, MAC_DATA_DIR));
+			{
+				// ~/.config should exist, but just in case it doesn't and this is a fresh profile..
+				const std::string config_dir(Path::Combine(home_dir, ".config"));
+				if (!FileSystem::DirectoryExists(config_dir.c_str()))
+					FileSystem::CreateDirectoryPath(config_dir.c_str(), false);
+
+				DataRoot = Path::RealPath(Path::Combine(config_dir, "PCSX2x6"));
+			}
+		}
+#elif defined(__APPLE__)
+		static constexpr char MAC_DATA_DIR[] = "Library/Application Support/PCSX2x6";
+		const char* home_dir = getenv("HOME");
+		if (home_dir)
+			DataRoot = Path::RealPath(Path::Combine(home_dir, MAC_DATA_DIR));
 #endif
 			}
 			else // Otherwise use the custom path provided by the user
-				DataRoot = Path::RealPath(Path::Combine(EmuConfig.CustomDataPath, "PCSX2"));
+				DataRoot = Path::RealPath(Path::Combine(EmuConfig.CustomDataPath, "PCSX2x6"));
 		}
 
 	// Couldn't determine the data directory, or using portable mode? fallback to portable.
@@ -2446,7 +2472,7 @@ bool EmuFolders::SetDataDirectory(Error* error)
 		if (getenv("APPIMAGE"))
 		{
 			std::string_view appimage_path = Path::GetDirectory(getenv("APPIMAGE"));
-			DataRoot = Path::RealPath(Path::Combine(appimage_path, "PCSX2"));
+			DataRoot = Path::RealPath(Path::Combine(appimage_path, "PCSX2x6"));
 		}
 		else
 			DataRoot = Path::Combine(AppRoot, GetPortableModePath());
@@ -2573,4 +2599,29 @@ std::string EmuFolders::GetOverridableResourcePath(std::string_view name)
 	}
 
 	return upath;
+}
+
+
+void Pcsx2Config::ArcadeOptions::LoadSave(SettingsWrapper& wrap)
+{
+	{
+		SettingsWrapSection("Arcade");
+		SettingsWrapEntry(ATAVerboseReads);
+		SettingsWrapEntry(RAMVerboseReads);
+		SettingsWrapEntry(SRAMVerboseReads);
+		SettingsWrapEntry(UARTVerbose);
+	}
+}
+
+bool Pcsx2Config::ArcadeOptions::operator!=(const ArcadeOptions& right) const
+{
+	return !this->operator==(right);
+}
+
+bool Pcsx2Config::ArcadeOptions::operator==(const ArcadeOptions& right) const
+{
+	return OpEqu(ATAVerboseReads) &&
+		   OpEqu(RAMVerboseReads) &&
+		   OpEqu(UARTVerbose) &&
+		   OpEqu(SRAMVerboseReads);
 }

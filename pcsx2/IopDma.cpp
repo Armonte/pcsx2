@@ -10,6 +10,7 @@
 #include "SIO/Sio2.h"
 
 #include "Sif.h"
+#include "IopMem.h"
 #include "DEV9/DEV9.h"
 #include "FireWire/FireWire.h"
 
@@ -73,9 +74,6 @@ int psxDma4Interrupt()
 
 void spu2DMA4Irq()
 {
-#ifdef SPU2IRQTEST
-	Console.Warning("spu2DMA4Irq()");
-#endif
 	SPU2interruptDMA4();
 	if (HW_DMA4_CHCR & 0x01000000)
 	{
@@ -101,9 +99,6 @@ int psxDma7Interrupt()
 
 void spu2DMA7Irq()
 {
-#ifdef SPU2IRQTEST
-	Console.Warning("spu2DMA7Irq()");
-#endif
 	SPU2interruptDMA7();
 	if (HW_DMA7_CHCR & 0x01000000)
 	{
@@ -168,7 +163,7 @@ void psxDma8(u32 madr, u32 bcr, u32 chcr)
 			break;
 
 		default:
-			PSXDMA_LOG("*** DMA 8 - DEV9 unknown *** %lx addr = %lx size = %lx", chcr, madr, bcr);
+			Console.Error("*** DMA 8 - DEV9 unknown *** %lx addr = %lx size = %lx", chcr, madr, bcr);
 			break;
 	}
 }
@@ -190,6 +185,10 @@ void psxDma9(u32 madr, u32 bcr, u32 chcr)
 	sif0.iop.end = false;
 
 	SIF0Dma();
+
+	// Clear dma9 busy now so each queued sceSifSetDma re-kicks & reads the reused bounce fresh (else movie corrupts).
+	if (!sif0.iop.busy)
+		HW_DMA9_CHCR &= ~0x01000000;
 }
 
 void psxDma10(u32 madr, u32 bcr, u32 chcr)

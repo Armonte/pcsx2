@@ -63,8 +63,8 @@ static constexpr u32 HTTP_POLL_INTERVAL = 10;
 #define UPDATE_ADDITIONAL_TAGS "SSE4"
 #endif
 
-#define LATEST_RELEASE_URL "https://api.pcsx2.net/v1/%1Releases?pageSize=1"
-#define CHANGES_URL "https://api.github.com/repos/PCSX2/pcsx2/compare/%1...%2"
+#define LATEST_RELEASE_URL "https://raw.githubusercontent.com/PS2Homebrew-arcade/pcsx2x6/refs/heads/gh_pages/docs/api/%1.json"
+#define CHANGES_URL "https://api.github.com/repos/PS2Homebrew-arcade/pcsx2x6/compare/%1...%2"
 
 // Available release channels.
 static const char* UPDATE_TAGS[] = {"stable", "nightly"};
@@ -342,7 +342,7 @@ void AutoUpdaterDialog::getLatestReleaseComplete(s32 status_code, std::vector<u8
 					else
 					{
 						m_latest_version = data_object["version"].toString();
-						m_latest_version_timestamp = QDateTime::fromString(data_object["publishedAt"].toString(), QStringLiteral("yyyy-MM-ddThh:mm:ss.zzzt"));
+						m_latest_version_timestamp = QDateTime::fromString(data_object["publishedAt"].toString(), Qt::ISODate);
 						m_download_url = best_asset["url"].toString();
 						m_download_size = best_asset["size"].toInt();
 						found_update_info = true;

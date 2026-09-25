@@ -13,6 +13,7 @@
 #include "IopHw.h"
 #include "IopDma.h"
 #include "FireWire/FireWire.h"
+#include "SIO/Sio2.h"
 #include "CDVD/Ps1CD.h"
 #include "CDVD/CDVD.h"
 
@@ -48,8 +49,9 @@ void psxReset()
 	psxRegs.iopCycleEECarry = 0;
 	psxRegs.iopNextEventCycle = psxRegs.cycle + 4;
 
+	PSXCLK = (PS2CLK == PS2CLK_SS256) ? 55296000 :
+	         (PS2CLK == PS2CLK_S256)  ? 49152000 : 36864000;
 	psxHwReset();
-	PSXCLK = 36864000;
 	ioman::reset();
 	psxBiosReset();
 }
@@ -193,14 +195,17 @@ static __fi void _psxTestInterrupts()
 	// as follows helps speed up most games.
 
 	if( psxRegs.interrupt & ((1 << IopEvt_Cdvd) | (1 << IopEvt_Dma11) | (1 << IopEvt_Dma12)
-		| (1 << IopEvt_Cdrom) | (1 << IopEvt_CdromRead) | (1 << IopEvt_DEV9) | (1 << IopEvt_USB) | (1 << IopEvt_FW)))
+		| (1 << IopEvt_Cdrom) | (1 << IopEvt_CdromRead) | (1 << IopEvt_DEV9) | (1 << IopEvt_Dma8) | (1 << IopEvt_USB) | (1 << IopEvt_FW)
+		| (1 << IopEvt_SIO2)))
 	{
 		IopTestEvent(IopEvt_Cdvd,		cdvdActionInterrupt);
 		IopTestEvent(IopEvt_Dma11,		psxDMA11Interrupt);	// SIO2
 		IopTestEvent(IopEvt_Dma12,		psxDMA12Interrupt);	// SIO2
+		IopTestEvent(IopEvt_SIO2,		sio2DelayedInterrupt);
 		IopTestEvent(IopEvt_Cdrom,		cdrInterrupt);
 		IopTestEvent(IopEvt_CdromRead,	cdrReadInterrupt);
 		IopTestEvent(IopEvt_DEV9,		dev9Interrupt);
+		IopTestEvent(IopEvt_Dma8,		psxDMA8Interrupt);
 		IopTestEvent(IopEvt_USB,		usbInterrupt);
 		IopTestEvent(IopEvt_FW,		FWsectorReadStatusInterrupt);
 	}

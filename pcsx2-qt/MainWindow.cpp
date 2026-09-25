@@ -46,6 +46,8 @@
 #include "pcsx2/SaveState.h"
 #include "pcsx2/SIO/Sio.h"
 #include "pcsx2/GS/GSExtra.h"
+#include "pcsx2/INISettingsInterface.h"
+#include "pcsx2/VMManager.h"
 
 #include "common/Assertions.h"
 #include "common/CocoaTools.h"
@@ -67,6 +69,8 @@
 
 #ifdef _WIN32
 #include "common/RedtapeWindows.h"
+#include "pcsx2/Input/InputSource.h"
+#include "pcsx2/Input/RawInputSource.h"
 #include <Dbt.h>
 #endif
 
@@ -602,6 +606,10 @@ void MainWindow::connectSignals()
 #endif
 	SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnableEEConsoleLogging, "Logging", "EnableEEConsole", false);
 	SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnableIOPConsoleLogging, "Logging", "EnableIOPConsole", false);
+	SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnable_ACATA_Read_Logging, "Arcade",  "ATAVerboseReads", false);
+	SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnable_SRAM_Access_Logging, "Arcade", "SRAMVerboseReads", false);
+	SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnable_RAM_Access_Logging, "Arcade",  "RAMVerboseReads", false);
+	SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnable_UART_Access_Logging, "Arcade",  "UARTVerbose", false);
 	SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnableLogWindow, "Logging", "EnableLogWindow", false);
 	SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnableFileLogging, "Logging", "EnableFileLogging", true);
 	SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnableLogTimestamps, "Logging", "EnableTimestamps", true);
@@ -1827,6 +1835,12 @@ void MainWindow::onGameListEntryContextMenuRequested(const QPoint& point)
 		action = menu.addAction(tr("Set Cover Image..."));
 		connect(action, &QAction::triggered, [this, entry]() { setGameListEntryCoverImage(*entry); });
 
+		action = menu.addAction(tr("Set Bezel Image..."));
+		connect(action, &QAction::triggered, [this, entry]() { setGameListEntryBezelImage(*entry); });
+
+		action = menu.addAction(tr("Clear Bezel Image"));
+		connect(action, &QAction::triggered, [this, entry]() { clearGameListEntryBezelImage(*entry); });
+
 #if !defined(__APPLE__)
 		connect(menu.addAction(tr("Create Game Shortcut...")), &QAction::triggered, [this]() { MainWindow::onCreateGameShortcutTriggered(); });
 #endif
@@ -2802,6 +2816,18 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
 				if (GetRawInputData((HRAWINPUT)msg->lParam, RID_INPUT, lpb.data(), &dwSize, sizeof(RAWINPUTHEADER)) == dwSize)
 				{
 					const RAWINPUT* raw = reinterpret_cast<const RAWINPUT*>(lpb.data());
+
+					// dispatch to RawInputSource for per-device tracking
+					InputSource* raw_source = InputManager::GetInputSourceInterface(InputSourceType::RawInput);
+					if (raw_source && raw_source->IsInitialized())
+					{
+						HWND render_hwnd = m_display_surface ?
+							reinterpret_cast<HWND>(m_display_surface->winId()) : static_cast<HWND>(nullptr);
+						pxAssertMsg(dynamic_cast<RawInputSource*>(raw_source), "Expected RawInputSource");
+						static_cast<RawInputSource*>(raw_source)->ProcessRawInput(raw, render_hwnd);
+					}
+
+					// system-cursor lock/clamp, always active
 					if (raw->header.dwType == RIM_TYPEMOUSE)
 					{
 						const RAWMOUSE& mouse = raw->data.mouse;
@@ -3325,11 +3351,17 @@ void MainWindow::doGameSettings(const char* category)
 
 	// Prefer to use a game list entry, if we have one, that way the summary is populated.
 	// Python 2 titles don't have a disc path, so fall back to the current serial/CRC.
+	// Arcade boots through proverb.elf, so the path lookup would find that ELF instead of the game.
+	const bool arcade = s_current_disc_crc == 0 && !s_current_disc_serial.isEmpty() && !s_current_elf_override.isEmpty();
 	std::optional<GameList::Entry> entry;
 	{
 		auto lock = GameList::GetLock();
 		const GameList::Entry* entry_ptr = nullptr;
-		if (!s_current_disc_path.isEmpty() || !s_current_elf_override.isEmpty())
+		if (arcade)
+		{
+			entry_ptr = GameList::GetEntryBySerialAndCRC(s_current_disc_serial.toStdString(), s_current_disc_crc);
+		}
+		else if (!s_current_disc_path.isEmpty() || !s_current_elf_override.isEmpty())
 		{
 			const QString& path = (s_current_elf_override.isEmpty() ? s_current_disc_path : s_current_elf_override);
 			entry_ptr = GameList::GetEntryForPath(path.toUtf8().constData());
@@ -3347,24 +3379,17 @@ void MainWindow::doGameSettings(const char* category)
 		return;
 	}
 
-	// open properties for the current running file (isn't in the game list)
-	if (s_current_disc_crc == 0)
+	// open properties for the current running file (isn't in the game list).
+	// Arcade has an elf override (proverb.elf) but a valid serial (NMxxxxx) at crc 0, so key by it.
+	if (s_current_disc_crc == 0 && s_current_disc_serial.isEmpty())
 	{
 		QMessageBox::critical(this, tr("Game Properties"), tr("Game properties is unavailable for the current game."));
 		return;
 	}
 
-	// can't use serial for ELFs, because they might have a disc set
-	if (s_current_elf_override.isEmpty())
-	{
-		SettingsWindow::openGamePropertiesDialog(
-			nullptr, s_current_title.toStdString(), s_current_disc_serial.toStdString(), s_current_disc_crc, false, category);
-	}
-	else
-	{
-		SettingsWindow::openGamePropertiesDialog(
-			nullptr, s_current_title.toStdString(), std::string(), s_current_disc_crc, true, category);
-	}
+	SettingsWindow::openGamePropertiesDialog(
+		nullptr, s_current_title.toStdString(), s_current_disc_serial.toStdString(), s_current_disc_crc,
+		!s_current_elf_override.isEmpty() && s_current_disc_serial.isEmpty(), category);
 }
 
 void MainWindow::openDebugger()
@@ -3514,6 +3539,51 @@ void MainWindow::setGameListEntryCoverImage(const GameList::Entry& entry)
 	m_game_list_widget->refreshGridCovers();
 }
 
+void MainWindow::setGameListEntryBezelImage(const GameList::Entry& entry)
+{
+	const QString filename = QDir::toNativeSeparators(QFileDialog::getOpenFileName(
+		this, tr("Select Bezel Image"), QString(), tr("Image Files (*.png *.jpg *.jpeg *.webp *.bmp)")));
+
+	if (filename.isEmpty())
+		return;
+
+	std::string_view game_serial;
+	if (entry.type != GameList::EntryType::ELF)
+		game_serial = entry.serial;
+
+	const std::string settings_path = VMManager::GetGameSettingsPath(game_serial, entry.crc);
+
+	INISettingsInterface sif(settings_path);
+	if (FileSystem::FileExists(sif.GetFileName().c_str()))
+		sif.Load();
+
+	const QByteArray utf8 = filename.toUtf8();
+	sif.SetStringValue("EmuCore/GS", "BezelPath", utf8.constData());
+	sif.SetBoolValue("EmuCore/GS", "BezelEnabled", true);
+	sif.Save();
+
+	g_emu_thread->reloadGameSettings();
+}
+
+void MainWindow::clearGameListEntryBezelImage(const GameList::Entry& entry)
+{
+	std::string_view game_serial;
+	if (entry.type != GameList::EntryType::ELF)
+		game_serial = entry.serial;
+
+	const std::string settings_path = VMManager::GetGameSettingsPath(game_serial, entry.crc);
+
+	INISettingsInterface sif(settings_path);
+	if (FileSystem::FileExists(sif.GetFileName().c_str()))
+		sif.Load();
+
+	sif.DeleteValue("EmuCore/GS", "BezelPath");
+	sif.DeleteValue("EmuCore/GS", "BezelEnabled");
+	sif.Save();
+
+	g_emu_thread->reloadGameSettings();
+}
+
 void MainWindow::clearGameListEntryPlayTime(const GameList::Entry& entry, const time_t entry_played_time)
 {
 	if (QMessageBox::question(this, tr("Confirm Reset"),
@@ -3530,7 +3600,7 @@ void MainWindow::clearGameListEntryPlayTime(const GameList::Entry& entry, const 
 
 void MainWindow::goToWikiPage(const GameList::Entry& entry)
 {
-	QtUtils::OpenURL(this, fmt::format("https://wiki.pcsx2.net/{}", entry.serial).c_str());
+	QtUtils::OpenURL(this, fmt::format("https://ps2homebrew-arcade.github.io/pcsx2x6/games/{}", entry.serial).c_str());
 }
 
 void MainWindow::openSnapshotsFolderForGame(const GameList::Entry& entry)

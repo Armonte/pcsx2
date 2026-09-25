@@ -167,6 +167,7 @@
     <ClCompile Include="Settings\HotkeySettingsWidget.cpp" />
     <ClCompile Include="Settings\InputBindingDialog.cpp" />
     <ClCompile Include="Settings\InputBindingWidget.cpp" />
+    <ClCompile Include="Settings\JVSControlsWidget.cpp" />
     <ClCompile Include="Settings\ControllerSettingsWindow.cpp" />
     <ClCompile Include="Settings\AudioLatencySlider.cpp" />
     <ClCompile Include="Settings\AudioSettingsWidget.cpp" />
@@ -214,6 +215,7 @@
     <QtMoc Include="Settings\HotkeySettingsWidget.h" />
     <QtMoc Include="Settings\InputBindingDialog.h" />
     <QtMoc Include="Settings\InputBindingWidget.h" />
+    <QtMoc Include="Settings\JVSControlsWidget.h" />
     <QtMoc Include="Settings\ControllerSettingsWindow.h" />
     <QtMoc Include="Settings\AudioSettingsWidget.h" />
     <QtMoc Include="Settings\MemoryCardConvertDialog.h" />
@@ -381,6 +383,7 @@
     <QtUi Include="Settings\GraphicsTextureReplacementSettingsTab.ui" />
     <QtUi Include="Settings\GraphicsUpscalingFixesSettingsTab.ui" />
     <QtUi Include="Settings\InputBindingDialog.ui" />
+    <QtUi Include="Settings\JVSControlsWidget.ui" />
     <QtUi Include="Settings\InterfaceSettingsWidget.ui" />
     <QtUi Include="Settings\MemoryCardConvertDialog.ui" />
     <QtUi Include="Settings\MemoryCardCreateDialog.ui" />

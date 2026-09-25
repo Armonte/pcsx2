@@ -906,7 +906,8 @@ void MemoryCardProtocol::AuthReset()
 	}
 	else
 	{
-		mcd->term = Terminator::READY;
+		// 0xF3 only clears MagicGate state; the terminator is changed solely by SetTerminator (0x27).
+		// Resetting it here broke dongle re-detection after IOP module reload (pcsx2x6 854b0456c).
 		if (!cdvd.mecha_hle)
 		{
 			const u32 slot = getActiveMemoryCardSlot();

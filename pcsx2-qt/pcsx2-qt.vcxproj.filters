@@ -88,6 +88,9 @@
     <ClCompile Include="Settings\InputBindingDialog.cpp">
       <Filter>Settings</Filter>
     </ClCompile>
+    <ClCompile Include="Settings\JVSControlsWidget.cpp">
+      <Filter>Settings</Filter>
+    </ClCompile>
     <ClCompile Include="AboutDialog.cpp" />
     <ClCompile Include="GameList\GameListRefreshThread.cpp">
       <Filter>GameList</Filter>
@@ -365,6 +368,9 @@
       <Filter>Settings</Filter>
     </QtMoc>
     <QtMoc Include="Settings\InputBindingWidget.h">
+      <Filter>Settings</Filter>
+    </QtMoc>
+    <QtMoc Include="Settings\JVSControlsWidget.h">
       <Filter>Settings</Filter>
     </QtMoc>
     <QtMoc Include="AboutDialog.h" />
@@ -755,6 +761,9 @@
       <Filter>Settings</Filter>
     </QtUi>
     <QtUi Include="Settings\InputBindingDialog.ui">
+      <Filter>Settings</Filter>
+    </QtUi>
+    <QtUi Include="Settings\JVSControlsWidget.ui">
       <Filter>Settings</Filter>
     </QtUi>
     <QtUi Include="Settings\InterfaceSettingsWidget.ui">

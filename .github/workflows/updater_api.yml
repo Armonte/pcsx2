@@ -1,0 +1,30 @@
+name: Update API
+permissions:
+  contents: write
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+jobs:
+  update-api:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: gh_pages
+    - name: get api
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        TAG=${{ inputs.tag }}
+        gh api repos/PS2Homebrew-arcade/pcsx2x6/releases/tags/$TAG > release.json
+        node scripts/api/index.js release.json docs/api/nightly.json
+        cat docs/api/nightly.json
+    
+    - name: commit change
+      uses: EndBug/add-and-commit@v10
+      with:
+        add: docs/api/nightly.json
+        default_author: github_actions
