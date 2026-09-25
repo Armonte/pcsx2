@@ -53,6 +53,7 @@ namespace RollbackDevice
 		std::vector<Range> s_cfg_regions, s_cfg_excludes, s_cfg_ignore;
 		std::vector<Range> s_dyn_excludes;         // replaceable exclude set (per-object fields in pools that move)
 		bool s_dyn_dirty = false;                  // rebuild the ring at the next FRAME_BEGIN
+		u32 s_dyn_rebuilds = 0;
 		std::vector<Watch> s_cfg_watches;
 		Range s_cfg_input;
 		u32 s_cfg_gate = 0;
@@ -288,6 +289,7 @@ namespace RollbackDevice
 		{
 			s_ring.reset();
 			s_frame = -1;
+			s_dyn_rebuilds = 0;
 			s_resim_active = false;
 			s_frames = s_rollbacks = s_desync_frames = 0;
 			s_sim_desync_frames = 0;
@@ -475,7 +477,10 @@ namespace RollbackDevice
 					s_dyn_dirty = false;
 					s_ring.reset();
 					RebuildCompare();
+					s_dyn_rebuilds++;
+					Console.WriteLn("RollbackDevice: dynamic excludes changed (%zu ranges): ring rebuilt at frame %d", s_dyn_excludes.size(), s_frame + 1);
 				}
+				const bool rebuild = !s_ring && s_frame >= 0; // keep frame numbering across a rebuild
 				if (!s_ring)
 				{
 					std::vector<PageSnapshotRing::Range> regions, excludes;
@@ -485,8 +490,15 @@ namespace RollbackDevice
 						excludes.push_back({r.a, r.b - r.a});
 					s_ring = std::make_unique<PageSnapshotRing>(regions, excludes, s_rollback + 2,
 						s_write_protect ? PageSnapshotRing::DirtyMode::WriteProtect : PageSnapshotRing::DirtyMode::Compare);
-					s_frame = -1;
-					s_first_frame = 0;
+					if (!rebuild)
+					{
+						s_frame = -1;
+						s_first_frame = 0;
+					}
+					else
+					{
+						s_first_frame = s_frame + 1; // no snapshot before this frame
+					}
 				}
 				EndNormalSimTrace(); // (normal sim without a render section this frame)
 				s_frame++;
@@ -678,7 +690,8 @@ namespace RollbackDevice
 			s_mode == Mode::SyncTest ? "synctest" : "capture", s_rollback, s_frame, s_rollbacks, s_last_rollback_us, avg,
 			s_max_rollback_us, s_sim_desync_frames, s_first_sim_desync_frame, s_desync_frames, s_last_diff_bytes,
 			s_last_runs.size());
-		s += fmt::format(" | gated (no rollback) frames {} (+{} for I/O)", s_gated_frames, s_io_gated_frames);
+		s += fmt::format(" | gated (no rollback) frames {} (+{} for I/O) | ring rebuilds {} ({} dynamic excludes)", s_gated_frames,
+			s_io_gated_frames, s_dyn_rebuilds, s_dyn_excludes.size());
 		if (s_trace)
 			s += fmt::format(" | RNG trace: mismatches {} first [{}] | calls outside sim/render {} (first ra {:08X}), in render {}",
 				s_trace_mismatches, s_trace_first_mismatch, s_trace_calls_other, s_trace_other_first_ra, s_trace_calls_render);
