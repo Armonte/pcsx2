@@ -67,6 +67,7 @@ namespace RollbackDevice
 		Range s_rng;                               // RNG state split into sim/render streams
 		std::vector<u8> s_rng_sim, s_rng_render;   // saved streams while the other one is live
 		bool s_in_render = false;
+		u32 s_snd_seed = 0x13579BDFu;               // sound RNG stream (host-side; cosmetic, never rolled back)
 		u32 s_gate = 0;
 		u32 s_gate_prev = 0;
 		std::vector<u8> s_gate_ok;                 // [frame % INPUT_HISTORY]: gate counter advanced into this frame
@@ -421,7 +422,7 @@ namespace RollbackDevice
 		ResetRuntime();
 	}
 
-	u64 HandleSyscall(u32 cmd, u32 arg)
+	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2)
 	{
 		std::lock_guard lk(s_mtx);
 		if (s_mode == Mode::Off || !eeMem)
@@ -522,6 +523,27 @@ namespace RollbackDevice
 				if (s_resim_active && s_ring)
 					s_ring->Capture(s_resim_base + static_cast<s32>(arg) + 1);
 				return 0;
+
+			// Sound RNG stream: draws whose result only picks volume/pan/pitch/voice variants. Keeping them off the
+			// simulation stream makes the simulation independent of audio state (sound is never rolled back and can
+			// differ between netplay peers, e.g. "play only if the voice channel is free").
+			case CMD_SND_RAND_INT:
+			{
+				s_snd_seed = s_snd_seed * 214013u + 2531011u;
+				const s32 lo = static_cast<s32>(arg), hi = static_cast<s32>(arg2);
+				return static_cast<u64>(static_cast<s64>(lo + static_cast<s32>((static_cast<s64>(s_snd_seed >> 16) * (hi - lo)) >> 16)));
+			}
+			case CMD_SND_RAND_FLOAT:
+			{
+				s_snd_seed = s_snd_seed * 214013u + 2531011u;
+				float lo, hi;
+				std::memcpy(&lo, &arg, 4);
+				std::memcpy(&hi, &arg2, 4);
+				const float r = lo + (hi - lo) * (static_cast<float>(s_snd_seed >> 16) / 65536.0f);
+				u32 bits;
+				std::memcpy(&bits, &r, 4);
+				return bits;
+			}
 
 			case CMD_RENDER_BEGIN:
 				EndNormalSimTrace();
