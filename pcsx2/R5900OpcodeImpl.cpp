@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "Common.h"
+#include "Sdbz/RollbackDevice.h"
 
 #include <float.h>
 
@@ -907,6 +908,14 @@ void MOVN() {
 
 void SYSCALL()
 {
+	// In-engine rollback device (Sdbz/RollbackDevice): game-side routines call it with $v1 = MAGIC. Handled here
+	// synchronously and returned from without raising the exception (like the GetMemorySize HLE below).
+	if (cpuRegs.GPR.n.v1.UL[0] == RollbackDevice::MAGIC)
+	{
+		cpuRegs.GPR.n.v0.UD[0] = RollbackDevice::HandleSyscall(cpuRegs.GPR.n.a0.UL[0], cpuRegs.GPR.n.a1.UL[0]);
+		return;
+	}
+
 	u8 call;
 
 	if (cpuRegs.GPR.n.v1.SL[0] < 0)

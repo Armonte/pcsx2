@@ -45,6 +45,7 @@
 #include "Vif_Dynarec.h"
 #include "VMManager.h"
 #include "Sdbz/SnapshotBench.h"
+#include "Sdbz/RollbackDevice.h"
 #include "ps2/BiosTools.h"
 
 #include "common/Console.h"
@@ -2075,6 +2076,7 @@ void VMManager::Shutdown(bool save_resume_state)
 
 	// drop rollback snapshots (and their EE RAM write protection) while eeMem is still alive
 	SnapshotBench::OnVMShutdown();
+	RollbackDevice::OnVMShutdown();
 
 	// sync everything
 	if (THREAD_VU1)
