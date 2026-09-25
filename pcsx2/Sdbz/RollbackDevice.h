@@ -40,6 +40,8 @@ namespace RollbackDevice
 		CMD_CUR_PRE = 4,
 		CMD_RENDER_BEGIN = 5, // game is about to run its render passes: switch g_RandSeed to the render stream
 		CMD_RENDER_END = 6,   // render passes done: save the render stream, restore the simulation stream
+		CMD_SND_RAND_INT = 8,   // sound RNG stream: $a1 = lo, $a2 = hi -> lo + r*(hi-lo) (integer, like Rand_RangeInt)
+		CMD_SND_RAND_FLOAT = 9, // sound RNG stream: $a1/$a2 = lo/hi float bits -> float bits in $v0
 		CMD_RNG_TRACE = 16,   // 16 + rng function id, $a1 = caller return address (desync attribution)
 	};
 
@@ -51,7 +53,7 @@ namespace RollbackDevice
 	};
 
 	// EE thread, from the SYSCALL interpreter handler. Returns the value for $v0.
-	u64 HandleSyscall(u32 cmd, u32 arg);
+	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2);
 
 	void OnVMShutdown();
 
