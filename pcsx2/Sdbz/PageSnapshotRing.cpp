@@ -80,7 +80,18 @@ PageSnapshotRing::PageSnapshotRing(std::vector<Range> regions, std::vector<Range
 	m_stats.tracked_pages = static_cast<u32>(m_page_index.size());
 
 	if (m_mode == DirtyMode::WriteProtect)
+	{
 		vtlb_DirtyTrack_Enable(m_page_index);
+		// Map the writable alias now and touch every tracked page through it once, so the first rollback load
+		// doesn't pay for the view mapping + a soft page fault per page (measured: first load 12.7 ms vs 0.2-0.4 ms).
+		if (volatile u8* alias = SysMemory::GetEEMainWritableAlias())
+		{
+			u32 sum = 0;
+			for (const u32 page : m_page_index)
+				sum += alias[page << PAGE_SHIFT];
+			(void)sum;
+		}
+	}
 
 	Console.WriteLn("PageSnapshotRing: %u pages (%u KiB), capacity %u, %s", m_stats.tracked_pages,
 		m_stats.tracked_pages * (PAGE_SIZE / 1024), m_capacity, m_mode == DirtyMode::Compare ? "compare" : "write-protect");
