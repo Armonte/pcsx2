@@ -44,6 +44,7 @@ namespace RollbackDevice
 		CMD_RENDER_END = 6,   // render passes done: save the render stream, restore the simulation stream
 		CMD_SND_RAND_INT = 8,   // sound RNG stream: $a1 = lo, $a2 = hi -> lo + r*(hi-lo) (integer, like Rand_RangeInt)
 		CMD_SND_RAND_FLOAT = 9, // sound RNG stream: $a1/$a2 = lo/hi float bits -> float bits in $v0
+		CMD_PAD_FEED = 10,      // after the game's pad read: $a1 = player, $a2 = raw report, $a3 = read result (PadFeed)
 		CMD_RNG_TRACE = 16,   // 16 + rng function id, $a1 = caller return address, $a2 = the function's 2nd argument
 	};
 	// Trace id reserved for a pass marker hooked on the task-list runner: $a2 = the task pass being run, used to
@@ -61,7 +62,7 @@ namespace RollbackDevice
 	};
 
 	// EE thread, from the SYSCALL interpreter handler. Returns the value for $v0.
-	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2);
+	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2, u32 arg3);
 
 	void OnVMShutdown();
 	// EE memory was replaced by a savestate load (CPU thread): every snapshot describes the old memory. Keeps the

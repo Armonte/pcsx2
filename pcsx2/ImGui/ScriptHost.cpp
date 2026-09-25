@@ -6,7 +6,8 @@
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
 #include "Sdbz/SnapshotBench.h" // snap.* Lua table (incremental page-snapshot ring)
 #include "Sdbz/RollbackDevice.h"
-#include "Sdbz/RbProfiler.h" // rbdev.* Lua table (in-engine rollback device)
+#include "Sdbz/RbProfiler.h"
+#include "Sdbz/PadFeed.h" // rbdev.* Lua table (in-engine rollback device)
 
 #include "Config.h" // EmuFolders
 #include "VMManager.h" // disc serial -> per-game script
@@ -189,6 +190,36 @@ namespace
 		// in-process sampling profiler of the EE thread, tagged by rollback phase (Windows)
 		rd.set_function("prof_start", [](sol::optional<uint32_t> hz) { RbProfiler::Start(hz.value_or(2000)); });
 		rd.set_function("prof_stop", []() { RbProfiler::Stop(); });
+		// Deterministic controller feed (player 1-based; buttons = game layout, see PadFeed.h):
+		//   pad_off(p) | pad_const(p, buttons[, lx, ly, rx, ry]) | pad_seq(p, {{buttons, frames[, lx, ly, rx, ry]}, ...}[, loop])
+		//   pad_mash(p, seed, mask, min_hold, max_hold) | pad_status()
+		rd.set_function("pad_off", [](uint32_t p) { PadFeed::Off(p - 1); });
+		rd.set_function("pad_const", [](uint32_t p, uint32_t b, sol::optional<int> lx, sol::optional<int> ly,
+										 sol::optional<int> rx, sol::optional<int> ry) {
+			PadFeed::Step s;
+			s.buttons = static_cast<u16>(b);
+			s.lx = static_cast<u8>(lx.value_or(0x80)); s.ly = static_cast<u8>(ly.value_or(0x80));
+			s.rx = static_cast<u8>(rx.value_or(0x80)); s.ry = static_cast<u8>(ry.value_or(0x80));
+			PadFeed::Const(p - 1, s);
+		});
+		rd.set_function("pad_seq", [](uint32_t p, sol::table t, sol::optional<bool> loop) {
+			std::vector<PadFeed::Step> steps;
+			for (size_t i = 1; i <= t.size(); i++)
+			{
+				sol::table e = t[i];
+				PadFeed::Step s;
+				s.buttons = static_cast<u16>(e.get_or(1, 0u));
+				s.frames = e.get_or(2, 1u);
+				s.lx = static_cast<u8>(e.get_or(3, 0x80)); s.ly = static_cast<u8>(e.get_or(4, 0x80));
+				s.rx = static_cast<u8>(e.get_or(5, 0x80)); s.ry = static_cast<u8>(e.get_or(6, 0x80));
+				steps.push_back(s);
+			}
+			PadFeed::Sequence(p - 1, std::move(steps), loop.value_or(false));
+		});
+		rd.set_function("pad_mash", [](uint32_t p, uint32_t seed, uint32_t mask, uint32_t lo, uint32_t hi) {
+			PadFeed::Mash(p - 1, seed, static_cast<u16>(mask), lo, hi);
+		});
+		rd.set_function("pad_status", []() { return PadFeed::Status(); });
 		rd.set_function("prof_report", [](sol::optional<uint32_t> top) { return RbProfiler::Report(top.value_or(25)); });
 		rd.set("MAGIC", RollbackDevice::MAGIC);
 

@@ -912,7 +912,7 @@ void SYSCALL()
 	// synchronously and returned from without raising the exception (like the GetMemorySize HLE below).
 	if (cpuRegs.GPR.n.v1.UL[0] == RollbackDevice::MAGIC)
 	{
-		cpuRegs.GPR.n.v0.UD[0] = RollbackDevice::HandleSyscall(cpuRegs.GPR.n.a0.UL[0], cpuRegs.GPR.n.a1.UL[0], cpuRegs.GPR.n.a2.UL[0]);
+		cpuRegs.GPR.n.v0.UD[0] = RollbackDevice::HandleSyscall(cpuRegs.GPR.n.a0.UL[0], cpuRegs.GPR.n.a1.UL[0], cpuRegs.GPR.n.a2.UL[0], cpuRegs.GPR.n.a3.UL[0]);
 		return;
 	}
 
