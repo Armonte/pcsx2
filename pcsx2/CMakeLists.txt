@@ -857,6 +857,7 @@ set(pcsx2ImGuiSources
 	ImGui/ScriptOverlay.cpp
 	ImGui/ScriptHost.cpp
 	Sdbz/PageSnapshotRing.cpp
+	Sdbz/RollbackDevice.cpp
 	Sdbz/SdbzDeterminism.cpp
 	Sdbz/SdbzSavestate.cpp
 	Sdbz/SnapshotBench.cpp
@@ -873,6 +874,7 @@ set(pcsx2ImGuiHeaders
 	ImGui/ScriptBridge.h
 	ImGui/ScriptHost.h
 	Sdbz/PageSnapshotRing.h
+	Sdbz/RollbackDevice.h
 	Sdbz/SdbzDeterminism.h
 	Sdbz/SdbzSavestate.h
 	Sdbz/SnapshotBench.h

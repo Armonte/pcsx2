@@ -24,6 +24,12 @@ local A = {
 	-- 4 x `jal Rand_RangeFloat` (+-0.005 cosmetic jitter). Replacing them with `mtc1 $zero,$f0` keeps the sim RNG
 	-- identical no matter what is drawn (required for rollback resim / netplay).                          [code]
 	FX10_RAND_JALS = { 0x355AA4, 0x355AC4, 0x355DE4, 0x355E04 }, FX10_JAL_WORD = 0x0C0839D0, MTC1_ZERO_F0 = 0x44800000,
+	-- In-engine rollback (tools/rollback_cave.py): resim routine in sub_2A1128 (unreferenced RW fn), hooked over
+	-- `jal Task_RunMainListNoArg` in Game_MainLoop. Talks to PCSX2's RollbackDevice via syscall.            [code]
+	RB_CAVE = 0x2A1128, RB_HOOK = 0x159F98, RB_HOOK_ORIG = 0x0C084498, RB_HOOK_NEW = 0x0C0A844A,
+	RB_CAVE_WORDS = { 0x27BDFFE0, 0xFFBF0000, 0xFFB00008, 0xFFB10010, 0x3C035DB2, 0x3463F00D, 0x24040001, 0x0000000C, 0x0040802D, 0x0000882D, 0x12300012, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040002, 0x0220282D, 0x0000000C, 0x0C084498, 0x00000000, 0x0C08444C, 0x24040008, 0x3C035DB2, 0x3463F00D, 0x24040003, 0x0220282D, 0x0000000C, 0x26310001, 0x1000FFEE, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040004, 0x0000000C, 0x0C084498, 0x00000000, 0xDFBF0000, 0xDFB00008, 0xDFB10010, 0x03E00008, 0x27BD0020 },
+	RB_CAVE_ORIG0  = 0x27BDFF20, -- first word of sub_2A1128 as shipped (addiu sp,-0xE0); install refuses otherwise
+	RB_INPUT_BLOCK = 0x522E20, RB_INPUT_LEN = 0x360, -- g_PadMerged + g_Pad[] + raw copies (0x522E20..0x523180)
 	CATCHUP_JAL    = 0x159F88, CATCHUP_WORD = 0x0C056898, -- jal Frame_CatchUpIfLagging (NOP = 1 sim tick/frame) [code]
 
 	-- players
@@ -92,7 +98,7 @@ local cfg = {
 	p_boxes = true, p_train = false, p_debug = false, p_state = true, p_rollback = false,
 	hurt = true, push = false, attack = true, pos = true, labels = true, hud = true,
 	freeze = false, lock_hp = false, lock_magic = false, magic_value = 3.0, lock_timer = false,
-	dbg_motion = false, dbg_camera = false, one_tick = false, snap_verify = false, netplay_rng = false,
+	dbg_motion = false, dbg_camera = false, one_tick = false, snap_verify = false, netplay_rng = false, rb_frames = 2,
 	box_thickness = 1.5, circle_fill_alpha = 0.25,
 	col_hurt   = { 0.24, 0.86, 0.35, 0.80 },
 	col_push   = { 0.35, 0.65, 1.00, 0.70 },
@@ -418,6 +424,59 @@ local function crow(label, show_key, col_key)
 end
 
 -- ===================================================================================================
+-- in-engine rollback device (engine table `rbdev`, PCSX2 Sdbz/RollbackDevice): Slippi-style game-side resim
+-- ===================================================================================================
+local RB_LIB_EXCLUDES = require("fuc_rb_lib_excludes")
+local rb_installed, rb_mode = false, 0
+
+local function rb_install()
+	if rb_installed then return true end
+	local hook, first = rd32(A.RB_HOOK), rd32(A.RB_CAVE)
+	if hook ~= A.RB_HOOK_ORIG or (first ~= A.RB_CAVE_ORIG0 and first ~= A.RB_CAVE_WORDS[1]) then
+		rb_status_msg = string.format("rollback hook NOT installed: hook %08X cave %08X (unexpected code)", hook, first)
+		return false
+	end
+	for i, w in ipairs(A.RB_CAVE_WORDS) do engine.patch(A.RB_CAVE + 4 * (i - 1), w) end
+	engine.patch(A.RB_HOOK, A.RB_HOOK_NEW) -- hook last: the routine is complete before anything can call it
+	rb_installed = true
+	return true
+end
+
+local function rb_uninstall()
+	if not rb_installed then return end
+	engine.unpatch(A.RB_HOOK)
+	for i = 1, #A.RB_CAVE_WORDS do engine.unpatch(A.RB_CAVE + 4 * (i - 1)) end
+	rb_installed = false
+end
+
+-- mode: 0 off, 1 capture only, 2 sync test (roll back cfg.rb_frames every frame and compare)
+local function rb_start(mode)
+	rbdev.stop()
+	if mode == 0 then rb_mode = 0; rb_uninstall(); return end
+	rbdev.clear()
+	rbdev.add_region(0x3B1080, 0x536280 - 0x3B1080)          -- .data/.bss
+	rbdev.add_region(0x5362C0, 0x01FBD000 - 0x5362C0)        -- heap arena (RwHeap + SysHeap), below EE stack
+	rbdev.add_exclude(0x00538FA0, 0x200090)                   -- GS/DMA packet buffer (RwHeap)
+	rbdev.add_exclude(0x00538660, 0x940)                      -- DMA chain list (RwHeap)
+	rbdev.add_exclude(0x01716330, 0x23200)                    -- audio PCM ring A (SysHeap)
+	rbdev.add_exclude(0x0175C7B0, 0x23200)                    -- audio PCM ring B (SysHeap)
+	rbdev.add_exclude(0x523D90, 8)                            -- vblank / presented-frame counters
+	rbdev.add_exclude(0x522E08, 0x14)                         -- vblanks since poll / elapsed / wait target
+	for _, r in ipairs(RB_LIB_EXCLUDES) do rbdev.add_exclude(r[1], r[2]) end
+	rbdev.set_input_block(A.RB_INPUT_BLOCK, A.RB_INPUT_LEN)
+	local p1, p2 = players()
+	if p1 ~= 0 then rbdev.add_watch(p1, 0x2550, "P1") end
+	if p2 ~= 0 then rbdev.add_watch(p2, 0x2550, "P2") end
+	rbdev.add_watch(A.RAND_SEED, 4, "g_RandSeed")
+	rbdev.add_watch(0x51D890, 0x110, "g_GameWork")
+	rbdev.add_watch(0x51C858, 0x68, "g_SideWork/slots")
+	cfg.one_tick = true -- exactly one sim tick per frame while rolling back
+	if not rb_install() then return end
+	rbdev.start(mode, cfg.rb_frames, true)
+	rb_mode = mode
+end
+
+-- ===================================================================================================
 -- incremental snapshot ring (engine Lua table `snap`) + file command channel for headless testing
 -- ===================================================================================================
 local function snap_start(wp)
@@ -454,11 +513,16 @@ local function snap_commands()
 		elseif c == "verify" then cfg.snap_verify = (arg == "on"); snap.verify(cfg.snap_verify)
 		elseif c == "rollback" then snap.rollback(tonumber(arg) or 1)
 		elseif c == "netrng" then cfg.netplay_rng = (arg == "on")
+		elseif c == "rb_synctest" then cfg.rb_frames = tonumber(arg) or cfg.rb_frames; rb_start(2)
+		elseif c == "rb_capture" then rb_start(1)
+		elseif c == "rb_off" then rb_start(0)
+		elseif c == "rb_report" and rbdev then rbdev.report(CMD_DIR .. "/rb_report.txt")
 		end
 	end
 	local o = io.open(CMD_DIR .. "/snap_status.txt", "w")
-	if o then o:write(snap.status(), "\n"); o:close() end
+	if o then o:write(snap.status(), "\n", rbdev and rbdev.status() or "", "\n"); o:close() end
 end
+
 
 
 local function control_window()
@@ -502,6 +566,15 @@ local function control_window()
 		if pane("Rollback / determinism", "p_rollback") then
 			ui.checkbox("1 sim tick per frame (NOP lag catch-up @0x159F88)", "one_tick")
 			ui.checkbox("netplay-safe render RNG (Fx10 draw no longer consumes g_RandSeed)", "netplay_rng")
+			if rbdev then
+				imgui.Separator()
+				ui.slider_int("rollback frames", "rb_frames", 1, 8)
+				if imgui.Button("Sync test") then rb_start(2) end; imgui.SameLine()
+				if imgui.Button("Capture only") then rb_start(1) end; imgui.SameLine()
+				if imgui.Button("Rollback off") then rb_start(0) end
+				imgui.Text(rbdev.status())
+				if rb_status_msg then imgui.Text(rb_status_msg) end
+			end
 			imgui.Text(string.format("round frame %d  vblank %d  rng %08X", rd32(A.ROUND_FRAME), rd32(A.VBLANK_COUNTER), rd32(A.RAND_SEED)))
 			imgui.Text(string.format("heap arena %08X  sys heap first blk %08X", rd32(A.HEAP_ARENA), rd32(A.SYS_HEAP + 4)))
 			-- Incremental page-snapshot ring (engine: Sdbz/PageSnapshotRing, Lua table `snap`). Regions/excludes =
@@ -514,7 +587,7 @@ local function control_window()
 				if imgui.Button("Rollback 1") then snap.rollback(1) end; imgui.SameLine()
 				if imgui.Button("Rollback 6") then snap.rollback(6) end; imgui.SameLine()
 				if ui.checkbox("verify loads", "snap_verify") then snap.verify(cfg.snap_verify) end
-				imgui.TextWrapped(snap.status())
+				imgui.Text(snap.status())
 			else
 				imgui.TextDisabled("snap.* not available in this build")
 			end

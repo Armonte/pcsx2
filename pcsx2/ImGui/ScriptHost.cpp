@@ -5,6 +5,7 @@
 #include "ImGui/ScriptBridge.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
 #include "Sdbz/SnapshotBench.h" // snap.* Lua table (incremental page-snapshot ring)
+#include "Sdbz/RollbackDevice.h" // rbdev.* Lua table (in-engine rollback device)
 
 #include "Config.h" // EmuFolders
 #include "VMManager.h" // disc serial -> per-game script
@@ -152,6 +153,21 @@ namespace
 		sn.set_function("rollback", [](uint32_t n) { SnapshotBench::Rollback(n); });
 		sn.set_function("verify", [](bool on) { SnapshotBench::SetVerify(on); });
 		sn.set_function("status", []() { return SnapshotBench::Status(); });
+
+		// In-engine rollback device (Sdbz/RollbackDevice): the game-side hook (installed by the game script) calls
+		// it via syscall; these configure it. rbdev.start(mode 0 off|1 capture|2 synctest, rollback_frames, write_protect)
+		auto rd = lua.create_named_table("rbdev");
+		rd.set_function("clear", []() { RollbackDevice::ClearConfig(); });
+		rd.set_function("add_region", [](uint32_t a, uint32_t n) { RollbackDevice::AddRegion(a, n); });
+		rd.set_function("add_exclude", [](uint32_t a, uint32_t n) { RollbackDevice::AddExclude(a, n); });
+		rd.set_function("set_input_block", [](uint32_t a, uint32_t n) { RollbackDevice::SetInputBlock(a, n); });
+		rd.set_function("add_ignore", [](uint32_t a, uint32_t n) { RollbackDevice::AddCompareIgnore(a, n); });
+		rd.set_function("add_watch", [](uint32_t a, uint32_t n, const std::string& name) { RollbackDevice::AddWatch(a, n, name); });
+		rd.set_function("start", [](int mode, uint32_t frames, bool wp) { RollbackDevice::Start(static_cast<RollbackDevice::Mode>(mode), frames, wp); });
+		rd.set_function("stop", []() { RollbackDevice::Stop(); });
+		rd.set_function("status", []() { return RollbackDevice::Status(); });
+		rd.set_function("report", [](const std::string& path) { return RollbackDevice::WriteReport(path); });
+		rd.set("MAGIC", RollbackDevice::MAGIC);
 
 		auto proj = lua.create_named_table("project");
 		proj.set_function("world_to_screen", [](float x, float y, float z) {
