@@ -408,6 +408,7 @@ namespace
 	// camera, training) now lives in the script; this just hands it a draw context and keeps the GS thread
 	// interactive. Game-agnostic -- a second game is a different scripts/<game>.lua against this same engine.
 	static void DrawScriptOverlay() {
+		Script::AutoEnableOnce();
 		const bool enabled = Script::IsEnabled();
 
 		// Keep the GS thread presenting + show a software cursor while the script wants an interactive window (it

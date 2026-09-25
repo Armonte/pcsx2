@@ -675,16 +675,19 @@ namespace Script
 		Console.WriteLn("[Script] reload requested");
 	}
 
+	void AutoEnableOnce()
+	{
+		// [Script] AutoEnable = true in the ini: enable on the first overlay frame (headless harness sessions).
+		static bool s_auto_checked = false;
+		if (s_auto_checked)
+			return;
+		s_auto_checked = true;
+		if (!s_enabled.load() && Host::GetBaseBoolSettingValue("Script", "AutoEnable", false))
+			SetEnabled(true);
+	}
+
 	void RunFrame()
 	{
-		// [Script] AutoEnable = true in the ini: enable on the first frame (headless harness sessions; no hotkey).
-		static bool s_auto_checked = false;
-		if (!s_auto_checked)
-		{
-			s_auto_checked = true;
-			if (!s_enabled.load() && Host::GetBaseBoolSettingValue("Script", "AutoEnable", false))
-				SetEnabled(true);
-		}
 		if (!s_enabled.load())
 			return;
 		std::lock_guard<std::mutex> lk(s_stateMtx); // serialise vs RunCapture (EE thread) / RunGui
