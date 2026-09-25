@@ -21,6 +21,7 @@
 #include "ImGui/ImGuiFullscreen.h"
 #include "ImGui/ImGuiManager.h"
 #include "ImGui/ImGuiOverlays.h"
+#include "ImGui/ScriptOverlay.h"
 #include "Input/InputManager.h"
 #include "MTGS.h"
 #include "Patch.h"
@@ -44,11 +45,17 @@
 #include "fmt/format.h"
 #include "imgui.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <limits>
 #include <span>
+#include <string>
 #include <tuple>
+#include <vector>
+
 
 InputRecordingUI::InputRecordingData g_InputRecordingData;
 
@@ -1817,6 +1824,7 @@ void ImGuiManager::RenderOverlays()
 	float position_y = margin;
 
 	DrawSindenBorder();
+	ScriptOverlay::Draw();
 	DrawIndicatorsOverlay(position_y, scale, margin, spacing);
 	DrawVideoCaptureOverlay(position_y, scale, margin, spacing);
 	DrawInputRecordingOverlay(position_y, scale, margin, spacing);

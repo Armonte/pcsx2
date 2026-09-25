@@ -769,6 +769,8 @@ if(WIN32)
 		GS/Renderers/DX12/D3D12StreamBuffer.cpp
 		GS/Renderers/DX12/GSDevice12.cpp
 		GS/Renderers/DX12/GSTexture12.cpp
+		ImGui/backends/imgui_impl_win32.cpp
+		ImGui/backends/imgui_impl_dx11.cpp
 	)
 	list(APPEND pcsx2GSHeaders
 		GS/Renderers/DX11/D3D.h
@@ -924,6 +926,10 @@ set(pcsx2ImGuiSources
 	ImGui/ImGuiFullscreen.cpp
 	ImGui/ImGuiManager.cpp
 	ImGui/ImGuiOverlays.cpp
+	ImGui/ScriptOverlay.cpp
+	ImGui/ScriptHost.cpp
+	Sdbz/SdbzDeterminism.cpp
+	Sdbz/SdbzSavestate.cpp
 )
 
 set(pcsx2ImGuiHeaders
@@ -933,6 +939,11 @@ set(pcsx2ImGuiHeaders
 	ImGui/ImGuiFullscreen.h
 	ImGui/ImGuiManager.h
 	ImGui/ImGuiOverlays.h
+	ImGui/ScriptOverlay.h
+	ImGui/ScriptBridge.h
+	ImGui/ScriptHost.h
+	Sdbz/SdbzDeterminism.h
+	Sdbz/SdbzSavestate.h
 )
 
 set(pcsx2InputSources
@@ -1241,6 +1252,8 @@ target_link_libraries(PCSX2_FLAGS INTERFACE
 	common
 	des
 	imgui
+	# SDBZ Lua overlay scripting (sol2 INTERFACE transitively pulls in the vendored lua static lib)
+	sol2
 	fmt::fmt
 	libchdr
 	libcdio::libcdio

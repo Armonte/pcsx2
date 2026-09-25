@@ -7,6 +7,7 @@
 #include "IconsFontAwesome.h"
 #include "ImGui/FullscreenUI.h"
 #include "ImGui/ImGuiOverlays.h"
+#include "ImGui/ScriptHost.h"
 #include "Input/InputManager.h"
 #include "Recording/InputRecording.h"
 #include "SPU2/spu2.h"
@@ -354,5 +355,45 @@ DEFINE_HOTKEY("ToggleMouseLock", TRANSLATE_NOOP("Hotkeys", "System"), TRANSLATE_
 	[](s32 pressed) {
 		if (!pressed)
 			Host::SetMouseLock(!Host::GetBoolSettingValue("EmuCore", "EnableMouseLock"));
+	})
+// --- Script overlay (Lua mod framework) -- rebindable here instead of the old hardcoded Ctrl+ combos ---
+DEFINE_HOTKEY("ScriptToggleOverlay", TRANSLATE_NOOP("Hotkeys", "Script Overlay"),
+	TRANSLATE_NOOP("Hotkeys", "Toggle Script Overlay"), [](s32 pressed) {
+		if (!pressed)
+			Script::SetEnabled(!Script::IsEnabled());
+	})
+DEFINE_HOTKEY("ScriptReload", TRANSLATE_NOOP("Hotkeys", "Script Overlay"), TRANSLATE_NOOP("Hotkeys", "Reload Script"),
+	[](s32 pressed) {
+		if (!pressed)
+			Script::Reload();
+	})
+// Toggle just the script's control panel (boxes keep drawing) -- the old Ctrl+J. Handled in lua on_hotkey.
+DEFINE_HOTKEY("ScriptToggleWindow", TRANSLATE_NOOP("Hotkeys", "Script Overlay"),
+	TRANSLATE_NOOP("Hotkeys", "Toggle Script Window"), [](s32 pressed) {
+		if (!pressed)
+			Script::Dispatch("toggle_window");
+	})
+// Toggle the box-draw master (panel stays) -- the old Ctrl+H. Handled in lua on_hotkey.
+DEFINE_HOTKEY("ScriptToggleBoxes", TRANSLATE_NOOP("Hotkeys", "Script Overlay"),
+	TRANSLATE_NOOP("Hotkeys", "Toggle Hitboxes (Master)"), [](s32 pressed) {
+		if (!pressed)
+			Script::Dispatch("toggle_master");
+	})
+// Freeze / step / freecam now live entirely in the script -- route the press to on_hotkey(name) via the
+// thread-safe dispatch queue (drained on the GS thread). The Lua handler owns the actual EE writes / patches.
+DEFINE_HOTKEY("ScriptToggleFreeze", TRANSLATE_NOOP("Hotkeys", "Script Overlay"),
+	TRANSLATE_NOOP("Hotkeys", "Toggle Sim Freeze"), [](s32 pressed) {
+		if (!pressed)
+			Script::Dispatch("toggle_freeze");
+	})
+DEFINE_HOTKEY("ScriptFrameStep", TRANSLATE_NOOP("Hotkeys", "Script Overlay"),
+	TRANSLATE_NOOP("Hotkeys", "Frame Step (Overlay)"), [](s32 pressed) {
+		if (!pressed)
+			Script::Dispatch("frame_step");
+	})
+DEFINE_HOTKEY("ScriptToggleFreecam", TRANSLATE_NOOP("Hotkeys", "Script Overlay"),
+	TRANSLATE_NOOP("Hotkeys", "Toggle Freecam"), [](s32 pressed) {
+		if (!pressed)
+			Script::Dispatch("toggle_freecam");
 	})
 END_HOTKEY_LIST()

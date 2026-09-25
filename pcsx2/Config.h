@@ -232,6 +232,7 @@ enum class AspectRatioType : u8
 	R4_3,
 	R16_9,
 	R10_7,
+	R8_7, // SDBZ native framebuffer aspect (512:448 = 8:7)
 	MaxCount
 };
 
@@ -242,6 +243,7 @@ enum class FMVAspectRatioSwitchType : u8
 	R4_3,
 	R16_9,
 	R10_7,
+	R8_7, // SDBZ native framebuffer aspect (512:448 = 8:7)
 	MaxCount
 };
 

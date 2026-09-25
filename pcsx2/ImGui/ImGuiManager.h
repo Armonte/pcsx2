@@ -89,6 +89,10 @@ namespace ImGuiManager
 	/// Called on the UI or CPU thread in response to a key press. String is UTF-8.
 	void AddTextInput(std::string str);
 
+	/// Push the current keyboard modifier state (Ctrl/Shift/Alt/Super) straight to ImGui. The per-key map doesn't
+	/// reliably carry the modifier keys, so without this io.KeyCtrl stays false and Ctrl+click slider entry never arms.
+	void UpdateKeyModifiers(bool ctrl, bool shift, bool alt, bool super);
+
 	/// Called on the UI or CPU thread in response to mouse movement.
 	void UpdateMousePosition(float x, float y);
 

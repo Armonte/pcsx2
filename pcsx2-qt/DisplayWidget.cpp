@@ -9,6 +9,7 @@
 #include "pcsx2/ImGui/FullscreenUI.h"
 #include "pcsx2/ImGui/ImGuiManager.h"
 #include "Input/InputManager.h"
+#include "pcsx2/ImGui/ScriptBridge.h"
 
 #include "common/Assertions.h"
 #include "common/Console.h"
@@ -454,6 +455,18 @@ void DisplaySurface::handleKeyInputEvent(QEvent* event)
 			const u32 key = QtUtils::KeyEventToCode(key_event);
 			const Qt::KeyboardModifiers modifiers = key_event->modifiers();
 			const bool pressed = (key_event->type() == QEvent::KeyPress);
+
+			// Feed the modifier state to ImGui directly. The per-key code map drops the Ctrl/Shift/Alt keys, so
+			// io.KeyCtrl never updated in-game and Ctrl+click-to-type on a slider could not arm. modifiers() doesn't
+			// always include the modifier on its OWN press event, so OR in the pressed key for that case.
+			{
+				const int qk = key_event->key();
+				ImGuiManager::UpdateKeyModifiers(
+					(modifiers & Qt::ControlModifier) != 0 || (pressed && qk == Qt::Key_Control),
+					(modifiers & Qt::ShiftModifier) != 0 || (pressed && qk == Qt::Key_Shift),
+					(modifiers & Qt::AltModifier) != 0 || (pressed && qk == Qt::Key_Alt),
+					(modifiers & Qt::MetaModifier) != 0 || (pressed && qk == Qt::Key_Meta));
+			}
 			const auto it = std::find(m_keys_pressed_with_modifiers.begin(), m_keys_pressed_with_modifiers.end(), key);
 			if (it != m_keys_pressed_with_modifiers.end())
 			{
@@ -603,9 +616,12 @@ bool DisplaySurface::event(QEvent* event)
 			}
 
 			// don't toggle fullscreen when we're bound.. that wouldn't end well.
+			// Also skip it whenever ImGui wants the mouse (pointer is over an overlay/script window) -- a
+			// double-click on our panel must hit the panel, not flip fullscreen.
 			if (event->type() == QEvent::MouseButtonDblClick &&
 				static_cast<const QMouseEvent*>(event)->button() == Qt::LeftButton &&
-				QtHost::IsVMValid() && !FullscreenUI::HasActiveWindow() &&
+				QtHost::IsVMValid() && !FullscreenUI::HasActiveWindow() && !ImGuiManager::WantsMouseInput() &&
+				!ScriptBridge::MouseClaimed() && // script widget (e.g. the view-axis gizmo) under the cursor
 				((!QtHost::IsVMPaused() && !InputManager::HasAnyBindingsForKey(InputManager::MakePointerButtonKey(0, 0))) ||
 					(QtHost::IsVMPaused() && !ImGuiManager::WantsMouseInput())) &&
 				Host::GetBoolSettingValue("UI", "DoubleClickTogglesFullscreen", true))

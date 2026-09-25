@@ -126,3 +126,6 @@ CMakeSettings.json
 /out/
 /.cache/
 /bin/utils/system2x6_games
+
+# per-user overlay settings written by scripts at runtime
+scripts/*.cfg
