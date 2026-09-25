@@ -5,7 +5,8 @@
 #include "ImGui/ScriptBridge.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
 #include "Sdbz/SnapshotBench.h" // snap.* Lua table (incremental page-snapshot ring)
-#include "Sdbz/RollbackDevice.h" // rbdev.* Lua table (in-engine rollback device)
+#include "Sdbz/RollbackDevice.h"
+#include "Sdbz/RbProfiler.h" // rbdev.* Lua table (in-engine rollback device)
 
 #include "Config.h" // EmuFolders
 #include "VMManager.h" // disc serial -> per-game script
@@ -183,6 +184,10 @@ namespace
 		rd.set_function("add_trace_alias", [](uint32_t from, uint32_t to) { RollbackDevice::AddTraceAlias(from, to); });
 		rd.set_function("status", []() { return RollbackDevice::Status(); });
 		rd.set_function("report", []() { return RollbackDevice::ReportText(); });
+		// in-process sampling profiler of the EE thread, tagged by rollback phase (Windows)
+		rd.set_function("prof_start", [](sol::optional<uint32_t> hz) { RbProfiler::Start(hz.value_or(2000)); });
+		rd.set_function("prof_stop", []() { RbProfiler::Stop(); });
+		rd.set_function("prof_report", [](sol::optional<uint32_t> top) { return RbProfiler::Report(top.value_or(25)); });
 		rd.set("MAGIC", RollbackDevice::MAGIC);
 
 		auto proj = lua.create_named_table("project");

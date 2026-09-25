@@ -3,6 +3,7 @@
 
 #include "Sdbz/RollbackDevice.h"
 #include "Sdbz/PageSnapshotRing.h"
+#include "Sdbz/RbProfiler.h"
 
 #include "Memory.h"
 
@@ -510,10 +511,13 @@ namespace RollbackDevice
 					}
 				}
 				EndNormalSimTrace(); // (normal sim without a render section this frame)
+				RbProfiler::SetPhase(RbProfiler::PH_FRAME_BEGIN);
 				s_frame++;
 				s_frames++;
 				RecordInput(s_frame);
+				RbProfiler::SetPhase(RbProfiler::PH_CAPTURE);
 				s_ring->Capture(s_frame);
+				RbProfiler::SetPhase(RbProfiler::PH_FRAME_BEGIN);
 
 				// Gate: did the live-simulation counter advance into this frame?
 				bool ok = true;
@@ -561,10 +565,12 @@ namespace RollbackDevice
 				// Sync test: remember this frame's state, rewind R frames, let the game re-simulate them.
 				s_rollback_timer.Reset();
 				Common::Timer t;
+				RbProfiler::SetPhase(RbProfiler::PH_SYNCTEST);
 				TakeReference();
 				s_sum_ref_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
 				const s32 target = s_frame - static_cast<s32>(s_rollback);
 				t.Reset();
+				RbProfiler::SetPhase(RbProfiler::PH_LOAD);
 				if (!s_ring->Load(target))
 					return 0;
 				s_sum_load_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
@@ -575,6 +581,7 @@ namespace RollbackDevice
 			}
 
 			case CMD_RESIM_PRE:
+				RbProfiler::SetPhase(RbProfiler::PH_RESIM);
 				if (s_resim_active)
 					InjectInput(s_resim_base + static_cast<s32>(arg));
 				s_phase = Phase::Resim;
@@ -590,6 +597,7 @@ namespace RollbackDevice
 				if (s_resim_active && s_ring)
 				{
 					Common::Timer t;
+					RbProfiler::SetPhase(RbProfiler::PH_RESIM_CAPTURE);
 					s_ring->Capture(s_resim_base + static_cast<s32>(arg) + 1);
 					s_sum_cap_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
 				}
@@ -625,6 +633,7 @@ namespace RollbackDevice
 				}
 				EndNormalSimTrace();
 				s_phase = Phase::Render;
+				RbProfiler::SetPhase(RbProfiler::PH_RENDER);
 				if (s_rng.b > s_rng.a && !s_in_render)
 				{
 					const u32 n = s_rng.b - s_rng.a;
@@ -643,6 +652,7 @@ namespace RollbackDevice
 
 			case CMD_RENDER_END:
 				s_phase = Phase::Other;
+				RbProfiler::SetPhase(RbProfiler::PH_OTHER);
 				if (s_in_render)
 				{
 					const u32 n = s_rng.b - s_rng.a;
@@ -658,6 +668,7 @@ namespace RollbackDevice
 					if (s_mode == Mode::SyncTest)
 					{
 						Common::Timer t;
+						RbProfiler::SetPhase(RbProfiler::PH_SYNCTEST);
 						CompareToReference();
 						s_sum_cmp_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
 					}
@@ -668,6 +679,7 @@ namespace RollbackDevice
 					s_sum_rollback_us += s_last_rollback_us;
 				}
 				s_phase = Phase::NormalSim;
+				RbProfiler::SetPhase(RbProfiler::PH_SIM);
 				s_phase_frame = s_frame;
 				s_sim_timing = s_gate_ok[static_cast<u32>(s_frame) % INPUT_HISTORY] != 0; // gameplay frames only
 				s_sim_timer.Reset();
