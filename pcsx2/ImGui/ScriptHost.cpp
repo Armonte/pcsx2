@@ -7,6 +7,8 @@
 #include "Sdbz/SnapshotBench.h" // snap.* Lua table (incremental page-snapshot ring)
 
 #include "Config.h" // EmuFolders
+#include "VMManager.h" // disc serial -> per-game script
+#include "common/StringUtil.h"
 
 #include "common/Console.h"
 #include "common/FileSystem.h"
@@ -20,6 +22,7 @@
 #include <ctime>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -52,23 +55,47 @@ namespace
 	std::mutex s_dispatchMutex;
 	std::vector<std::string> s_dispatchQueue;
 
-	std::string Candidate(const std::string& root)
+	// Per-game script: scripts/<SERIAL>.lua, else the SERIAL=file.lua entry in scripts/games.txt. Searched next
+	// to the data root, the app root (exe dir), then the resources dir. Games with no entry run no script: a
+	// game script patches that game's memory and must never run on anything else.
+	std::string ScriptForSerial(const std::string& root, const std::string& serial)
 	{
-		return Path::Combine(Path::Combine(root, "scripts"), "sdbz.lua");
+		const std::string dir = Path::Combine(root, "scripts");
+		std::string p = Path::Combine(dir, serial + ".lua");
+		if (FileSystem::FileExists(p.c_str()))
+			return p;
+
+		const std::optional<std::string> map = FileSystem::ReadFileToString(Path::Combine(dir, "games.txt").c_str());
+		if (!map.has_value())
+			return {};
+		for (std::string_view line : StringUtil::SplitString(map.value(), '\n'))
+		{
+			line = StringUtil::StripWhitespace(line);
+			if (line.empty() || line.front() == '#')
+				continue;
+			const size_t eq = line.find('=');
+			if (eq == std::string_view::npos || StringUtil::StripWhitespace(line.substr(0, eq)) != serial)
+				continue;
+			p = Path::Combine(dir, StringUtil::StripWhitespace(line.substr(eq + 1)));
+			return FileSystem::FileExists(p.c_str()) ? p : std::string();
+		}
+		return {};
 	}
 
-	// Look for scripts/sdbz.lua next to the data root, the app root (exe dir), then the resources dir.
 	std::string ResolveScriptPath()
 	{
+		const std::string serial = VMManager::GetDiscSerial();
+		if (serial.empty())
+			return {};
 		for (const std::string* root : {&EmuFolders::DataRoot, &EmuFolders::AppRoot, &EmuFolders::Resources})
 		{
 			if (root->empty())
 				continue;
-			std::string p = Candidate(*root);
-			if (FileSystem::FileExists(p.c_str()))
+			std::string p = ScriptForSerial(*root, serial);
+			if (!p.empty())
 				return p;
 		}
-		return Candidate(EmuFolders::DataRoot); // default target for the "not found" message
+		return {};
 	}
 
 	std::time_t FileMtime(const std::string& p)
@@ -409,13 +436,18 @@ namespace
 	// last-good state (if any) running and surface the error.
 	bool LoadScript()
 	{
-		s_path = ResolveScriptPath();
-		if (!FileSystem::FileExists(s_path.c_str()))
+		const std::string path = ResolveScriptPath();
+		if (path != s_path && s_state)
 		{
-			s_error = "script not found: " + s_path;
-			Console.ErrorFmt("[Script] {}", s_error);
-			return false;
+			// Different game (or none): the old script's patches and state belong to the old game.
+			ScriptBridge::UnpatchAll();
+			s_state.reset();
+			s_haveOnFrame = s_haveOnGui = s_haveOnCapture = false;
 		}
+		s_path = path;
+		s_error.clear();
+		if (s_path.empty())
+			return false; // no script for this game
 
 		// PCSX2 builds with exceptions off; sol2 detects this and protects via Lua pcall instead. With
 		// sol::script_pass_on_error a syntax/runtime error in the script is RETURNED here, not thrown.
@@ -457,6 +489,12 @@ namespace
 		if (++s_pollCounter < 30)
 			return;
 		s_pollCounter = 0;
+		if (ResolveScriptPath() != s_path)
+		{
+			Console.WriteLn("[Script] game changed -> switching script");
+			LoadScript();
+			return;
+		}
 		if (s_path.empty())
 			return;
 		const std::time_t m = FileMtime(s_path);
