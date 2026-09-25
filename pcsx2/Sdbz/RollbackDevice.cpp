@@ -7,7 +7,6 @@
 #include "Memory.h"
 
 #include "common/Console.h"
-#include "common/FileSystem.h"
 #include "common/Timer.h"
 
 #include "fmt/format.h"
@@ -363,7 +362,7 @@ namespace RollbackDevice
 		return s;
 	}
 
-	bool WriteReport(const std::string& path)
+	std::string ReportText()
 	{
 		std::lock_guard lk(s_mtx);
 		std::string out = fmt::format("# RollbackDevice sync-test report\nframes {} rollbacks {} desync frames {} first {}\n\n"
@@ -390,6 +389,6 @@ namespace RollbackDevice
 			}
 			out += fmt::format("{:08X} {:5} now {} ref {} {}\n", r.addr, r.len, now, ref, WatchName(r.addr));
 		}
-		return FileSystem::WriteStringToFile(path.c_str(), out);
+		return out;
 	}
 } // namespace RollbackDevice

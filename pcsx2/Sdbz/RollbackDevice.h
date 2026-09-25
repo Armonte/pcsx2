@@ -63,5 +63,5 @@ namespace RollbackDevice
 	void Start(Mode mode, u32 rollback_frames, bool write_protect);
 	void Stop();
 	std::string Status();
-	bool WriteReport(const std::string& path); // per-page diff histogram + last diffs
+	std::string ReportText(); // per-page diff histogram + last differing runs (sync test)
 } // namespace RollbackDevice
