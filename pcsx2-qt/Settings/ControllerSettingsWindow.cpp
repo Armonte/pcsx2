@@ -483,8 +483,9 @@ void ControllerSettingsWindow::createWidgets()
 		item->setIcon(m_port_bindings[global_slot]->getIcon());
 		item->setData(Qt::UserRole, QVariant(global_slot));
 		m_ui.settingsCategory->addItem(item);
-		// Arcade input is in the JVS Controls tab; hide the controller-port entries (the widget stays built to keep the row index mapping).
-		item->setHidden(true);
+		// Arcade input is in the JVS Controls tab: while an arcade game runs, hide the controller-port entries (the widget
+		// stays built to keep the row index mapping). Retail games keep their DualShock ports.
+		item->setHidden(VMManager::IsArcadeGame());
 	}
 
 	// USB ports
