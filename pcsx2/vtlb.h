@@ -243,10 +243,15 @@ extern void vtlb_DirtyTrack_Enable(const std::vector<u32>& ram_pages);
 extern void vtlb_DirtyTrack_Disable();
 extern bool vtlb_DirtyTrack_IsEnabled();
 // Copies the dirty set (bit i = ram page i) into `out` (resized to TotalRam pages / 64), clears it
-// and write-protects every tracked page again.
-extern void vtlb_DirtyTrack_Rearm(std::vector<u64>* out);
-// Marks a tracked page dirty and makes it writable (host-side writes such as a snapshot load).
-extern void vtlb_DirtyTrack_Unprotect(u32 ram_page);
+// and write-protects the pages that were written again -- except those in `stay_writable` (same bit layout):
+// the caller detects changes to those itself (e.g. memcmp of pages written every frame, where a fault per
+// frame costs more than the compare).
+extern void vtlb_DirtyTrack_Rearm(std::vector<u64>* out, const std::vector<u64>* stay_writable = nullptr);
+// Marks tracked pages [first, first+count) dirty and makes them writable in as few protection calls as
+// possible (host-side writes such as a snapshot load).
+extern void vtlb_DirtyTrack_Unprotect(u32 ram_page, u32 count = 1);
+// Write-protects a tracked page again (a page the caller had kept writable via stay_writable).
+extern void vtlb_DirtyTrack_Reprotect(u32 ram_page);
 
 // --------------------------------------------------------------------------------------
 //  Goemon game fix
