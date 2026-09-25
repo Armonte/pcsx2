@@ -6,6 +6,8 @@
 #include "common/Pcsx2Defs.h"
 
 #include <string>
+#include <utility>
+#include <vector>
 
 // In-engine rollback device -- the PCSX2 counterpart of Slippi's EXI device (EXI_DeviceSlippi).
 //
@@ -67,6 +69,9 @@ namespace RollbackDevice
 	void ClearConfig();
 	void AddRegion(u32 addr, u32 len);        // memory that makes up the game state
 	void AddExclude(u32 addr, u32 len);       // never rolled back (library/driver/audio state, counters)
+	// Replaceable exclude set, for per-object fields inside pools whose blocks move between matches (e.g. the texture
+	// cache fields of every RwRaster). Can be called while running: the ring is rebuilt at the next frame boundary.
+	void SetDynamicExcludes(const std::vector<std::pair<u32, u32>>& ranges);
 	void SetInputBlock(u32 addr, u32 len);    // per-frame input state recorded/injected by the device
 	void AddCompareIgnore(u32 addr, u32 len); // sync test: state known not to matter (render-only), not reported
 	void AddWatch(u32 addr, u32 len, const std::string& name); // sync test: named sim state, reported by name
