@@ -21,7 +21,7 @@
 #include "ImGui/ImGuiFullscreen.h"
 #include "ImGui/ImGuiManager.h"
 #include "ImGui/ImGuiOverlays.h"
-#include "ImGui/SdbzOverlay.h"
+#include "ImGui/ScriptOverlay.h"
 #include "Input/InputManager.h"
 #include "MTGS.h"
 #include "Patch.h"
@@ -1782,7 +1782,7 @@ void ImGuiManager::RenderOverlays()
 	const float spacing = std::ceil(5.0f * scale);
 	float position_y = margin;
 
-	SdbzOverlay::DrawHitboxOverlay();
+	ScriptOverlay::Draw();
 	DrawIndicatorsOverlay(position_y, scale, margin, spacing);
 	DrawVideoCaptureOverlay(position_y, scale, margin, spacing);
 	DrawInputRecordingOverlay(position_y, scale, margin, spacing);

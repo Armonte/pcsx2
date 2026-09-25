@@ -11,6 +11,8 @@
 
 #include "GS.h"
 #include "GS/GS.h"
+#include "ImGui/ScriptOverlay.h" // script overlay: capture box geometry on the EE thread at end-of-frame
+#include "Sdbz/SdbzDeterminism.h" // rollback Phase-0 harness: record/replay/compare at the same boundary
 #include "MTGS.h"
 #include "PerformanceMetrics.h"
 #include "Patch.h"
@@ -493,6 +495,14 @@ static __fi void VSyncStart(u64 sCycle)
 	// Don't bother throttling if we're going to pause.
 	if (!VMManager::Internal::IsExecutionInterrupted())
 		VMManager::Internal::Throttle();
+
+	// Capture the script overlay's box geometry HERE, on the EE/CPU thread, with this frame's game state fully
+	// settled in eeMem and BEFORE it's pushed to the GS. The prims ride a FIFO to the GS thread in frame order, so
+	// the overlay lines up exactly with the displayed frame (no read-ahead jitter). No-op unless a script is loaded.
+	ScriptOverlay::CaptureOnEEThread();
+
+	// Rollback determinism harness ticks at the same settled-frame boundary (no-op when idle).
+	SdbzDeterminism::OnVSyncStart();
 
 	gsPostVsyncStart(); // MUST be after framelimit; doing so before causes funk with frame times!
 
