@@ -160,6 +160,17 @@ namespace
 		rd.set_function("clear", []() { RollbackDevice::ClearConfig(); });
 		rd.set_function("add_region", [](uint32_t a, uint32_t n) { RollbackDevice::AddRegion(a, n); });
 		rd.set_function("add_exclude", [](uint32_t a, uint32_t n) { RollbackDevice::AddExclude(a, n); });
+		// set_dynamic_excludes({ {addr, len}, ... }): replaceable while running (ring rebuilt at the next frame)
+		rd.set_function("set_dynamic_excludes", [](sol::table t) {
+			std::vector<std::pair<u32, u32>> v;
+			v.reserve(t.size());
+			for (const auto& kv : t)
+			{
+				sol::table r = kv.second.as<sol::table>();
+				v.emplace_back(r.get<uint32_t>(1), r.get<uint32_t>(2));
+			}
+			RollbackDevice::SetDynamicExcludes(v);
+		});
 		rd.set_function("set_input_block", [](uint32_t a, uint32_t n) { RollbackDevice::SetInputBlock(a, n); });
 		rd.set_function("add_ignore", [](uint32_t a, uint32_t n) { RollbackDevice::AddCompareIgnore(a, n); });
 		rd.set_function("add_watch", [](uint32_t a, uint32_t n, const std::string& name) { RollbackDevice::AddWatch(a, n, name); });

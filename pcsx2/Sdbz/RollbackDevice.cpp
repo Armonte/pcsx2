@@ -51,6 +51,8 @@ namespace RollbackDevice
 
 		// ---- configuration (Lua) ----
 		std::vector<Range> s_cfg_regions, s_cfg_excludes, s_cfg_ignore;
+		std::vector<Range> s_dyn_excludes;         // replaceable exclude set (per-object fields in pools that move)
+		bool s_dyn_dirty = false;                  // rebuild the ring at the next FRAME_BEGIN
 		std::vector<Watch> s_cfg_watches;
 		Range s_cfg_input;
 		u32 s_cfg_gate = 0;
@@ -338,6 +340,7 @@ namespace RollbackDevice
 		s_cfg_stable.clear();
 		s_cfg_regions.clear();
 		s_cfg_excludes.clear();
+		s_dyn_excludes.clear();
 		s_cfg_ignore.clear();
 		s_cfg_watches.clear();
 		s_cfg_input = {};
@@ -373,6 +376,27 @@ namespace RollbackDevice
 		s_cfg_watches.push_back({{addr & RAM_MASK, (addr & RAM_MASK) + len}, name});
 	}
 
+	namespace
+	{
+		std::vector<Range> AllExcludes()
+		{
+			std::vector<Range> cut = s_cfg_excludes;
+			cut.insert(cut.end(), s_dyn_excludes.begin(), s_dyn_excludes.end());
+			if (s_input.b > s_input.a)
+				cut.push_back(s_input);
+			return cut;
+		}
+
+		size_t RebuildCompare()
+		{
+			std::vector<Range> cut = AllExcludes();
+			const size_t n = cut.size();
+			cut.insert(cut.end(), s_cfg_ignore.begin(), s_cfg_ignore.end());
+			s_compare = Subtract(s_cfg_regions, cut);
+			return n;
+		}
+	} // namespace
+
 	void Start(Mode mode, u32 rollback_frames, bool write_protect)
 	{
 		std::lock_guard lk(s_mtx);
@@ -403,14 +427,21 @@ namespace RollbackDevice
 		s_gated_frames = 0;
 		s_watches = s_cfg_watches;
 		s_inputs.assign(INPUT_HISTORY, {});
-		std::vector<Range> cut = s_cfg_excludes;
-		if (s_input.b > s_input.a)
-			cut.push_back(s_input);
-		std::vector<Range> cut_cmp = cut;
-		cut_cmp.insert(cut_cmp.end(), s_cfg_ignore.begin(), s_cfg_ignore.end());
-		s_compare = Subtract(s_cfg_regions, cut_cmp);
+		s_dyn_dirty = false;
+		const size_t n_cut = RebuildCompare();
 		Console.WriteLn("RollbackDevice: mode %d, rollback %u, %zu regions, %zu excludes, compare %zu ranges", static_cast<int>(mode),
-			s_rollback, s_cfg_regions.size(), cut.size(), s_compare.size());
+			s_rollback, s_cfg_regions.size(), n_cut, s_compare.size());
+	}
+
+	void SetDynamicExcludes(const std::vector<std::pair<u32, u32>>& ranges)
+	{
+		std::lock_guard lk(s_mtx);
+		std::vector<Range> v;
+		v.reserve(ranges.size());
+		for (const auto& [addr, len] : ranges)
+			v.push_back({addr & RAM_MASK, (addr & RAM_MASK) + len});
+		s_dyn_excludes = std::move(v);
+		s_dyn_dirty = true; // applied at the next frame boundary (EE thread)
 	}
 
 	void Stop()
@@ -437,15 +468,21 @@ namespace RollbackDevice
 		{
 			case CMD_FRAME_BEGIN:
 			{
+				if (s_dyn_dirty)
+				{
+					// The dynamic exclude set changed (e.g. a new match allocated new pool blocks): start a new ring.
+					// The snapshots before this point are dropped, so the next rollback needs a full window again.
+					s_dyn_dirty = false;
+					s_ring.reset();
+					RebuildCompare();
+				}
 				if (!s_ring)
 				{
 					std::vector<PageSnapshotRing::Range> regions, excludes;
 					for (const Range& r : s_cfg_regions)
 						regions.push_back({r.a, r.b - r.a});
-					for (const Range& r : s_cfg_excludes)
+					for (const Range& r : AllExcludes())
 						excludes.push_back({r.a, r.b - r.a});
-					if (s_input.b > s_input.a)
-						excludes.push_back({s_input.a, s_input.b - s_input.a});
 					s_ring = std::make_unique<PageSnapshotRing>(regions, excludes, s_rollback + 2,
 						s_write_protect ? PageSnapshotRing::DirtyMode::WriteProtect : PageSnapshotRing::DirtyMode::Compare);
 					s_frame = -1;

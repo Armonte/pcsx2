@@ -431,6 +431,7 @@ end
 -- ===================================================================================================
 local RB_LIB_EXCLUDES = require("fuc_rb_lib_excludes")
 local rb_installed, rb_mode = false, 0
+rb_raster_sig = nil
 
 local function rb_install()
 	if rb_installed then return true end
@@ -486,6 +487,33 @@ local function rb_uninstall()
 	rb_installed = false
 end
 
+-- Per-raster SkyTexCache / DMA fields (dynamic excludes: raster pool blocks move between matches).
+-- RwRaster free list @0x5301B0 (entry 0x90, 0x80 per block; block = [next][prev][16-byte used bitmap], entries @+0x18),
+-- ext = raster + *(0x5092B0): +0x00/+0x04 DMA reference counts (decremented by the DMA-complete interrupt),
+-- +0x08/+0x0C TEX0 (TBP/CBP = VRAM address the cache assigned), +0x17 locked-resident flag, +0x58 LRU entry pointer.
+local RASTER_FL, RASTER_ENTRY, RASTER_PER_BLOCK = 0x5301B0, 0x90, 0x80
+local function raster_blocks()
+	local head, out, cur = RASTER_FL + 0x10, {}, rd32(RASTER_FL + 0x10)
+	while cur ~= head and ptr_ok(cur) and #out < 64 do out[#out + 1] = cur; cur = rd32(cur) end
+	return out
+end
+function rb_refresh_raster_excludes()
+	local blocks, ext = raster_blocks(), rd32(0x5092B0)
+	local sig = table.concat(blocks, ",")
+	if sig == rb_raster_sig then return end
+	rb_raster_sig = sig
+	local ex = {}
+	for _, b in ipairs(blocks) do
+		for i = 0, RASTER_PER_BLOCK - 1 do
+			local e = b + 0x18 + i * RASTER_ENTRY + ext
+			ex[#ex + 1] = { e, 0x10 }
+			ex[#ex + 1] = { e + 0x17, 1 }
+			ex[#ex + 1] = { e + 0x58, 4 }
+		end
+	end
+	rbdev.set_dynamic_excludes(ex)
+end
+
 -- mode: 0 off, 1 capture only, 2 sync test (roll back cfg.rb_frames every frame and compare)
 local function rb_start(mode)
 	rbdev.stop()
@@ -494,7 +522,14 @@ local function rb_start(mode)
 	rbdev.add_region(0x3B1080, 0x536280 - 0x3B1080)          -- .data/.bss
 	rbdev.add_region(0x5362C0, 0x01FBD000 - 0x5362C0)        -- heap arena (RwHeap + SysHeap), below EE stack
 	rbdev.add_exclude(0x00538FA0, 0x200090)                   -- GS/DMA packet buffer (RwHeap)
-	rbdev.add_exclude(0x00538660, 0x940)                      -- DMA chain list (RwHeap)
+	rbdev.add_exclude(0x00538660, 0x940)                      -- SkyTexCache LRU entry table (*0x4D9A94, 0xC4 x 12 B)
+	-- RenderWare PS2 driver state that mirrors hardware the rollback cannot rewind (GS VRAM contents, GS registers,
+	-- DMA in flight, display flip). Restoring it would desync the driver from the hardware (wrong textures, skipped
+	-- GS register writes). Every accessor is RW Sky-driver code (IDB gp/xref scan), none is game code.
+	rbdev.add_exclude(0x4D9A80, 0x3C)                         -- SkyTexCache globals (enabled, LRU head/tail, VRAM base/size, current raster)
+	rbdev.add_exclude(0x508F38, 0x509100 - 0x508F38)          -- gp: sky DMA/flip, GS render-state shadows, clippers, Rx pipeline heap
+	rbdev.add_exclude(0x531340, 0x190)                        -- sky display/framebuffer GS register tables + flip state
+	rbdev.add_exclude(0x531900, 0x40)                         -- sky texture upload GIF packet templates
 	rbdev.add_exclude(0x01716330, 0x23200)                    -- audio PCM ring A (SysHeap)
 	rbdev.add_exclude(0x0175C7B0, 0x23200)                    -- audio PCM ring B (SysHeap)
 	rbdev.add_exclude(0x523D90, 8)                            -- vblank / presented-frame counters
@@ -546,6 +581,8 @@ local function rb_start(mode)
 	-- (0x51AC80..0x51AD3F = particle DRAW-frame stamps, written by Particle_BeginDrawFrame: render state, not watched)
 	rbdev.add_watch(0x51AD40, 0x50, "EmitterPtclLists")       -- emitter cursor/free, particle free + 16 layer lists
 	rbdev.add_watch(0x3D6AC8, 4, "g_EmitterSerial")
+	rb_raster_sig = nil
+	rb_refresh_raster_excludes()
 	cfg.one_tick = true -- exactly one sim tick per frame while rolling back
 	if not rb_install() then return end
 	rb_apply_trace(cfg.rb_trace)
@@ -693,6 +730,7 @@ function on_frame()
 	engine.set_cursor(cfg.show_window)
 	engine.set_gamepad_nav(cfg.controller_nav)
 	if not is_fuc() then return end
+	if rb_mode ~= 0 then rb_refresh_raster_excludes() end
 	training_update()
 	if cfg.master then draw_hud() end
 end
