@@ -928,6 +928,7 @@ set(pcsx2ImGuiSources
 	ImGui/ImGuiOverlays.cpp
 	ImGui/ScriptOverlay.cpp
 	ImGui/ScriptHost.cpp
+	Sdbz/PadFeed.cpp
 	Sdbz/PageSnapshotRing.cpp
 	Sdbz/RbProfiler.cpp
 	Sdbz/RollbackDevice.cpp
@@ -946,6 +947,7 @@ set(pcsx2ImGuiHeaders
 	ImGui/ScriptOverlay.h
 	ImGui/ScriptBridge.h
 	ImGui/ScriptHost.h
+	Sdbz/PadFeed.h
 	Sdbz/PageSnapshotRing.h
 	Sdbz/RbProfiler.h
 	Sdbz/RollbackDevice.h

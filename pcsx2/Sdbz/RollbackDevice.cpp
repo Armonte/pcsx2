@@ -4,6 +4,7 @@
 #include "Sdbz/RollbackDevice.h"
 #include "Sdbz/PageSnapshotRing.h"
 #include "Sdbz/RbProfiler.h"
+#include "Sdbz/PadFeed.h"
 
 #include "Memory.h"
 
@@ -487,8 +488,11 @@ namespace RollbackDevice
 		ResetRuntime();
 	}
 
-	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2)
+	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2, u32 arg3)
 	{
+		// Controller feed works whether rollback is running or not (menus, test setup).
+		if (cmd == CMD_PAD_FEED)
+			return (eeMem && (arg2 & RAM_MASK) < Ps2MemSize::MainRam - 32) ? PadFeed::OnPadRead(arg, Ram(arg2), arg3) : arg3;
 		std::lock_guard lk(s_mtx);
 		if (s_mode == Mode::Off || !eeMem)
 			return 0;
