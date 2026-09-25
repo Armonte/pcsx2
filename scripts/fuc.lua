@@ -20,6 +20,10 @@ local col     = color.pack
 local A = {
 	-- identity (is_fuc): data word at the "STOP" motion-flag name and the `jal Frame_CatchUpIfLagging` in Game_MainLoop
 	SIG_STR_ADDR   = 0x501688, SIG_STR_WORD = 0x504F5453, -- "STOP"                                  [code]
+	-- Fx10_BuildGeom 0x355820 draws g_RandSeed from the RENDER pass (Fx10_TaskProc -> Fx10_Draw on pass bits 0x1F0):
+	-- 4 x `jal Rand_RangeFloat` (+-0.005 cosmetic jitter). Replacing them with `mtc1 $zero,$f0` keeps the sim RNG
+	-- identical no matter what is drawn (required for rollback resim / netplay).                          [code]
+	FX10_RAND_JALS = { 0x355AA4, 0x355AC4, 0x355DE4, 0x355E04 }, FX10_JAL_WORD = 0x0C0839D0, MTC1_ZERO_F0 = 0x44800000,
 	CATCHUP_JAL    = 0x159F88, CATCHUP_WORD = 0x0C056898, -- jal Frame_CatchUpIfLagging (NOP = 1 sim tick/frame) [code]
 
 	-- players
@@ -88,7 +92,7 @@ local cfg = {
 	p_boxes = true, p_train = false, p_debug = false, p_state = true, p_rollback = false,
 	hurt = true, push = false, attack = true, pos = true, labels = true, hud = true,
 	freeze = false, lock_hp = false, lock_magic = false, magic_value = 3.0, lock_timer = false,
-	dbg_motion = false, dbg_camera = false, one_tick = false, snap_verify = false,
+	dbg_motion = false, dbg_camera = false, one_tick = false, snap_verify = false, netplay_rng = false,
 	box_thickness = 1.5, circle_fill_alpha = 0.25,
 	col_hurt   = { 0.24, 0.86, 0.35, 0.80 },
 	col_push   = { 0.35, 0.65, 1.00, 0.70 },
@@ -394,6 +398,11 @@ local function training_update()
 	dbg_cam_was = cfg.dbg_camera
 	-- determinism: exactly 1 sim tick per loop (no lag catch-up)
 	if cfg.one_tick then engine.patch(A.CATCHUP_JAL, 0) else engine.unpatch(A.CATCHUP_JAL) end
+	for _, a in ipairs(A.FX10_RAND_JALS) do
+		local w = rd32(a)
+		if cfg.netplay_rng and w == A.FX10_JAL_WORD then engine.patch(a, A.MTC1_ZERO_F0)
+		elseif not cfg.netplay_rng and w == A.MTC1_ZERO_F0 then engine.unpatch(a) end
+	end
 end
 
 -- ===================================================================================================
@@ -407,6 +416,50 @@ end
 local function crow(label, show_key, col_key)
 	ui.checkbox(label, show_key); imgui.SameLine(168); ui.color_row("##c" .. label, col_key)
 end
+
+-- ===================================================================================================
+-- incremental snapshot ring (engine Lua table `snap`) + file command channel for headless testing
+-- ===================================================================================================
+local function snap_start(wp)
+	snap.clear_regions()
+	snap.add_region(0x3B1080, 0x536280 - 0x3B1080)          -- .data/.bss
+	snap.add_region(0x5362C0, 0x01FBD000 - 0x5362C0)        -- heap arena (RwHeap + SysHeap), below EE stack
+	snap.add_exclude(0x00538FA0, 0x200090)                   -- GS/DMA packet buffer (RwHeap)
+	snap.add_exclude(0x00538660, 0x940)                      -- DMA chain list (RwHeap)
+	snap.add_exclude(0x01716330, 0x23200)                    -- audio PCM ring A (SysHeap)
+	snap.add_exclude(0x0175C7B0, 0x23200)                    -- audio PCM ring B (SysHeap)
+	snap.add_exclude(0x523D90, 8)                            -- vblank / presented-frame counters
+	snap.verify(cfg.snap_verify)
+	snap.start(7, wp)                                        -- 7 = Slippi ROLLBACK_MAX_FRAMES
+end
+
+-- scripts/snap_cmd.txt: one command per line (start_compare | start_wp | stop | verify on|off | rollback N |
+-- status); polled every 15 frames, deleted after running; results go to scripts/snap_status.txt.
+local CMD_DIR = (SCRIPT_PATH or ""):match("^(.*)[/\\]") or "."
+local cmd_poll = 0
+local function snap_commands()
+	if not snap then return end
+	cmd_poll = cmd_poll + 1
+	if cmd_poll < 15 then return end
+	cmd_poll = 0
+	local path = CMD_DIR .. "/snap_cmd.txt"
+	local f = io.open(path, "r")
+	if not f then return end
+	local text = f:read("*a"); f:close(); os.remove(path)
+	for line in text:gmatch("[^\r\n]+") do
+		local c, arg = line:match("^%s*(%S+)%s*(%S*)")
+		if c == "start_compare" then snap_start(false)
+		elseif c == "start_wp" then snap_start(true)
+		elseif c == "stop" then snap.stop()
+		elseif c == "verify" then cfg.snap_verify = (arg == "on"); snap.verify(cfg.snap_verify)
+		elseif c == "rollback" then snap.rollback(tonumber(arg) or 1)
+		elseif c == "netrng" then cfg.netplay_rng = (arg == "on")
+		end
+	end
+	local o = io.open(CMD_DIR .. "/snap_status.txt", "w")
+	if o then o:write(snap.status(), "\n"); o:close() end
+end
+
 
 local function control_window()
 	if not cfg.show_window then return end
@@ -448,24 +501,13 @@ local function control_window()
 		end
 		if pane("Rollback / determinism", "p_rollback") then
 			ui.checkbox("1 sim tick per frame (NOP lag catch-up @0x159F88)", "one_tick")
+			ui.checkbox("netplay-safe render RNG (Fx10 draw no longer consumes g_RandSeed)", "netplay_rng")
 			imgui.Text(string.format("round frame %d  vblank %d  rng %08X", rd32(A.ROUND_FRAME), rd32(A.VBLANK_COUNTER), rd32(A.RAND_SEED)))
 			imgui.Text(string.format("heap arena %08X  sys heap first blk %08X", rd32(A.HEAP_ARENA), rd32(A.SYS_HEAP + 4)))
 			-- Incremental page-snapshot ring (engine: Sdbz/PageSnapshotRing, Lua table `snap`). Regions/excludes =
 			-- notes/FUC_WORKING_SET.md (live census): static data+bss + heap arena up to the EE stack, minus the
 			-- render/audio buffers and wall-clock counters that must keep running linearly.
 			if snap then
-				local function snap_start(wp)
-					snap.clear_regions()
-					snap.add_region(0x3B1080, 0x536280 - 0x3B1080)          -- .data/.bss
-					snap.add_region(0x5362C0, 0x01FBD000 - 0x5362C0)        -- heap arena (RwHeap + SysHeap), below EE stack
-					snap.add_exclude(0x00538FA0, 0x200090)                   -- GS/DMA packet buffer (RwHeap)
-					snap.add_exclude(0x00538660, 0x940)                      -- DMA chain list (RwHeap)
-					snap.add_exclude(0x01716330, 0x23200)                    -- audio PCM ring A (SysHeap)
-					snap.add_exclude(0x0175C7B0, 0x23200)                    -- audio PCM ring B (SysHeap)
-					snap.add_exclude(0x523D90, 8)                            -- vblank / presented-frame counters
-					snap.verify(cfg.snap_verify)
-					snap.start(7, wp)                                        -- 7 = Slippi ROLLBACK_MAX_FRAMES
-				end
 				if imgui.Button("Snap: compare") then snap_start(false) end; imgui.SameLine()
 				if imgui.Button("Snap: write-protect") then snap_start(true) end; imgui.SameLine()
 				if imgui.Button("Stop") then snap.stop() end
@@ -481,6 +523,7 @@ local function control_window()
 	imgui.End()
 end
 
+
 -- ===================================================================================================
 -- host callbacks
 -- ===================================================================================================
@@ -493,6 +536,7 @@ function on_capture()
 end
 
 function on_frame()
+	snap_commands()
 	engine.set_cursor(cfg.show_window)
 	engine.set_gamepad_nav(cfg.controller_nav)
 	if not is_fuc() then return end
