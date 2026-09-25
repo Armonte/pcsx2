@@ -52,6 +52,7 @@ public:
 		u32 last_restored_pages = 0; // pages written by the last load
 		u64 last_capture_us = 0;
 		u64 last_load_us = 0;
+		u32 hot_pages = 0;           // write-protect mode: pages kept writable and compared instead
 		u64 pool_bytes = 0; // all page buffers currently allocated (live + free list)
 		u64 live_bytes = 0; // unique page buffers referenced by snapshots
 	};
@@ -95,6 +96,8 @@ private:
 	void CollectDirty(std::vector<u64>& bits);
 	void ArmWriteProtect();
 	void UpdateLiveBytes();
+	void UpdateHotPages(const std::vector<u64>& dirty);
+	std::vector<u64> HotRamBits() const;
 
 	std::vector<u32> m_page_index; // tracked EE page numbers (addr >> 12), sorted
 	std::vector<Range> m_excludes;
@@ -103,5 +106,14 @@ private:
 	u32 m_capacity;
 	DirtyMode m_mode;
 	u32 m_words; // u64 words per dirty bitset
+
+	// Write-protect mode, adaptive: a page written on consecutive captures is "hot" -- it stays writable and
+	// is checked by memcmp against its last captured copy, because a fault + re-protect per frame costs far
+	// more than comparing 4 KiB. A hot page that stays unchanged for HOT_COOLDOWN captures is re-protected.
+	static constexpr u8 HOT_PROMOTE = 2;
+	static constexpr u8 HOT_COOLDOWN = 8;
+	std::vector<u64> m_hot;          // bit per tracked index
+	std::vector<u8> m_dirty_streak;  // consecutive dirty captures
+	std::vector<u8> m_clean_streak;  // consecutive clean captures while hot
 	Stats m_stats;
 };

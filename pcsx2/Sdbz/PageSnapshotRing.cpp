@@ -74,6 +74,9 @@ PageSnapshotRing::PageSnapshotRing(std::vector<Range> regions, std::vector<Range
 	pages.erase(std::remove_if(pages.begin(), pages.end(), fully_excluded), pages.end());
 	m_page_index = std::move(pages);
 	m_words = static_cast<u32>((m_page_index.size() + 63) / 64);
+	m_hot.assign(m_words, 0);
+	m_dirty_streak.assign(m_page_index.size(), 0);
+	m_clean_streak.assign(m_page_index.size(), 0);
 	m_stats.tracked_pages = static_cast<u32>(m_page_index.size());
 
 	if (m_mode == DirtyMode::WriteProtect)
@@ -165,15 +168,69 @@ void PageSnapshotRing::CollectDirty(std::vector<u64>& bits)
 		return;
 	}
 
-	// WriteProtect: ram-page bitset from the fault handler -> tracked-index bitset.
+	// WriteProtect: ram-page bitset from the fault handler -> tracked-index bitset; hot pages (kept writable,
+	// so they no longer fault) are compared against their last captured copy instead.
 	std::vector<u64> ram_dirty;
-	vtlb_DirtyTrack_Rearm(&ram_dirty);
+	const std::vector<u64> hot_ram = HotRamBits();
+	vtlb_DirtyTrack_Rearm(&ram_dirty, &hot_ram);
 	for (u32 i = 0; i < m_page_index.size(); i++)
 	{
 		const u32 page = m_page_index[i];
-		if ((ram_dirty[page >> 6] >> (page & 63)) & 1)
+		if (TestBit(m_hot, i))
+		{
+			if (std::memcmp(RamPage(page), latest.pages[i]->data, PAGE_SIZE) != 0)
+				SetBit(bits, i);
+		}
+		else if ((ram_dirty[page >> 6] >> (page & 63)) & 1)
+		{
 			SetBit(bits, i);
+		}
 	}
+}
+
+std::vector<u64> PageSnapshotRing::HotRamBits() const
+{
+	std::vector<u64> ram((Ps2MemSize::TotalRam >> PAGE_SHIFT) / 64, 0);
+	for (u32 w = 0; w < m_words; w++)
+	{
+		u64 b = m_hot[w];
+		while (b)
+		{
+			const u32 page = m_page_index[w * 64 + static_cast<u32>(std::countr_zero(b))];
+			b &= b - 1;
+			ram[page >> 6] |= 1ull << (page & 63);
+		}
+	}
+	return ram;
+}
+
+void PageSnapshotRing::UpdateHotPages(const std::vector<u64>& dirty)
+{
+	if (m_mode != DirtyMode::WriteProtect)
+		return;
+	u32 hot = 0;
+	for (u32 i = 0; i < m_page_index.size(); i++)
+	{
+		const bool d = TestBit(dirty, i);
+		m_dirty_streak[i] = d ? static_cast<u8>(std::min(255, m_dirty_streak[i] + 1)) : 0;
+		if (TestBit(m_hot, i))
+		{
+			m_clean_streak[i] = d ? 0 : static_cast<u8>(std::min(255, m_clean_streak[i] + 1));
+			if (m_clean_streak[i] >= HOT_COOLDOWN)
+			{
+				m_hot[i >> 6] &= ~(1ull << (i & 63));
+				vtlb_DirtyTrack_Reprotect(m_page_index[i]); // back to fault-based tracking
+				continue;
+			}
+		}
+		else if (m_dirty_streak[i] >= HOT_PROMOTE)
+		{
+			SetBit(m_hot, i); // stays writable from the next rearm on
+			m_clean_streak[i] = 0;
+		}
+		hot += TestBit(m_hot, i) ? 1 : 0;
+	}
+	m_stats.hot_pages = hot;
 }
 
 void PageSnapshotRing::Capture(s32 frame)
@@ -224,6 +281,7 @@ void PageSnapshotRing::Capture(s32 frame)
 		m_ring.erase(m_ring.begin());
 	}
 
+	UpdateHotPages(dirty);
 	m_stats.snapshots = static_cast<u32>(m_ring.size());
 	m_stats.last_dirty_pages = copied;
 	m_stats.last_capture_us = static_cast<u64>(timer.GetTimeNanoseconds() / 1000.0);
@@ -283,6 +341,13 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 	}
 
 	u32 restored = 0;
+	u32 run_first = 0, run_len = 0; // consecutive RAM pages -> one unprotect call
+	auto flush_run = [&]() {
+		if (run_len && m_mode == DirtyMode::WriteProtect)
+			vtlb_DirtyTrack_Unprotect(run_first, run_len);
+		run_len = 0;
+	};
+	std::vector<u32> to_restore;
 	for (u32 w = 0; w < m_words; w++)
 	{
 		u64 bits = restore[w];
@@ -291,11 +356,22 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 			const u32 i = w * 64 + static_cast<u32>(std::countr_zero(bits));
 			bits &= bits - 1;
 			const u32 page = m_page_index[i];
-			if (m_mode == DirtyMode::WriteProtect)
-				vtlb_DirtyTrack_Unprotect(page);
-			std::memcpy(RamPage(page), it->pages[i]->data, PAGE_SIZE);
-			restored++;
+			if (run_len && page == run_first + run_len)
+				run_len++;
+			else
+			{
+				flush_run();
+				run_first = page;
+				run_len = 1;
+			}
+			to_restore.push_back(i);
 		}
+	}
+	flush_run();
+	for (const u32 i : to_restore)
+	{
+		std::memcpy(RamPage(m_page_index[i]), it->pages[i]->data, PAGE_SIZE);
+		restored++;
 	}
 
 	for (size_t k = 0; k < keep.size(); k++)
@@ -318,8 +394,10 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 
 	if (m_mode == DirtyMode::WriteProtect)
 	{
-		// Reset fault tracking to "clean vs target", then re-flag the kept ranges' pages.
-		vtlb_DirtyTrack_Rearm(nullptr);
+		// Reset fault tracking to "clean vs target" (hot pages stay writable and are compared), then re-flag
+		// the kept ranges' pages.
+		const std::vector<u64> hot_ram = HotRamBits();
+		vtlb_DirtyTrack_Rearm(nullptr, &hot_ram);
 		for (const Range& r : keep)
 		{
 			const u32 first = (r.address & RAM_MASK) >> PAGE_SHIFT;
@@ -345,8 +423,8 @@ void PageSnapshotRing::UpdateLiveBytes()
 std::string PageSnapshotRing::Describe() const
 {
 	return fmt::format("{} snaps | tracked {} KiB | last capture {} pages ({} KiB) {} us | last load {} pages {} us | "
-					   "live {} KiB, pool {} KiB | {}",
+					   "live {} KiB, pool {} KiB | hot {} | {}",
 		m_stats.snapshots, m_stats.tracked_pages * 4, m_stats.last_dirty_pages, m_stats.last_dirty_pages * 4,
 		m_stats.last_capture_us, m_stats.last_restored_pages, m_stats.last_load_us, m_stats.live_bytes / 1024,
-		m_stats.pool_bytes / 1024, m_mode == DirtyMode::Compare ? "compare" : "write-protect");
+		m_stats.pool_bytes / 1024, m_stats.hot_pages, m_mode == DirtyMode::Compare ? "compare" : "write-protect");
 }

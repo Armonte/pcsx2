@@ -1633,7 +1633,7 @@ bool vtlb_DirtyTrack_IsEnabled()
 	return s_dirty_track_enabled;
 }
 
-void vtlb_DirtyTrack_Rearm(std::vector<u64>* out)
+void vtlb_DirtyTrack_Rearm(std::vector<u64>* out, const std::vector<u64>* stay_writable)
 {
 	if (out)
 		out->assign(DIRTY_TRACK_WORDS, 0);
@@ -1648,6 +1648,8 @@ void vtlb_DirtyTrack_Rearm(std::vector<u64>* out)
 
 		// Only dirty pages lost their protection; protect contiguous runs in one call each.
 		u64 bits = dirty;
+		if (stay_writable && w < stay_writable->size())
+			bits &= ~(*stay_writable)[w];
 		while (bits)
 		{
 			const u32 first = static_cast<u32>(std::countr_zero(bits));
@@ -1659,13 +1661,40 @@ void vtlb_DirtyTrack_Rearm(std::vector<u64>* out)
 	}
 }
 
-void vtlb_DirtyTrack_Unprotect(u32 ram_page)
+void vtlb_DirtyTrack_Unprotect(u32 ram_page, u32 count)
 {
-	if (!DirtyTrack_IsTracked(ram_page))
+	if (!s_dirty_track_enabled)
 		return;
-	s_dirty_bits[ram_page >> 6].fetch_or(1ull << (ram_page & 63), std::memory_order_relaxed);
-	if (m_PageProtectInfo[ram_page].Mode == ProtMode_Write)
-		mmap_ClearCpuBlock(ram_page << __pageshift);
-	else
-		DirtyTrack_SetPageProtection(ram_page, 1, PageAccess_ReadWrite());
+	// Contiguous plain-data pages are unprotected with one call; code pages take the normal SMC path.
+	u32 run_start = 0, run_len = 0;
+	auto flush = [&]() {
+		if (run_len)
+			DirtyTrack_SetPageProtection(run_start, run_len, PageAccess_ReadWrite());
+		run_len = 0;
+	};
+	for (u32 page = ram_page; page < ram_page + count; page++)
+	{
+		if (!DirtyTrack_IsTracked(page))
+		{
+			flush();
+			continue;
+		}
+		s_dirty_bits[page >> 6].fetch_or(1ull << (page & 63), std::memory_order_relaxed);
+		if (m_PageProtectInfo[page].Mode == ProtMode_Write)
+		{
+			flush();
+			mmap_ClearCpuBlock(page << __pageshift);
+			continue;
+		}
+		if (run_len == 0)
+			run_start = page;
+		run_len++;
+	}
+	flush();
+}
+
+void vtlb_DirtyTrack_Reprotect(u32 ram_page)
+{
+	if (DirtyTrack_IsTracked(ram_page))
+		DirtyTrack_SetPageProtection(ram_page, 1, PageAccess_ReadOnly());
 }
