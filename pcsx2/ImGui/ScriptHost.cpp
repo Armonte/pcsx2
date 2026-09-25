@@ -169,6 +169,7 @@ namespace
 		rd.set_function("set_rng_split", [](uint32_t a, uint32_t n) { RollbackDevice::SetRngSplit(a, n); });
 		rd.set_function("add_gate_stable", [](uint32_t a, uint32_t n) { RollbackDevice::AddGateStable(a, n); });
 		rd.set_function("set_rng_trace", [](bool on) { RollbackDevice::SetRngTrace(on); });
+		rd.set_function("add_trace_alias", [](uint32_t from, uint32_t to) { RollbackDevice::AddTraceAlias(from, to); });
 		rd.set_function("status", []() { return RollbackDevice::Status(); });
 		rd.set_function("report", []() { return RollbackDevice::ReportText(); });
 		rd.set("MAGIC", RollbackDevice::MAGIC);

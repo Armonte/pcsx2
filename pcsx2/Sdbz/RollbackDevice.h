@@ -75,6 +75,7 @@ namespace RollbackDevice
 	// it, and reports the first differing call. Calls made outside both the simulation step and the render section are
 	// counted separately (they advance the simulation stream behind re-simulation's back).
 	void SetRngTrace(bool on);
+	void AddTraceAlias(u32 ra_from, u32 ra_to); // a determinism stub's call site stands in for the original one
 	// Split RNG: the game's single RNG state is also consumed by rendering (HUD flicker, particle jitter, script event
 	// handlers on draw passes). Re-simulation doesn't render, so the simulation stream would drift. With this set, the
 	// device swaps in a separate render stream between CMD_RENDER_BEGIN/END; the simulation stream then advances only

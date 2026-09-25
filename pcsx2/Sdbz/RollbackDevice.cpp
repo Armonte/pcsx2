@@ -83,6 +83,7 @@ namespace RollbackDevice
 		u32 s_trace_other_first_ra = 0;
 		std::string s_trace_first_mismatch;
 		std::map<u64, u64> s_trace_other_sites;       // (fn<<32|ra) -> count, calls outside sim/render
+		std::map<u32, u32> s_trace_alias;             // stub ra -> original call-site ra
 
 		std::vector<Range> s_stable;
 		std::vector<u64> s_stable_hash;            // [frame % INPUT_HISTORY]
@@ -305,6 +306,12 @@ namespace RollbackDevice
 	{
 		std::lock_guard lk(s_mtx);
 		s_trace = on;
+	}
+
+	void AddTraceAlias(u32 ra_from, u32 ra_to)
+	{
+		std::lock_guard lk(s_mtx);
+		s_trace_alias[ra_from] = ra_to;
 	}
 
 	void AddGateStable(u32 addr, u32 len)
@@ -565,7 +572,9 @@ namespace RollbackDevice
 			default:
 				if (cmd >= CMD_RNG_TRACE && cmd < CMD_RNG_TRACE + 16 && s_trace)
 				{
-					const u64 key = (static_cast<u64>(cmd - CMD_RNG_TRACE) << 32) | arg;
+					const auto al = s_trace_alias.find(arg);
+					const u32 ra = (al != s_trace_alias.end()) ? al->second : arg;
+					const u64 key = (static_cast<u64>(cmd - CMD_RNG_TRACE) << 32) | ra;
 					switch (s_phase)
 					{
 						case Phase::NormalSim:
