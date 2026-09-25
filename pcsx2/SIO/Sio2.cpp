@@ -345,8 +345,6 @@ void Sio2::Memcard()
 		return;
 	}
 
-	const u8 commandByte = g_Sio2FifoIn.front();
-
 	SetCmdStat(mcd->IsPresent() ? CmdStat::CONNECTED : CmdStat::DISCONNECTED);
 
 	g_Sio2FifoIn.pop_front();
