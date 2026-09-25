@@ -31,6 +31,7 @@ BIOS
 #include "SPU2/spu2.h"
 #include "SaveState.h"
 #include "VUmicro.h"
+#include "VMManager.h"
 
 #include "ps2/HwInternal.h"
 #include "ps2/BiosTools.h"
@@ -413,7 +414,12 @@ void memMapPhy()
 
 	// Various ROMs (all read-only)
 	vtlb_MapBlock(eeMem->ROM,	0x1fc00000, Ps2MemSize::Rom);
-	vtlb_MapBlock(eeMem->ROM1,	0xB0000000, Ps2MemSize::Rom1); // on a COH-H model, rom1: is declared by rom0:ACDEV. https://github.com/ps2dev/ps2sdk/blob/566ed82da2c57ed0e86dfbec5b69a8f1d0ecb76b/iop/arcade/acdev/src/acdev.c#L39-L56
+	// Retail: ROM1 (DVD player ROM) sits at physical 0x1e000000. On a COH-H (System 246/256) rom1: is declared by
+	// rom0:ACDEV instead (https://github.com/ps2dev/ps2sdk/blob/566ed82da2c57ed0e86dfbec5b69a8f1d0ecb76b/iop/arcade/acdev/src/acdev.c#L39-L56),
+	// so arcade boots leave it unmapped. (It used to be "mapped" at 0xB0000000, a KSEG1 *virtual* address: the physical
+	// map only covers 512 MB, so that wrote 1024 entries far past vtlbdata.pmap into unrelated globals.)
+	if (!VMManager::IsArcadeGame())
+		vtlb_MapBlock(eeMem->ROM1,	0x1e000000, Ps2MemSize::Rom1);
 	vtlb_MapBlock(eeMem->ROM2,	0x1e400000, Ps2MemSize::Rom2);
 
 	// IOP memory
