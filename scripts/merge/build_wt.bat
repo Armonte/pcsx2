@@ -2,7 +2,7 @@
 REM Build a worktree: build_wt.bat <worktree-name> [deps|configure|build]
 REM   deps      = build that worktree's own Windows deps (wt\<name>\deps), matching its CI script
 REM   configure = cmake configure (Ninja, Release) into wt\<name>\build
-REM   build     = incremental build
+REM   build     = incremental build + install into wt\<name>\bin (runnable)
 setlocal
 set "WT=C:\dev\pcsx2\wt\%1"
 cd /d "%WT%" || exit /b 1
@@ -20,5 +20,9 @@ if "%2"=="deps" (
 if "%2"=="configure" (
   cmake . -B build "-DCMAKE_PREFIX_PATH=%WT%\deps" -DQT_BUILD=ON -DCMAKE_BUILD_TYPE=Release -DDISABLE_ADVANCE_SIMD=ON -G Ninja || ( echo === CONFIGURE_FAILED === && exit /b 2 )
 )
-cmake --build build --config Release
-echo === BUILD_EXITCODE=%errorlevel% ===
+if not defined JOBS set JOBS=0
+if "%JOBS%"=="0" (cmake --build build --config Release) else (cmake --build build --config Release --parallel %JOBS%)
+if errorlevel 1 ( echo === BUILD_EXITCODE=1 === & exit /b 1 )
+REM install = assemble the runnable tree (DLLs, Qt plugins via windeployqt) into wt\<name>\bin
+cmake --install build || ( echo === INSTALL_FAILED === & exit /b 1 )
+echo === BUILD_EXITCODE=0 ===
