@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
+#include <atomic>
 #include "BuildVersion.h"
 #include "Config.h"
 #include "Counters.h"
@@ -644,15 +645,23 @@ namespace ScriptBridge
 	void WriteDataF32(uint32_t a, float v) { EeStoreF(a, v); }
 	void WriteData8(uint32_t a, uint8_t v) { EeStore8(a, v); }
 
-	// recompiler-safe EE code-patch registry (script-managed NOPs, hooks and code caves): address -> original word.
-	// Unbounded (it used to be 64 fixed slots that silently dropped patches when full -- a rollback routine of 78
-	// words + hooks overflowed it and the hooks were never written). ALL access is on the CPU thread.
-	static std::unordered_map<u32, u32> s_lua_patches;
+	// recompiler-safe EE code-patch registry (script-managed NOPs, hooks and code caves): address -> {original word,
+	// patched word}. Unbounded (it used to be 64 fixed slots that silently dropped patches when full -- a rollback
+	// routine of 78 words + hooks overflowed it and the hooks were never written). ALL access is on the CPU thread.
+	struct LuaPatch { u32 orig, patched; };
+	static std::unordered_map<u32, LuaPatch> s_lua_patches;
+	static std::atomic<u32> s_state_load_serial{0};
+	static std::atomic<u32> s_state_load_stats[3]; // reapplied, kept, dropped (last load)
+	static void WritePatchWord(u32 addr, u32 word) {
+		memWrite32(addr, word);
+		if (Cpu) Cpu->Clear(addr, 4);
+	}
 	void PatchCode(uint32_t addr, uint32_t word) {
 		Host::RunOnCPUThread([addr, word]() {
-			s_lua_patches.try_emplace(addr, memRead32(addr)); // keep the ORIGINAL word from the first patch
-			memWrite32(addr, word);
-			if (Cpu) Cpu->Clear(addr, 4);
+			// keep the ORIGINAL word from the first patch; remember the latest patched word
+			auto [it, inserted] = s_lua_patches.try_emplace(addr, LuaPatch{memRead32(addr), word});
+			it->second.patched = word;
+			WritePatchWord(addr, word);
 		}, false);
 	}
 	void UnpatchCode(uint32_t addr) {
@@ -660,10 +669,54 @@ namespace ScriptBridge
 			auto it = s_lua_patches.find(addr);
 			if (it == s_lua_patches.end())
 				return;
-			memWrite32(addr, it->second);
-			if (Cpu) Cpu->Clear(addr, 4);
+			WritePatchWord(addr, it->second.orig);
 			s_lua_patches.erase(it);
 		}, false);
+	}
+
+	// Savestates never contain script patches: the originals are put back while the state is downloaded and the
+	// patches re-applied right after, so a state is pristine game memory whatever the script had installed.
+	void BeginStateSave() {
+		for (const auto& [addr, p] : s_lua_patches)
+			WritePatchWord(addr, p.orig);
+		if (!s_lua_patches.empty())
+			Console.WriteLn("[Script] state save: %zu patched words written as originals", s_lua_patches.size());
+	}
+	void EndStateSave() {
+		for (const auto& [addr, p] : s_lua_patches)
+			WritePatchWord(addr, p.patched);
+	}
+
+	// A state load replaced EE memory under the registry. Reconcile every patch: original word -> re-apply (states
+	// are saved clean), patched word -> keep (a state saved by an older build), anything else -> the state has other
+	// code at that address: drop the entry and leave memory alone. The script sees the result in on_state_load().
+	void OnStateLoaded() {
+		u32 reapplied = 0, kept = 0, dropped = 0;
+		for (auto it = s_lua_patches.begin(); it != s_lua_patches.end();) {
+			const u32 cur = memRead32(it->first);
+			if (cur == it->second.patched) {
+				kept++;
+				++it;
+			} else if (cur == it->second.orig) {
+				WritePatchWord(it->first, it->second.patched);
+				reapplied++;
+				++it;
+			} else {
+				Console.Warning("[Script] state load: patch @%08X dropped (memory %08X, expected original %08X or patch %08X)",
+					it->first, cur, it->second.orig, it->second.patched);
+				dropped++;
+				it = s_lua_patches.erase(it);
+			}
+		}
+		s_state_load_stats[0] = reapplied;
+		s_state_load_stats[1] = kept;
+		s_state_load_stats[2] = dropped;
+		s_state_load_serial.fetch_add(1);
+		Console.WriteLn("[Script] state load: patches re-applied %u, kept %u, dropped %u", reapplied, kept, dropped);
+	}
+	u32 StateLoadSerial() { return s_state_load_serial.load(); }
+	void StateLoadStats(u32& reapplied, u32& kept, u32& dropped) {
+		reapplied = s_state_load_stats[0]; kept = s_state_load_stats[1]; dropped = s_state_load_stats[2];
 	}
 
 	// Restore EVERY active script patch. The registry is a static that outlives the sol::state, so a code NOP
@@ -675,10 +728,8 @@ namespace ScriptBridge
 	void UnpatchAll() {
 		g_mouse_claimed = false; // clear any stale claim on script reload/disable
 		Host::RunOnCPUThread([]() {
-			for (const auto& [addr, orig] : s_lua_patches) {
-				memWrite32(addr, orig);
-				if (Cpu) Cpu->Clear(addr, 4);
-			}
+			for (const auto& [addr, p] : s_lua_patches)
+				WritePatchWord(addr, p.orig);
 			s_lua_patches.clear();
 		}, false);
 	}

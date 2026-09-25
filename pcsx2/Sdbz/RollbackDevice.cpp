@@ -463,6 +463,23 @@ namespace RollbackDevice
 		s_ring.reset();
 	}
 
+	void OnStateLoaded()
+	{
+		Mode mode;
+		u32 frames;
+		bool wp;
+		{
+			std::lock_guard lk(s_mtx);
+			if (s_mode == Mode::Off)
+				return;
+			mode = s_mode;
+			frames = s_rollback;
+			wp = s_write_protect;
+		}
+		Start(mode, frames, wp); // resets runtime state + ring, keeps config
+		Console.WriteLn("RollbackDevice: state loaded -> snapshots dropped, restarted (mode %d, R=%u)", static_cast<int>(mode), frames);
+	}
+
 	void OnVMShutdown()
 	{
 		std::lock_guard lk(s_mtx);
