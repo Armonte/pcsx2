@@ -88,7 +88,7 @@ local cfg = {
 	p_boxes = true, p_train = false, p_debug = false, p_state = true, p_rollback = false,
 	hurt = true, push = false, attack = true, pos = true, labels = true, hud = true,
 	freeze = false, lock_hp = false, lock_magic = false, magic_value = 3.0, lock_timer = false,
-	dbg_motion = false, dbg_camera = false, one_tick = false,
+	dbg_motion = false, dbg_camera = false, one_tick = false, snap_verify = false,
 	box_thickness = 1.5, circle_fill_alpha = 0.25,
 	col_hurt   = { 0.24, 0.86, 0.35, 0.80 },
 	col_push   = { 0.35, 0.65, 1.00, 0.70 },
@@ -450,7 +450,32 @@ local function control_window()
 			ui.checkbox("1 sim tick per frame (NOP lag catch-up @0x159F88)", "one_tick")
 			imgui.Text(string.format("round frame %d  vblank %d  rng %08X", rd32(A.ROUND_FRAME), rd32(A.VBLANK_COUNTER), rd32(A.RAND_SEED)))
 			imgui.Text(string.format("heap arena %08X  sys heap first blk %08X", rd32(A.HEAP_ARENA), rd32(A.SYS_HEAP + 4)))
-			imgui.TextDisabled("Snapshot = .data/.bss 0x3B1080..0x536280 + heap arena (see engine_loop.md).\nTODO: rollback.* host API is still SDBZ-specific (pad layout / heap bound).")
+			-- Incremental page-snapshot ring (engine: Sdbz/PageSnapshotRing, Lua table `snap`). Regions/excludes =
+			-- notes/FUC_WORKING_SET.md (live census): static data+bss + heap arena up to the EE stack, minus the
+			-- render/audio buffers and wall-clock counters that must keep running linearly.
+			if snap then
+				local function snap_start(wp)
+					snap.clear_regions()
+					snap.add_region(0x3B1080, 0x536280 - 0x3B1080)          -- .data/.bss
+					snap.add_region(0x5362C0, 0x01FBD000 - 0x5362C0)        -- heap arena (RwHeap + SysHeap), below EE stack
+					snap.add_exclude(0x00538FA0, 0x200090)                   -- GS/DMA packet buffer (RwHeap)
+					snap.add_exclude(0x00538660, 0x940)                      -- DMA chain list (RwHeap)
+					snap.add_exclude(0x01716330, 0x23200)                    -- audio PCM ring A (SysHeap)
+					snap.add_exclude(0x0175C7B0, 0x23200)                    -- audio PCM ring B (SysHeap)
+					snap.add_exclude(0x523D90, 8)                            -- vblank / presented-frame counters
+					snap.verify(cfg.snap_verify)
+					snap.start(7, wp)                                        -- 7 = Slippi ROLLBACK_MAX_FRAMES
+				end
+				if imgui.Button("Snap: compare") then snap_start(false) end; imgui.SameLine()
+				if imgui.Button("Snap: write-protect") then snap_start(true) end; imgui.SameLine()
+				if imgui.Button("Stop") then snap.stop() end
+				if imgui.Button("Rollback 1") then snap.rollback(1) end; imgui.SameLine()
+				if imgui.Button("Rollback 6") then snap.rollback(6) end; imgui.SameLine()
+				if ui.checkbox("verify loads", "snap_verify") then snap.verify(cfg.snap_verify) end
+				imgui.TextWrapped(snap.status())
+			else
+				imgui.TextDisabled("snap.* not available in this build")
+			end
 		end
 	end
 	imgui.End()

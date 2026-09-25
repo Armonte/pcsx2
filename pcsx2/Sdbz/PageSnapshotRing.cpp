@@ -60,6 +60,18 @@ PageSnapshotRing::PageSnapshotRing(std::vector<Range> regions, std::vector<Range
 	}
 	std::sort(pages.begin(), pages.end());
 	pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
+
+	// A page lying entirely inside an exclude range is never rolled back, so don't track it at all: it would
+	// otherwise be copied on every capture (render/audio buffers are dirty every frame) and re-protected on
+	// every load. Only partially excluded pages stay tracked; their excluded bytes are preserved on load.
+	auto fully_excluded = [this](u32 page) {
+		const u32 lo = page << PAGE_SHIFT, hi = lo + PAGE_SIZE;
+		return std::any_of(m_excludes.begin(), m_excludes.end(), [lo, hi](const Range& e) {
+			const u32 a = e.address & RAM_MASK;
+			return a <= lo && a + e.length >= hi;
+		});
+	};
+	pages.erase(std::remove_if(pages.begin(), pages.end(), fully_excluded), pages.end());
 	m_page_index = std::move(pages);
 	m_words = static_cast<u32>((m_page_index.size() + 63) / 64);
 	m_stats.tracked_pages = static_cast<u32>(m_page_index.size());
@@ -240,8 +252,29 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 	}
 
 	// Live bytes that must survive the rewind: excludes (never rolled back) + caller preserves.
-	std::vector<Range> keep = m_excludes;
-	keep.insert(keep.end(), preserve.begin(), preserve.end());
+	// Only the parts that fall in tracked pages matter: untracked pages are never written by a load.
+	std::vector<Range> keep;
+	auto add_tracked_parts = [this, &keep](const Range& r) {
+		u32 a = r.address & RAM_MASK;
+		const u32 end = a + r.length;
+		while (a < end)
+		{
+			const u32 page = a >> PAGE_SHIFT;
+			const u32 next = std::min(end, (page + 1) << PAGE_SHIFT);
+			if (std::binary_search(m_page_index.begin(), m_page_index.end(), page))
+			{
+				if (!keep.empty() && keep.back().address + keep.back().length == a)
+					keep.back().length += next - a;
+				else
+					keep.push_back({a, next - a});
+			}
+			a = next;
+		}
+	};
+	for (const Range& r : m_excludes)
+		add_tracked_parts(r);
+	for (const Range& r : preserve)
+		add_tracked_parts(r);
 	std::vector<std::vector<u8>> kept(keep.size());
 	for (size_t k = 0; k < keep.size(); k++)
 	{
