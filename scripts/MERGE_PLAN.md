@@ -72,3 +72,10 @@ merge `upstream/master`, `reliquary/master`, `x6-sync`, `sdbz-up` (that order). 
   `s_pointer_button_state` arrays in InputManager (kept reliquary's atomic one).
 - Windows deps: harfbuzz 14.2 / rapidyaml 0.12.1 zips contain symlinks 7-Zip can't create without privilege -> excluded.
 - Windows deps: the deps `.bat` must have CRLF line endings when checked out from WSL, or cmd.exe skips lines.
+- Reliquary removed `actionShowAdvancedSettings` (advanced mode forced on); upstream later edited next to it
+  (Controller Tester, v2.9.84+): keep upstream's new actions, keep the removal (rerere has it recorded).
+- Windows build OOM (C1060/C3859) when other builds run concurrently: `set JOBS=4&& build_wt.bat <wt> build`.
+
+## Sync log
+- 2026-09-25: integration = reliquary e1a9005e3 + x6 583f0e909 + upstream 2c804670c (v2.9.84 + 4) + sdbz-up;
+  0 commits missing from any source. Windows build OK; FUC boots and sync-tests on it.
