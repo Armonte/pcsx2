@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "MemoryTypes.h"
 
 #include "common/HostSys.h"
@@ -231,6 +233,20 @@ enum vtlb_ProtectionMode
 extern vtlb_ProtectionMode mmap_GetRamPageInfo(u32 paddr);
 extern void mmap_MarkCountedRamPage(u32 paddr);
 extern void mmap_ResetBlockTracking();
+
+// Rollback dirty-page tracking (PageSnapshotRing WriteProtect mode). Pages are eeMem->Main page
+// numbers (RAM offset >> 12). Tracked pages are write-protected (main + fastmem views); the first
+// write to one faults once, marks it dirty and unprotects it. Shares the page-fault handler with
+// recompiler code protection: a tracked page that also holds recompiled code keeps the normal
+// code-write handling (block clear + manual protection) and is additionally marked dirty.
+extern void vtlb_DirtyTrack_Enable(const std::vector<u32>& ram_pages);
+extern void vtlb_DirtyTrack_Disable();
+extern bool vtlb_DirtyTrack_IsEnabled();
+// Copies the dirty set (bit i = ram page i) into `out` (resized to TotalRam pages / 64), clears it
+// and write-protects every tracked page again.
+extern void vtlb_DirtyTrack_Rearm(std::vector<u64>* out);
+// Marks a tracked page dirty and makes it writable (host-side writes such as a snapshot load).
+extern void vtlb_DirtyTrack_Unprotect(u32 ram_page);
 
 // --------------------------------------------------------------------------------------
 //  Goemon game fix
