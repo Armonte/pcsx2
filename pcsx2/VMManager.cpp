@@ -44,6 +44,7 @@
 #include "VMManager.h"
 #include "Sdbz/SnapshotBench.h"
 #include "Sdbz/RollbackDevice.h"
+#include "ImGui/ScriptBridge.h"
 #include "ps2/BiosTools.h"
 
 #include "common/Console.h"
@@ -1947,6 +1948,10 @@ bool VMManager::DoLoadState(const char* filename, Error* error)
 	if (!SaveState_UnzipFromDisk(filename, error))
 		return false;
 
+	// EE memory was replaced: reconcile script code patches, and drop rollback snapshots of the old memory.
+	ScriptBridge::OnStateLoaded();
+	RollbackDevice::OnStateLoaded();
+
 	Host::OnSaveStateLoaded(filename, true);
 	if (g_InputRecording.isActive())
 	{
@@ -1967,7 +1972,9 @@ void VMManager::DoSaveState(const char* filename, s32 slot_for_message, bool zip
 	}
 
 	Error error;
+	ScriptBridge::BeginStateSave(); // states never contain script code patches
 	std::unique_ptr<ArchiveEntryList> elist = SaveState_DownloadState(&error);
+	ScriptBridge::EndStateSave();
 	if (!elist)
 	{
 		error_callback(error.GetDescription());

@@ -10,6 +10,8 @@
 
 #include "Config.h" // EmuFolders
 #include "VMManager.h" // disc serial -> per-game script
+#include "Host.h"
+#include "common/Error.h"
 #include "common/StringUtil.h"
 
 #include "common/Console.h"
@@ -302,6 +304,25 @@ namespace
 		// recompiler-safe EE code patching, for script-owned freeze/freecam NOPs (saves+restores the original)
 		eng.set_function("patch", [](uint32_t addr, uint32_t word) { ScriptBridge::PatchCode(addr, word); });
 		eng.set_function("unpatch", [](uint32_t addr) { ScriptBridge::UnpatchCode(addr); });
+		// savestates for fast iteration (queued on the CPU thread; states are saved without script patches and a
+		// load reconciles them, then on_state_load(reapplied, kept, dropped) runs on the next frame)
+		eng.set_function("save_state", [](std::string path) {
+			Host::RunOnCPUThread([path]() {
+				VMManager::SaveState(path.c_str(), false, false, [path](const std::string& err) {
+					Console.ErrorFmt("[Script] save_state {} failed: {}", path, err);
+				});
+				Console.WriteLnFmt("[Script] state saved: {}", path);
+			}, false);
+		});
+		eng.set_function("load_state", [](std::string path) {
+			Host::RunOnCPUThread([path]() {
+				Error err;
+				if (VMManager::LoadState(path.c_str(), &err))
+					Console.WriteLnFmt("[Script] state loaded: {}", path);
+				else
+					Console.ErrorFmt("[Script] load_state {} failed: {}", path, err.GetDescription());
+			}, false);
+		});
 		eng.set_function("set_aspect", [](int i) { ScriptBridge::SetAspect(i); });
 		eng.set_function("get_aspect", []() { return ScriptBridge::GetAspect(); });
 		eng.set_function("set_deinterlace", [](int m) { ScriptBridge::SetDeinterlace(m); });
@@ -646,6 +667,26 @@ namespace Script
 		// Re-arm the per-call instruction budget each frame (resets the count).
 		lua_sethook(s_state->lua_state(), InsnBudgetHook, LUA_MASKCOUNT, SDBZ_LUA_INSN_BUDGET);
 		DrainDispatch(); // deliver queued hotkeys (on_hotkey) before this frame
+
+		// A savestate was loaded since the last frame: tell the script (it re-arms its own state; code patches were
+		// already reconciled on the CPU thread) -- on_state_load(reapplied, kept, dropped).
+		static u32 s_seen_state_load = ScriptBridge::StateLoadSerial();
+		if (const u32 serial = ScriptBridge::StateLoadSerial(); serial != s_seen_state_load)
+		{
+			s_seen_state_load = serial;
+			sol::protected_function fn = (*s_state)["on_state_load"];
+			if (fn.valid())
+			{
+				u32 reapplied, kept, dropped;
+				ScriptBridge::StateLoadStats(reapplied, kept, dropped);
+				sol::protected_function_result r = fn(reapplied, kept, dropped);
+				if (!r.valid())
+				{
+					sol::error e = r;
+					Console.ErrorFmt("[Script] on_state_load error: {}", e.what());
+				}
+			}
+		}
 
 		// on_frame = GS-thread work: engine bookkeeping (cursor/nav/training/patches/camera/freecam/freeze) + the
 		// stats HUD. The frame-perfect box geometry is captured separately on the EE thread (on_capture/RunCapture).

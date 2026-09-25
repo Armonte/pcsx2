@@ -75,6 +75,12 @@ namespace ScriptBridge
 	void  PatchCode(uint32_t addr, uint32_t word); // save original once, write word, invalidate block (CPU thread)
 	void  UnpatchCode(uint32_t addr);              // restore the saved original (CPU thread)
 	void  UnpatchAll();                            // restore EVERY active patch (script reload/disable teardown)
+	// Savestate integration (CPU thread): states are saved without patches; a load reconciles the registry.
+	void  BeginStateSave();
+	void  EndStateSave();
+	void  OnStateLoaded();
+	uint32_t StateLoadSerial();                    // increments on every state load (script host polls it)
+	void  StateLoadStats(uint32_t& reapplied, uint32_t& kept, uint32_t& dropped);
 	bool  KeyDown(int vk);                          // Windows VK_* currently held
 	void  MouseDelta(float& dx, float& dy);
 	void  MousePos(float& x, float& y);             // absolute ImGui cursor position (screen px) for 2D hit-testing
