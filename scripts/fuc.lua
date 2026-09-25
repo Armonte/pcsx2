@@ -474,6 +474,10 @@ local function rb_start(mode)
 	rbdev.add_ignore(0x4D9890, 0x10)       -- RW sky pipeline scratch (sub_26CFF0 family)
 	rbdev.add_ignore(0x531340, 0x180)      -- RW sky driver render state (sub_2F8018/2FF390/301570)
 	rbdev.add_exclude(0x51A420, 0x20)                         -- g_SndStreamCh (sound stream state)
+	rbdev.add_exclude(0x522C40, 4)                            -- g_FileSysMode        (async IO state: never rewound)
+	rbdev.add_exclude(0x522C70, 0x2C)                         -- g_Fdb* file cache metadata
+	rbdev.add_exclude(0x522D00, 0x18)                         -- g_LoadReq* async load requests
+	rbdev.set_gate(A.ROUND_FRAME)                             -- roll back only while the battle sim is ticking
 	rbdev.add_ignore(0x523EB4, 12)                            -- g_TaskEventArg0..2 (scratch set before render passes)
 	local camobj = rd32(A.OVERRIDE_CAM)
 	if ptr_ok(camobj) and ptr_ok(rd32(camobj + A.CAMOBJ_RWCAM)) then

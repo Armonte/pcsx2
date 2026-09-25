@@ -59,6 +59,10 @@ namespace RollbackDevice
 	void SetInputBlock(u32 addr, u32 len);    // per-frame input state recorded/injected by the device
 	void AddCompareIgnore(u32 addr, u32 len); // sync test: state known not to matter (render-only), not reported
 	void AddWatch(u32 addr, u32 len, const std::string& name); // sync test: named sim state, reported by name
+	// Rollback gate (Slippi only rolls back during active gameplay): a u32 counter that advances only while the game
+	// simulation is live (e.g. the battle frame counter). A rollback happens only if it advanced on every frame of the
+	// window; menus, pauses, round transitions and loads (async IO that must not be rewound) are never rolled back.
+	void SetGate(u32 counter_addr);
 
 	void Start(Mode mode, u32 rollback_frames, bool write_protect);
 	void Stop();
