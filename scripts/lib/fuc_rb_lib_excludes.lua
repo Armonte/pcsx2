@@ -1,20 +1,56 @@
--- Generated from notes/rollback_lib_excludes.txt: static data accessed ONLY by Sony/CRI/libc code, extent up to the
--- next referenced item (arrays are addressed through their base), plus EE thread stacks (kernel top 0x5094E0, sceMc
--- read-fast 0x514910, CRI ADX x6 0x3B7520..0x3BED28) and the PS2RNA IOP DMA buffer 0x3CC3B8. The newlib reent
--- (0x3B1E00..0x3B2300, libc rand seed 0x3B1F70 read by game code) is deliberately kept tracked.
+-- Generated (notes/rollback_lib_excludes.txt + notes/rollback_io_excludes.txt). Never rolled back:
+--  * static data accessed ONLY by Sony/CRI/libc code (extent up to the next referenced item), EE thread stacks,
+--    PS2RNA DMA buffer;
+--  * I/O-subsystem state accessed only by the game's own sound/stream/loader/movie wrappers (Snd*/Adx*/Fdb/LoadReq/
+--    FileSys/Res_Load*/Movie*/Voice*): sound command ring + indices, banks, slots, stream channels, file cache, loader.
+--    Rewinding these while the IOP side keeps going corrupted state and hung FUC at round end.
+-- Kept tracked on purpose: newlib reent (libc rand seed 0x3B1F70), the gp .sdata area (0x510470), the pad block.
 return {
 	{ 0x3B1390, 0xA70 },
 	{ 0x3B2628, 0x20DF0 },
+	{ 0x3D5AD8, 0x7A8 },
+	{ 0x3D7B90, 0x20 },
+	{ 0x3DF610, 0x40 },
+	{ 0x3DF8F0, 0x2A0 },
 	{ 0x4DA450, 0x1BB0 },
+	{ 0x4DC040, 0x4 },
+	{ 0x4DC180, 0x140 },
 	{ 0x4E1E10, 0xF0 },
 	{ 0x4E2000, 0x1319 },
 	{ 0x4E3420, 0x71D0 },
+	{ 0x4FE1D0, 0x80 },
+	{ 0x501460, 0x10 },
+	{ 0x501678, 0x110 },
+	{ 0x501838, 0x10 },
+	{ 0x501850, 0x10 },
+	{ 0x501868, 0x10 },
+	{ 0x501880, 0x98 },
+	{ 0x501940, 0x58 },
+	{ 0x501ED0, 0x20 },
+	{ 0x501F08, 0x8 },
+	{ 0x501F30, 0x48 },
+	{ 0x503E40, 0xF0 },
 	{ 0x506FF0, 0x3B0 },
 	{ 0x509100, 0x218 },
 	{ 0x509380, 0x70F0 },
 	{ 0x510B80, 0x7870 },
+	{ 0x51A420, 0xE0 },
+	{ 0x51A510, 0x68 },
+	{ 0x51A580, 0x10 },
+	{ 0x51A8F0, 0x8 },
+	{ 0x522BD0, 0x70 },
+	{ 0x522C68, 0x30 },
+	{ 0x522CA0, 0x78 },
+	{ 0x523904, 0x14 },
 	{ 0x5239D0, 0x10 },
 	{ 0x523A40, 0xB0 },
+	{ 0x526580, 0x1000 },
+	{ 0x5275A8, 0x10 },
+	{ 0x527804, 0x1C },
+	{ 0x527930, 0x4 },
+	{ 0x527938, 0xB0 },
+	{ 0x529538, 0x858 },
+	{ 0x529D94, 0x59C },
 	{ 0x531C80, 0x2A0 },
 	{ 0x531F68, 0x18 },
 	{ 0x5361E0, 0x24 },

@@ -27,7 +27,8 @@ local A = {
 	-- In-engine rollback (tools/rollback_cave.py): resim routine in sub_2A1128 (unreferenced RW fn), hooked over
 	-- `jal Task_RunMainListNoArg` in Game_MainLoop. Talks to PCSX2's RollbackDevice via syscall.            [code]
 	RB_CAVE = 0x2A1128, RB_HOOK = 0x159F98, RB_HOOK_ORIG = 0x0C084498, RB_HOOK_NEW = 0x0C0A844A,
-	RB_CAVE_WORDS = { 0x27BDFFE0, 0xFFBF0000, 0xFFB00008, 0xFFB10010, 0x3C035DB2, 0x3463F00D, 0x24040001, 0x0000000C, 0x0040802D, 0x0000882D, 0x12300016, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040002, 0x0220282D, 0x0000000C, 0x0C084498, 0x00000000, 0x0C08444C, 0x24040008, 0x0C0BACA8, 0x00000000, 0x0C08643C, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040003, 0x0220282D, 0x0000000C, 0x26310001, 0x1000FFEA, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040004, 0x0000000C, 0x0C084498, 0x00000000, 0xDFBF0000, 0xDFB00008, 0xDFB10010, 0x03E00008, 0x27BD0020 },
+	RB_RENDER_HOOKS = { { 0x159FC0, 0x0C08609C, 0x0C0A848A }, { 0x15A108, 0x0C08643C, 0x0C0A8492 } },
+	RB_CAVE_WORDS = { 0x27BDFFE0, 0xFFBF0000, 0xFFB00008, 0xFFB10010, 0x3C035DB2, 0x3463F00D, 0x24040001, 0x0000000C, 0x0040802D, 0x0000882D, 0x12300016, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040002, 0x0220282D, 0x0000000C, 0x0C084498, 0x00000000, 0x0C08444C, 0x24040008, 0x0C0BACA8, 0x00000000, 0x0C08643C, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040003, 0x0220282D, 0x0000000C, 0x26310001, 0x1000FFEA, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040004, 0x0000000C, 0x0C084498, 0x00000000, 0xDFBF0000, 0xDFB00008, 0xDFB10010, 0x03E00008, 0x27BD0020, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040005, 0x0000000C, 0x0808609C, 0x00000000, 0x00000000, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040006, 0x0000000C, 0x0808643C, 0x00000000 },
 	RB_CAVE_ORIG0  = 0x27BDFF20, -- first word of sub_2A1128 as shipped (addiu sp,-0xE0); install refuses otherwise
 	RB_INPUT_BLOCK = 0x522E20, RB_INPUT_LEN = 0x360, -- g_PadMerged + g_Pad[] + raw copies (0x522E20..0x523180)
 	CATCHUP_JAL    = 0x159F88, CATCHUP_WORD = 0x0C056898, -- jal Frame_CatchUpIfLagging (NOP = 1 sim tick/frame) [code]
@@ -436,8 +437,16 @@ local function rb_install()
 		rb_status_msg = string.format("rollback hook NOT installed: hook %08X cave %08X (unexpected code)", hook, first)
 		return false
 	end
+	for _, h in ipairs(A.RB_RENDER_HOOKS) do
+		if rd32(h[1]) ~= h[2] then
+			rb_status_msg = string.format("rollback hook NOT installed: render hook %08X = %08X (unexpected code)", h[1], rd32(h[1]))
+			return false
+		end
+	end
 	for i, w in ipairs(A.RB_CAVE_WORDS) do engine.patch(A.RB_CAVE + 4 * (i - 1), w) end
-	engine.patch(A.RB_HOOK, A.RB_HOOK_NEW) -- hook last: the routine is complete before anything can call it
+	-- hooks last: the routines are complete before anything can call them
+	for _, h in ipairs(A.RB_RENDER_HOOKS) do engine.patch(h[1], h[3]) end
+	engine.patch(A.RB_HOOK, A.RB_HOOK_NEW)
 	rb_installed = true
 	return true
 end
@@ -445,6 +454,7 @@ end
 local function rb_uninstall()
 	if not rb_installed then return end
 	engine.unpatch(A.RB_HOOK)
+	for _, h in ipairs(A.RB_RENDER_HOOKS) do engine.unpatch(h[1]) end
 	for i = 1, #A.RB_CAVE_WORDS do engine.unpatch(A.RB_CAVE + 4 * (i - 1)) end
 	rb_installed = false
 end
@@ -478,6 +488,8 @@ local function rb_start(mode)
 	rbdev.add_exclude(0x522C70, 0x2C)                         -- g_Fdb* file cache metadata
 	rbdev.add_exclude(0x522D00, 0x18)                         -- g_LoadReq* async load requests
 	rbdev.set_gate(A.ROUND_FRAME)                             -- roll back only while the battle sim is ticking
+	rbdev.set_rng_split(A.RAND_SEED, 4)                       -- render passes (HUD flicker, Fx jitter, draw-pass script
+	                                                          -- events) get their own RNG stream; sim stream is render-free
 	rbdev.add_ignore(0x523EB4, 12)                            -- g_TaskEventArg0..2 (scratch set before render passes)
 	local camobj = rd32(A.OVERRIDE_CAM)
 	if ptr_ok(camobj) and ptr_ok(rd32(camobj + A.CAMOBJ_RWCAM)) then
