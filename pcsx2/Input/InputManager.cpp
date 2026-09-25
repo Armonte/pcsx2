@@ -1896,15 +1896,18 @@ void InputManager::ReloadBindings(SettingsInterface& si, SettingsInterface& bind
 
 	// Hotkeys use the base configuration, except if the custom hotkeys option is enabled.
 	AddHotkeyBindings(hotkey_binding_si, is_hotkey_profile);
-	AddJVSBindings(binding_si, is_binding_profile);
-
-	// S246/S256 cabinets have no DS2 controller — pad bindings are mirrored to JVS above.
-	// AddPadBindings is not called: the emulated DualShock2 receives no input,
-	// matching real hardware where the controller ports are empty.
-	// NOTE (upstream sync 2026-09): upstream now also binds fullscreen-UI controller navigation inside
-	// AddPadBindings(..., nav_si = base layer); skipping it means no gamepad navigation of big picture.
-	// for (u32 pad = 0; pad < Pad::NUM_CONTROLLER_PORTS; pad++)
-	// 	AddPadBindings(binding_si, pad, is_binding_profile, base_si);
+	// S246/S256 cabinets have no DS2 controller: while an arcade game runs, pad bindings are mirrored to JVS and the
+	// emulated DualShock2 receives no input (real hardware has empty controller ports). Every other game (and the
+	// big-picture UI without a VM) gets the normal DualShock2 bindings, including fullscreen-UI pad navigation.
+	if (VMManager::IsArcadeGame())
+	{
+		AddJVSBindings(binding_si, is_binding_profile);
+	}
+	else
+	{
+		for (u32 pad = 0; pad < Pad::NUM_CONTROLLER_PORTS; pad++)
+			AddPadBindings(binding_si, pad, is_binding_profile, base_si);
+	}
 
 	constexpr float ui_ctrl_range = 100.0f;
 	constexpr float pointer_sensitivity = 0.05f;
