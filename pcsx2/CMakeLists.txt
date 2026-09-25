@@ -854,7 +854,10 @@ set(pcsx2ImGuiSources
 	ImGui/ImGuiFullscreen.cpp
 	ImGui/ImGuiManager.cpp
 	ImGui/ImGuiOverlays.cpp
-	ImGui/SdbzOverlay.cpp
+	ImGui/ScriptOverlay.cpp
+	ImGui/ScriptHost.cpp
+	Sdbz/SdbzDeterminism.cpp
+	Sdbz/SdbzSavestate.cpp
 )
 
 set(pcsx2ImGuiHeaders
@@ -864,7 +867,11 @@ set(pcsx2ImGuiHeaders
 	ImGui/ImGuiFullscreen.h
 	ImGui/ImGuiManager.h
 	ImGui/ImGuiOverlays.h
-	ImGui/SdbzOverlay.h
+	ImGui/ScriptOverlay.h
+	ImGui/ScriptBridge.h
+	ImGui/ScriptHost.h
+	Sdbz/SdbzDeterminism.h
+	Sdbz/SdbzSavestate.h
 )
 
 set(pcsx2InputSources
@@ -1152,6 +1159,8 @@ endif()
 target_link_libraries(PCSX2_FLAGS INTERFACE
 	common
 	imgui
+	# SDBZ Lua overlay scripting (sol2 INTERFACE transitively pulls in the vendored lua static lib)
+	sol2
 	fmt::fmt
 	libchdr
 	libzip::zip

@@ -1124,6 +1124,24 @@ void ImGuiManager::AddTextInput(std::string str)
 	});
 }
 
+void ImGuiManager::UpdateKeyModifiers(bool ctrl, bool shift, bool alt, bool super)
+{
+	// Has to go through the CPU -> GS thread (same as AddTextInput). Feed the modifier state directly: the per-key
+	// map's modifier-key codes don't round-trip, so io.KeyMods/KeyCtrl never updated and Ctrl+click-to-type on a
+	// slider could not activate. ImGuiMod_* is ImGui's documented way to set the modifier state.
+	Host::RunOnCPUThread([ctrl, shift, alt, super]() {
+		MTGS::RunOnGSThread([ctrl, shift, alt, super]() {
+			if (!ImGui::GetCurrentContext())
+				return;
+			ImGuiIO& io = ImGui::GetIO();
+			io.AddKeyEvent(ImGuiMod_Ctrl, ctrl);
+			io.AddKeyEvent(ImGuiMod_Shift, shift);
+			io.AddKeyEvent(ImGuiMod_Alt, alt);
+			io.AddKeyEvent(ImGuiMod_Super, super);
+		});
+	});
+}
+
 void ImGuiManager::UpdateMousePosition(float x, float y)
 {
 	if (!ImGui::GetCurrentContext())
