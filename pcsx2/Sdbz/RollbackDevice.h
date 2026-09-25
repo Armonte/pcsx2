@@ -47,6 +47,9 @@ namespace RollbackDevice
 	// Trace id reserved for a pass marker hooked on the task-list runner: $a2 = the task pass being run, used to
 	// attribute render-section calls to a pass.
 	static constexpr u32 TRACE_PASS_MARKER = 15;
+	// Trace ids 0..TRACE_PROBE_FIRST-1 are RNG functions (compared normal vs re-simulation); higher ids are probes on
+	// other functions, only counted when called from the render section (or outside sim/render).
+	static constexpr u32 TRACE_PROBE_FIRST = 4;
 
 	enum class Mode : int
 	{

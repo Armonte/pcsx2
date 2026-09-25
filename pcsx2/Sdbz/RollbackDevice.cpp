@@ -611,7 +611,8 @@ namespace RollbackDevice
 					{
 						case Phase::NormalSim:
 						case Phase::Resim:
-							s_cur_trace.push_back(key);
+							if (cmd - CMD_RNG_TRACE < TRACE_PROBE_FIRST) // probes are a render-section census only
+								s_cur_trace.push_back(key);
 							break;
 						case Phase::Render:
 							s_trace_calls_render++;
