@@ -454,7 +454,8 @@ namespace
 		auto st = std::make_unique<sol::state>();
 		RegisterApi(*st);
 		const std::string dir(Path::GetDirectory(s_path)); // GetDirectory returns string_view -> construct explicitly
-		(*st)["SCRIPT_PATH"] = s_path;                       // so scripts can persist their own settings
+		(*st)["SCRIPT_PATH"] = s_path;
+		(*st)["GAME_SERIAL"] = VMManager::GetDiscSerial(); // one script can serve several versions (NA/JP/PAL/arcade)                       // so scripts can persist their own settings
 		(*st)["SCRIPT_DIR"] = dir;                           // (io is open) -- e.g. SCRIPT_DIR.."/sdbz.cfg"
 		// shared Lua "library": require() searches the script dir + a lib/ subdir, so sdbz.lua / fuc.lua reuse modules
 		(*st)["package"]["path"] = dir + "/?.lua;" + dir + "/lib/?.lua";

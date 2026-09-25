@@ -1,4 +1,6 @@
 # Per-game overlay scripts: SERIAL=script.lua (a scripts/<SERIAL>.lua file takes precedence).
 # Games not listed run no script -- a game script patches that game's memory.
+# Several serials may share one script; it reads GAME_SERIAL to pick that version's addresses
+# (e.g. SDBZ NA/JP/PAL + the System 256 arcade build, whose serial is its .acgame gameid).
 SLUS-21442=sdbz.lua
 SLPM-55108=fuc.lua
