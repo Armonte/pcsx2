@@ -41,7 +41,8 @@ identical content -> git merges them without conflict.
 - [x] rebase `sdbz` onto upstream/master -> branch `sdbz-up` (2 conflicts) — pushed
 - [x] `x6-sync`: merge upstream into x6 (15 conflicts) — pushed; not built yet
 - [x] `integration`: reliquary/master + upstream/master (6 conflicts) + x6-sync (38 files) + sdbz-up (4) — pushed
-- [ ] build integration (Windows, own deps: `scripts/merge/build_wt.bat integration deps|configure|build`), boot retail + Namco + Python titles
+- [x] build integration (Windows, own deps: `scripts/merge/build_wt.bat integration deps|configure|build`)
+- [x] retail boot: FUC runs 3x300 s after the x6 ROM1 fix below; Namco + Python titles still to boot
 - [ ] offer `x6-sync` back to PS2Homebrew-arcade (note: gamepad big-picture nav bindings still not wired in x6)
 - [ ] port the 8:7 aspect patch, `fuc.lua`
 
@@ -64,4 +65,10 @@ merge `upstream/master`, `reliquary/master`, `x6-sync`, `sdbz-up` (that order). 
 - IOP events: `IopEvt_FW` (reliquary) and `IopEvt_SIO2` (x6) both kept, both tested in the rare-interrupt mask.
 - Memcard 0xF3 auth reset: reliquary key reload + x6 fix (does not reset the SIO2 terminator).
 - `scripts/merge/resolve_hunks.py FILE o|t|ot|to|s,...` resolves conflict hunks per index.
+- **x6 ROM1 bug (fixed on x6-sync 57b360c7c):** `vtlb_MapBlock(eeMem->ROM1, 0xB0000000, ...)` wrote past `vtlbdata.pmap`
+  (physical map = 512 MB); in integration it corrupted microVU1's program cache -> retail games crashed after ~1-2 min.
+  Retail now maps ROM1 at 0x1e000000, arcade leaves it unmapped; vtlb_MapBlock rejects out-of-range ranges in Release.
+- Build fixes needed only when combining forks: duplicate `commandByte` in Sio2::Memcard (reliquary hoisted it), two
+  `s_pointer_button_state` arrays in InputManager (kept reliquary's atomic one).
+- Windows deps: harfbuzz 14.2 / rapidyaml 0.12.1 zips contain symlinks 7-Zip can't create without privilege -> excluded.
 - Windows deps: the deps `.bat` must have CRLF line endings when checked out from WSL, or cmd.exe skips lines.
