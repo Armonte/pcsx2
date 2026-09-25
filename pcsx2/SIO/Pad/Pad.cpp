@@ -123,8 +123,10 @@ void Pad::LoadConfig(const SettingsInterface& si)
 
 		const float axis_deadzone = si.GetFloatValue(section.c_str(), "Deadzone", Pad::DEFAULT_STICK_DEADZONE);
 		const float axis_scale = si.GetFloatValue(section.c_str(), "AxisScale", Pad::DEFAULT_STICK_SCALE);
+		const bool use_diagonal_scale_correction = si.GetBoolValue(section.c_str(), "UseDiagonalScaleCorrection", Pad::DEFAULT_USE_DIAGONAL_SCALE_CORRECTION);
 		const float button_deadzone = si.GetFloatValue(section.c_str(), "ButtonDeadzone", Pad::DEFAULT_BUTTON_DEADZONE);
 		pad->SetAxisScale(axis_deadzone, axis_scale);
+		pad->SetDiagonalScaleCorrection(use_diagonal_scale_correction);
 		pad->SetButtonDeadzone(button_deadzone);
 
 		if (ci->vibration_caps != Pad::VibrationCapabilities::NoVibration)
@@ -232,6 +234,8 @@ void Pad::SetDefaultHotkeyConfig(SettingsInterface& si)
 	si.SetStringValue("Hotkeys", "GSDumpMultiFrame", "Keyboard/Control & Keyboard/Shift & Keyboard/F8");
 	si.SetStringValue("Hotkeys", "Screenshot", "Keyboard/F8");
 	si.SetStringValue("Hotkeys", "GSDumpSingleFrame", "Keyboard/Shift & Keyboard/F8");
+	si.SetStringValue("Hotkeys", "GSStartSavingMetricsVariableFrames", "Keyboard/F10");
+	si.SetStringValue("Hotkeys", "GSStartSavingMetricsFixedFrames", "Keyboard/Control & Keyboard/F10");
 	si.SetStringValue("Hotkeys", "ToggleSoftwareRendering", "Keyboard/F9");
 	//  si.SetStringValue("Hotkeys", "ToggleTextureDumping", "Keyboard"); TBD
 	//  si.SetStringValue("Hotkeys", "ToggleTextureReplacements", "Keyboard"); TBD

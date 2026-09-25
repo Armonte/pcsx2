@@ -105,7 +105,6 @@ GSState::GSState()
 	s_n = 0;
 	s_transfer_n = 0;
 
-
 	memset(&m_v, 0, sizeof(m_v));
 	memset(m_mem.m_vm8, 0, m_mem.m_vmsize);
 
@@ -1360,8 +1359,9 @@ void GSState::DumpTransferImages()
 				transfer.rect.x, transfer.rect.y, transfer.rect.z, transfer.rect.w);
 		}
 
-		m_mem.SaveBMP(filename, transfer.blit.DBP, transfer.blit.DBW, transfer.blit.DPSM,
-			transfer.rect.width(), transfer.rect.height(), transfer.rect.x, transfer.rect.y);
+		if (!transfer.was_hardware_only)
+			m_mem.SaveBMP(filename, transfer.blit.DBP, transfer.blit.DBW, transfer.blit.DPSM,
+				transfer.rect.width(), transfer.rect.height(), transfer.rect.x, transfer.rect.y);
 	}
 }
 
@@ -2504,6 +2504,11 @@ u32 GSState::CalcMask(int exp, int max_exp)
 	return (1 << std::min(amount, 23)) - 1;
 }
 
+void GSState::IncDraw()
+{
+	s_n++;
+}
+
 void GSState::FlushPrim()
 {
 	if (m_index->tail > 0)
@@ -2526,7 +2531,7 @@ void GSState::FlushPrim()
 		GSVertex buff[2];
 		GSVertexBuff& vtx_buff = *m_vertex;
 		GSIndexBuff& idx_buff = *m_index;
-		s_n++;
+		IncDraw();
 
 		const u32 head = vtx_buff.head;
 		const u32 tail = vtx_buff.tail;
@@ -2928,11 +2933,12 @@ void GSState::Write(const u8* mem, int len)
 			m_draw_transfers.pop_back();
 			transfer.rect = transfer.rect.runion(r);
 			transfer.draw = s_n;
+			transfer.was_hardware_only = false;
 			m_draw_transfers.push_back(transfer);
 		}
 		else
 		{
-			const GSUploadQueue new_transfer = {blit, s_n, r, EEGS_TransferType::EE_to_GS};
+			const GSUploadQueue new_transfer = {blit, s_n, r, EEGS_TransferType::EE_to_GS, false};
 			m_draw_transfers.push_back(new_transfer);
 		}
 
@@ -3127,11 +3133,12 @@ void GSState::Move()
 		m_draw_transfers.pop_back();
 		transfer.rect = transfer.rect.runion(r);
 		transfer.draw = s_n;
+		transfer.was_hardware_only = false;
 		m_draw_transfers.push_back(transfer);
 	}
 	else
 	{
-		const GSUploadQueue new_transfer = {m_env.BITBLTBUF, s_n, r, EEGS_TransferType::GS_to_GS};
+		const GSUploadQueue new_transfer = {m_env.BITBLTBUF, s_n, r, EEGS_TransferType::GS_to_GS, false};
 		m_draw_transfers.push_back(new_transfer);
 	}
 

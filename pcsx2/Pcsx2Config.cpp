@@ -909,6 +909,10 @@ bool Pcsx2Config::GSOptions::OptionsAreEqual(const GSOptions& right) const
 		OpEqu(SaveFrameStart) &&
 		OpEqu(SaveFrameCount) &&
 		OpEqu(SaveFrameBy) &&
+		OpEqu(DumpReplayLoopCount) &&
+		OpEqu(DumpReplayFrameStart) &&
+		OpEqu(DumpReplayFrameEnd) &&
+		OpEqu(SavedMetricsCaptureSeconds) &&
 
 		OpEqu(ExclusiveFullscreenControl) &&
 		OpEqu(ScreenshotSize) &&
@@ -1100,6 +1104,7 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitBoolEx(SaveDrawStats, "SaveDrawStats");
 	SettingsWrapBitBoolEx(SaveFrameStats, "SaveFrameStats");
 	SettingsWrapBitBoolEx(SaveHWConfig, "SaveHWConfig");
+	SettingsWrapBitBoolEx(DumpReplayUseFrameRange, "DumpReplayUseFrameRange");
 	SettingsWrapBitBool(DumpReplaceableTextures);
 	SettingsWrapBitBool(DumpReplaceableMipmaps);
 	SettingsWrapBitBool(DumpTexturesWithFMVActive);
@@ -1174,6 +1179,10 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitfieldEx(SaveFrameStart, "SaveFrameStart");
 	SettingsWrapBitfieldEx(SaveFrameCount, "SaveFrameCount");
 	SettingsWrapBitfieldEx(SaveFrameBy, "SaveFrameBy");
+	SettingsWrapBitfieldEx(DumpReplayLoopCount, "DumpReplayLoopCount");
+	SettingsWrapBitfieldEx(DumpReplayFrameStart, "DumpReplayFrameStart");
+	SettingsWrapBitfieldEx(DumpReplayFrameEnd, "DumpReplayFrameEnd");
+	SettingsWrapBitfieldEx(SavedMetricsCaptureSeconds, "SavedMetricsCaptureSeconds");
 
 	SettingsWrapEntryEx(CaptureContainer, "CaptureContainer");
 	SettingsWrapEntryEx(VideoCaptureCodec, "VideoCaptureCodec");

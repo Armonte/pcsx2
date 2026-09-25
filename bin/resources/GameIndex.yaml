@@ -6016,6 +6016,7 @@ SCES-53247:
   gsHWFixes:
     roundSprite: 1 # Fixes misaligned text.
     autoFlush: 2 # Fixes sun luminosity.
+    nativeScaling: 2 # Helps align sun occasional.
   patches:
     CBBC2E7F:
       content: |-
@@ -21409,6 +21410,7 @@ SLES-52741:
   region: "PAL-E"
   gsHWFixes:
     halfPixelOffset: 5 # Fixes depth line and edge garbage.
+    nativeScaling: 4 # Softens and aligns bloom.
 SLES-52745:
   name: "Hugo - Cannon Cruise"
   region: "PAL-M4"
@@ -26269,6 +26271,7 @@ SLES-54317:
   compat: 5
   gsHWFixes:
     halfPixelOffset: 4 # Fixes alignment on fire effects.
+    nativeScaling: 2 # Softens and aligns bloom on fire effects.
 SLES-54319:
   name: "Biker Mice from Mars"
   region: "PAL-M5"
@@ -27266,6 +27269,7 @@ SLES-54581:
   region: "PAL-M5"
   gsHWFixes:
     halfPixelOffset: 5 # Fixes depth line and edge garbage.
+    nativeScaling: 4 # Softens and aligns bloom.
 SLES-54582:
   name: "International Tennis Pro"
   region: "PAL-E"
@@ -60629,7 +60633,6 @@ SLPS-25529:
   gsHWFixes:
     halfPixelOffset: 4 # Aligns DoF effects.
     nativeScaling: 2 # Fixes post effects.
-    getSkipCount: "GSC_UltramanFightingEvolution"
 SLPS-25530:
   name: "餓狼伝 Breakblow"
   name-sort: "がろうでん Breakblow"
@@ -62367,7 +62370,6 @@ SLPS-25800:
   gsHWFixes:
     halfPixelOffset: 4 # Aligns DoF effects.
     nativeScaling: 2 # Fixes post effects.
-    getSkipCount: "GSC_UltramanFightingEvolution"
 SLPS-25801:
   name: "今日からマ王！ 眞マ国の休日"
   name-sort: "きょうからまおう しんまこくのきゅうじつ"
@@ -68933,6 +68935,7 @@ SLUS-20885:
   compat: 5
   gsHWFixes:
     halfPixelOffset: 5 # Fixes depth line and edge garbage.
+    nativeScaling: 4 # Softens and aligns bloom.
 SLUS-20886:
   name: "Sitting Ducks"
   region: "NTSC-U"
@@ -71672,6 +71675,7 @@ SLUS-21306:
   compat: 5
   gsHWFixes:
     halfPixelOffset: 4 # Fixes alignment on fire effects.
+    nativeScaling: 2 # Softens and aligns bloom on fire effects.
 SLUS-21307:
   name: "Ice Age 2 - The Meltdown"
   region: "NTSC-U"
@@ -76456,6 +76460,7 @@ TCES-53247:
   gsHWFixes:
     roundSprite: 1 # Fixes misaligned text.
     autoFlush: 2 # Fixes sun luminosity.
+    nativeScaling: 2 # Helps align sun occasional.
 TCES-53286:
   name: "Jak X Beta Trial Code"
   region: "PAL-E"
