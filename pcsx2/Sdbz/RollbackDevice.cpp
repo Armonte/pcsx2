@@ -38,6 +38,8 @@ namespace RollbackDevice
 		{
 			u32 addr;
 			u32 len;
+			u8 now[16]; // re-simulated bytes at compare time
+			u8 ref[16]; // pre-rollback bytes
 		};
 
 		constexpr u32 RAM_MASK = 0x01FFFFFFu;
@@ -162,7 +164,13 @@ namespace RollbackDevice
 							if (!s_last_runs.empty() && addr <= s_last_runs.back().addr + s_last_runs.back().len + 8)
 								s_last_runs.back().len = addr + 1 - s_last_runs.back().addr;
 							else if (s_last_runs.size() < MAX_RUNS_PER_FRAME)
-								s_last_runs.push_back({addr, 1});
+							{
+								DiffRun run{addr, 1, {}, {}};
+								const u32 n = std::min<u32>(16, len - j);
+								std::memcpy(run.now, live + j, n);
+								std::memcpy(run.ref, ref + j, n);
+								s_last_runs.push_back(run);
+							}
 						}
 						s_page_hits[(r.a + off) >> 12]++;
 					}
@@ -380,12 +388,8 @@ namespace RollbackDevice
 			std::string now, ref;
 			for (u32 k = 0; k < std::min<u32>(r.len, 16); k++)
 			{
-				now += fmt::format("{:02X}", *Ram(r.addr + k));
-				for (size_t i = 0; i < s_compare.size(); i++)
-				{
-					if (r.addr + k >= s_compare[i].a && r.addr + k < s_compare[i].b && i < s_ref.size())
-						ref += fmt::format("{:02X}", s_ref[i][r.addr + k - s_compare[i].a]);
-				}
+				now += fmt::format("{:02X}", r.now[k]);
+				ref += fmt::format("{:02X}", r.ref[k]);
 			}
 			out += fmt::format("{:08X} {:5} now {} ref {} {}\n", r.addr, r.len, now, ref, WatchName(r.addr));
 		}
