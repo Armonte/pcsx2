@@ -13,7 +13,7 @@ call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build
 if "%2"=="deps" (
   set DEBUG=0
   set BUILD_FFMPEG=0
-  call ".github\workflows\scripts\windows\build-dependencies.bat"
+  call ".github\workflows\scripts\windows\build-dependencies.bat" || ( echo === DEPS_EXITCODE=1 === & exit /b 1 )
   echo === DEPS_EXITCODE=%errorlevel% ===
   exit /b %errorlevel%
 )
