@@ -109,6 +109,9 @@ namespace RollbackDevice
 		s32 s_first_sim_desync_frame = -1;
 		std::string s_first_sim_desync;
 		u64 s_last_rollback_us = 0, s_max_rollback_us = 0, s_sum_rollback_us = 0;
+		// Rollback cost breakdown (sums over all rollbacks, us): sync-test reference copy + compare are test-only
+		// overhead; load + resim captures + game re-simulation are the real cost of a netplay rollback.
+		u64 s_sum_ref_us = 0, s_sum_load_us = 0, s_sum_cap_us = 0, s_sum_cmp_us = 0;
 		u64 s_last_diff_bytes = 0;
 		s32 s_first_desync_frame = -1;
 		std::map<u32, u64> s_page_hits;             // page -> frames it differed in
@@ -296,6 +299,7 @@ namespace RollbackDevice
 			s_first_sim_desync_frame = -1;
 			s_first_sim_desync.clear();
 			s_last_rollback_us = s_max_rollback_us = s_sum_rollback_us = 0;
+			s_sum_ref_us = s_sum_load_us = s_sum_cap_us = s_sum_cmp_us = 0;
 			s_last_diff_bytes = 0;
 			s_first_desync_frame = -1;
 			s_page_hits.clear();
@@ -551,10 +555,14 @@ namespace RollbackDevice
 
 				// Sync test: remember this frame's state, rewind R frames, let the game re-simulate them.
 				s_rollback_timer.Reset();
+				Common::Timer t;
 				TakeReference();
+				s_sum_ref_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
 				const s32 target = s_frame - static_cast<s32>(s_rollback);
+				t.Reset();
 				if (!s_ring->Load(target))
 					return 0;
+				s_sum_load_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
 				s_resim_base = target;
 				s_resim_active = true;
 				s_rollbacks++;
@@ -575,7 +583,11 @@ namespace RollbackDevice
 				s_phase = Phase::Other;
 				s_cur_trace.clear();
 				if (s_resim_active && s_ring)
+				{
+					Common::Timer t;
 					s_ring->Capture(s_resim_base + static_cast<s32>(arg) + 1);
+					s_sum_cap_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
+				}
 				return 0;
 
 			// Sound RNG stream: draws whose result only picks volume/pan/pitch/voice variants. Keeping them off the
@@ -633,7 +645,11 @@ namespace RollbackDevice
 				if (s_resim_active)
 				{
 					if (s_mode == Mode::SyncTest)
+					{
+						Common::Timer t;
 						CompareToReference();
+						s_sum_cmp_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
+					}
 					InjectInput(s_frame);
 					s_resim_active = false;
 					s_last_rollback_us = static_cast<u64>(s_rollback_timer.GetTimeNanoseconds() / 1000.0);
@@ -690,6 +706,14 @@ namespace RollbackDevice
 			s_mode == Mode::SyncTest ? "synctest" : "capture", s_rollback, s_frame, s_rollbacks, s_last_rollback_us, avg,
 			s_max_rollback_us, s_sim_desync_frames, s_first_sim_desync_frame, s_desync_frames, s_last_diff_bytes,
 			s_last_runs.size());
+		if (s_rollbacks)
+		{
+			const u64 n = s_rollbacks, other = s_sum_ref_us + s_sum_load_us + s_sum_cap_us + s_sum_cmp_us;
+			s += fmt::format(" | avg per rollback: load {} us, resim game {} us, resim captures {} us (real {} us) + test-only ref {} us, compare {} us",
+				s_sum_load_us / n, (s_sum_rollback_us > other ? s_sum_rollback_us - other : 0) / n, s_sum_cap_us / n,
+				(s_sum_rollback_us > s_sum_ref_us + s_sum_cmp_us ? s_sum_rollback_us - s_sum_ref_us - s_sum_cmp_us : 0) / n,
+				s_sum_ref_us / n, s_sum_cmp_us / n);
+		}
 		s += fmt::format(" | gated (no rollback) frames {} (+{} for I/O) | ring rebuilds {} ({} dynamic excludes)", s_gated_frames,
 			s_io_gated_frames, s_dyn_rebuilds, s_dyn_excludes.size());
 		if (s_trace)
