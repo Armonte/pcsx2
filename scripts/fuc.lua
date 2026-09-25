@@ -27,7 +27,7 @@ local A = {
 	-- In-engine rollback (tools/rollback_cave.py): resim routine in sub_2A1128 (unreferenced RW fn), hooked over
 	-- `jal Task_RunMainListNoArg` in Game_MainLoop. Talks to PCSX2's RollbackDevice via syscall.            [code]
 	RB_CAVE = 0x2A1128, RB_HOOK = 0x159F98, RB_HOOK_ORIG = 0x0C084498, RB_HOOK_NEW = 0x0C0A844A,
-	RB_CAVE_WORDS = { 0x27BDFFE0, 0xFFBF0000, 0xFFB00008, 0xFFB10010, 0x3C035DB2, 0x3463F00D, 0x24040001, 0x0000000C, 0x0040802D, 0x0000882D, 0x12300012, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040002, 0x0220282D, 0x0000000C, 0x0C084498, 0x00000000, 0x0C08444C, 0x24040008, 0x3C035DB2, 0x3463F00D, 0x24040003, 0x0220282D, 0x0000000C, 0x26310001, 0x1000FFEE, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040004, 0x0000000C, 0x0C084498, 0x00000000, 0xDFBF0000, 0xDFB00008, 0xDFB10010, 0x03E00008, 0x27BD0020 },
+	RB_CAVE_WORDS = { 0x27BDFFE0, 0xFFBF0000, 0xFFB00008, 0xFFB10010, 0x3C035DB2, 0x3463F00D, 0x24040001, 0x0000000C, 0x0040802D, 0x0000882D, 0x12300016, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040002, 0x0220282D, 0x0000000C, 0x0C084498, 0x00000000, 0x0C08444C, 0x24040008, 0x0C0BACA8, 0x00000000, 0x0C08643C, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040003, 0x0220282D, 0x0000000C, 0x26310001, 0x1000FFEA, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040004, 0x0000000C, 0x0C084498, 0x00000000, 0xDFBF0000, 0xDFB00008, 0xDFB10010, 0x03E00008, 0x27BD0020 },
 	RB_CAVE_ORIG0  = 0x27BDFF20, -- first word of sub_2A1128 as shipped (addiu sp,-0xE0); install refuses otherwise
 	RB_INPUT_BLOCK = 0x522E20, RB_INPUT_LEN = 0x360, -- g_PadMerged + g_Pad[] + raw copies (0x522E20..0x523180)
 	CATCHUP_JAL    = 0x159F88, CATCHUP_WORD = 0x0C056898, -- jal Frame_CatchUpIfLagging (NOP = 1 sim tick/frame) [code]
@@ -464,6 +464,15 @@ local function rb_start(mode)
 	rbdev.add_exclude(0x522E08, 0x14)                         -- vblanks since poll / elapsed / wait target
 	for _, r in ipairs(RB_LIB_EXCLUDES) do rbdev.add_exclude(r[1], r[2]) end
 	rbdev.set_input_block(A.RB_INPUT_BLOCK, A.RB_INPUT_LEN)
+	-- Sync-test ignore: render / wall-clock state classified by writer (IDB), still snapshotted, not reported.
+	rbdev.add_ignore(0x522D20, 4)          -- present mode, written by Frame_PresentAndWaitVBlank
+	rbdev.add_ignore(0x522D60, 8)          -- EE timer tick accumulator (Timer_GetTicksDiv9216 / sub_20A4E0)
+	rbdev.add_ignore(0x522D04, 4)          -- stream loader (LoadReq_* / Snd_StreamQueueTick)
+	rbdev.add_ignore(0x5247B0, 0x160)      -- 2D draw lists / DrawList_BeginRenderStates cache, g_DrawRwCamera
+	rbdev.add_ignore(0x52C140, 4)          -- g_RwRenderFrame (RW render-pass state)
+	rbdev.add_ignore(0x52C260, 0x800)      -- RW sky-driver state block (sub_2DE778 / sub_2E5CA0)
+	rbdev.add_ignore(0x4D9890, 0x10)       -- RW sky pipeline scratch (sub_26CFF0 family)
+	rbdev.add_ignore(0x531340, 0x180)      -- RW sky driver render state (sub_2F8018/2FF390/301570)
 	local p1, p2 = players()
 	if p1 ~= 0 then rbdev.add_watch(p1, 0x2550, "P1") end
 	if p2 ~= 0 then rbdev.add_watch(p2, 0x2550, "P2") end
