@@ -71,6 +71,9 @@ namespace RollbackDevice
 
 		// ---- stats ----
 		u64 s_frames = 0, s_rollbacks = 0, s_desync_frames = 0;
+		u64 s_sim_desync_frames = 0;                 // frames where a NAMED WATCH (gameplay state) differed
+		s32 s_first_sim_desync_frame = -1;
+		std::string s_first_sim_desync;
 		u64 s_last_rollback_us = 0, s_max_rollback_us = 0, s_sum_rollback_us = 0;
 		u64 s_last_diff_bytes = 0;
 		s32 s_first_desync_frame = -1;
@@ -178,6 +181,24 @@ namespace RollbackDevice
 				}
 			}
 			s_last_diff_bytes = diff_bytes;
+			// Gameplay state (named watches) must never differ; other memory (render caches, leftovers) may.
+			std::string sim;
+			for (const DiffRun& r : s_last_runs)
+			{
+				const std::string w = WatchName(r.addr);
+				if (!w.empty() && sim.size() < 400)
+					sim += fmt::format(" {:08X}+{}({})", r.addr, r.len, w);
+			}
+			if (!sim.empty())
+			{
+				s_sim_desync_frames++;
+				if (s_first_sim_desync_frame < 0)
+				{
+					s_first_sim_desync_frame = s_frame;
+					s_first_sim_desync = sim;
+					Console.Error("RollbackDevice: SIM STATE DESYNC at frame %d:%s", s_frame, sim.c_str());
+				}
+			}
 			if (diff_bytes)
 			{
 				s_desync_frames++;
@@ -200,6 +221,9 @@ namespace RollbackDevice
 			s_frame = -1;
 			s_resim_active = false;
 			s_frames = s_rollbacks = s_desync_frames = 0;
+			s_sim_desync_frames = 0;
+			s_first_sim_desync_frame = -1;
+			s_first_sim_desync.clear();
 			s_last_rollback_us = s_max_rollback_us = s_sum_rollback_us = 0;
 			s_last_diff_bytes = 0;
 			s_first_desync_frame = -1;
@@ -362,9 +386,10 @@ namespace RollbackDevice
 			return "rbdev: off";
 		const u64 avg = s_rollbacks ? s_sum_rollback_us / s_rollbacks : 0;
 		std::string s = fmt::format("rbdev: {} R={} frame {} | rollbacks {} (last {} us, avg {} us, max {} us) | "
-									"desync frames {} (first {}) last diff {} B in {} runs",
+									"SIM DESYNC frames {} (first {}) | other-memory diff frames {} (last {} B in {} runs)",
 			s_mode == Mode::SyncTest ? "synctest" : "capture", s_rollback, s_frame, s_rollbacks, s_last_rollback_us, avg,
-			s_max_rollback_us, s_desync_frames, s_first_desync_frame, s_last_diff_bytes, s_last_runs.size());
+			s_max_rollback_us, s_sim_desync_frames, s_first_sim_desync_frame, s_desync_frames, s_last_diff_bytes,
+			s_last_runs.size());
 		if (s_ring)
 			s += " | " + s_ring->Describe();
 		return s;
@@ -373,9 +398,11 @@ namespace RollbackDevice
 	std::string ReportText()
 	{
 		std::lock_guard lk(s_mtx);
-		std::string out = fmt::format("# RollbackDevice sync-test report\nframes {} rollbacks {} desync frames {} first {}\n\n"
+		std::string out = fmt::format("# RollbackDevice sync-test report\nframes {} rollbacks {} | SIM (watched) desync frames {} "
+									  "first {}:{}\nother-memory diff frames {} first {}\n\n"
 									  "## pages that differed after re-simulation (page -> frames)\n",
-			s_frames, s_rollbacks, s_desync_frames, s_first_desync_frame);
+			s_frames, s_rollbacks, s_sim_desync_frames, s_first_sim_desync_frame, s_first_sim_desync, s_desync_frames,
+			s_first_desync_frame);
 		std::vector<std::pair<u64, u32>> pages;
 		for (const auto& [page, n] : s_page_hits)
 			pages.push_back({n, page});

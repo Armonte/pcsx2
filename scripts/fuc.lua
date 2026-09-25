@@ -473,12 +473,31 @@ local function rb_start(mode)
 	rbdev.add_ignore(0x52C260, 0x800)      -- RW sky-driver state block (sub_2DE778 / sub_2E5CA0)
 	rbdev.add_ignore(0x4D9890, 0x10)       -- RW sky pipeline scratch (sub_26CFF0 family)
 	rbdev.add_ignore(0x531340, 0x180)      -- RW sky driver render state (sub_2F8018/2FF390/301570)
+	rbdev.add_exclude(0x51A420, 0x20)                         -- g_SndStreamCh (sound stream state)
+	rbdev.add_ignore(0x523EB4, 12)                            -- g_TaskEventArg0..2 (scratch set before render passes)
+	local camobj = rd32(A.OVERRIDE_CAM)
+	if ptr_ok(camobj) and ptr_ok(rd32(camobj + A.CAMOBJ_RWCAM)) then
+		rbdev.add_ignore(rd32(camobj + A.CAMOBJ_RWCAM), 0xAB0)  -- RwCamera: derived from the camera controller by the render pass
+	end
+	-- GAMEPLAY STATE: must never differ after re-simulation (reported as SIM DESYNC).
 	local p1, p2 = players()
-	if p1 ~= 0 then rbdev.add_watch(p1, 0x2550, "P1") end
-	if p2 ~= 0 then rbdev.add_watch(p2, 0x2550, "P2") end
+	for i, p in ipairs({ p1, p2 }) do
+		if p ~= 0 then
+			rbdev.add_watch(p, 0x2550, "P" .. i)
+			local ai, wi = rd32(p + 0x2448), rd32(p + 0x244C)
+			if ptr_ok(ai) then rbdev.add_watch(ai, 584, "P" .. i .. "_AI") end
+			if ptr_ok(wi) then rbdev.add_watch(wi, 304, "P" .. i .. "_AIWorld") end
+		end
+	end
 	rbdev.add_watch(A.RAND_SEED, 4, "g_RandSeed")
-	rbdev.add_watch(0x51D890, 0x110, "g_GameWork")
+	rbdev.add_watch(0x3B1F70, 4, "g_libcRandSeed")
+	rbdev.add_watch(0x51D890, 0xC40, "g_GameWork")            -- incl. battle work, round timer/frame, mission state
 	rbdev.add_watch(0x51C858, 0x68, "g_SideWork/slots")
+	rbdev.add_watch(0x51C900, 0xE20, "KeyReplay")
+	rbdev.add_watch(0x5231C0, 0x14, "Pause")
+	rbdev.add_watch(0x518410, 4, "g_NodePoolCursor")
+	rbdev.add_watch(0x51AC70, 0x120, "EffectPools")           -- shared-state/emitter/particle free lists + layer lists
+	rbdev.add_watch(0x3D6AC8, 4, "g_EmitterSerial")
 	cfg.one_tick = true -- exactly one sim tick per frame while rolling back
 	if not rb_install() then return end
 	rbdev.start(mode, cfg.rb_frames, true)
