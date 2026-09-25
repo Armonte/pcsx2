@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
-#include <unordered_set>
 
 namespace
 {
@@ -306,10 +305,8 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 
 void PageSnapshotRing::UpdateLiveBytes()
 {
-	std::unordered_set<const Page*> unique;
-	for (const Snapshot& s : m_ring)
-		unique.insert(s.pages.begin(), s.pages.end());
-	m_stats.live_bytes = static_cast<u64>(unique.size()) * PAGE_SIZE;
+	// Every allocated page buffer is either referenced by a snapshot or on the free list.
+	m_stats.live_bytes = m_stats.pool_bytes - static_cast<u64>(m_free.size()) * sizeof(Page);
 }
 
 std::string PageSnapshotRing::Describe() const

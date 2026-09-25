@@ -38,7 +38,30 @@ identical content -> git merges them without conflict.
    replayed automatically next time.
 
 ## Order of work
-- [ ] rebase `sdbz` onto upstream/master (2 conflicts), build, smoke test SDBZ overlay
-- [ ] `x6-sync`: merge upstream into x6 (15 conflicts), build, boot a 246/256 title
-- [ ] `integration`: reliquary + x6-sync (87 real overlaps), build, boot retail + Namco + Python titles
-- [ ] merge `sdbz` into `integration`, then port the 8:7 aspect patch and write `fuc.lua`
+- [x] rebase `sdbz` onto upstream/master -> branch `sdbz-up` (2 conflicts) — pushed
+- [x] `x6-sync`: merge upstream into x6 (15 conflicts) — pushed; not built yet
+- [x] `integration`: reliquary/master + upstream/master (6 conflicts) + x6-sync (38 files) + sdbz-up (4) — pushed
+- [ ] build integration (Windows, own deps: `scripts/merge/build_wt.bat integration deps|configure|build`), boot retail + Namco + Python titles
+- [ ] offer `x6-sync` back to PS2Homebrew-arcade (note: gamepad big-picture nav bindings still not wired in x6)
+- [ ] port the 8:7 aspect patch, `fuc.lua`
+
+## Branch layout (2026-09-25)
+| branch | = | worktree |
+|---|---|---|
+| `sdbz` | our original stack on v2.7.393 (kept for the old SDBZ builds) | `src` |
+| `sdbz-up` | our stack rebased on upstream/master — **the portable unit, new work goes here** | `wt/sdbz-up` |
+| `x6-sync` | x6/master + upstream/master | `wt/x6-sync` |
+| `integration` | reliquary + upstream + x6-sync + sdbz-up (merge commits only) | `wt/integration` |
+
+Update cycle: `git fetch upstream reliquary x6`; merge upstream into `sdbz-up` and `x6-sync`; in `integration`
+merge `upstream/master`, `reliquary/master`, `x6-sync`, `sdbz-up` (that order). rerere replays recorded resolutions.
+
+## Integration resolutions worth knowing
+- upstream replaced `PCSX2_qt.sln` with `.slnx`: reliquary's extra projects are re-added by
+  `scripts/merge/slnx_add_reliquary.py` (idempotent).
+- `GameIndex.yaml`: x6 ships an arcade-only DB; integration = reliquary's full DB + x6 arcade entries
+  (`scripts/merge/gameindex_union.py BASE ARCADE OUT`).
+- IOP events: `IopEvt_FW` (reliquary) and `IopEvt_SIO2` (x6) both kept, both tested in the rare-interrupt mask.
+- Memcard 0xF3 auth reset: reliquary key reload + x6 fix (does not reset the SIO2 terminator).
+- `scripts/merge/resolve_hunks.py FILE o|t|ot|to|s,...` resolves conflict hunks per index.
+- Windows deps: the deps `.bat` must have CRLF line endings when checked out from WSL, or cmd.exe skips lines.
