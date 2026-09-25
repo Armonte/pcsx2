@@ -40,6 +40,7 @@ namespace RollbackDevice
 		CMD_CUR_PRE = 4,
 		CMD_RENDER_BEGIN = 5, // game is about to run its render passes: switch g_RandSeed to the render stream
 		CMD_RENDER_END = 6,   // render passes done: save the render stream, restore the simulation stream
+		CMD_RNG_TRACE = 16,   // 16 + rng function id, $a1 = caller return address (desync attribution)
 	};
 
 	enum class Mode : int
@@ -65,6 +66,15 @@ namespace RollbackDevice
 	// simulation is live (e.g. the battle frame counter). A rollback happens only if it advanced on every frame of the
 	// window; menus, pauses, round transitions and loads (async IO that must not be rewound) are never rolled back.
 	void SetGate(u32 counter_addr);
+	// Rollback gate, I/O side: ranges that change when the game submits asynchronous I/O the simulation later waits on
+	// (file loads, voice/BGM streams). A rollback window in which any of them changed is not rolled back: re-simulating
+	// the submitting frame would issue the request a second time against un-rewound I/O state.
+	void AddGateStable(u32 addr, u32 len);
+	// RNG call tracing (game-side trampolines on the RNG functions report each call): the device records the ordered
+	// (function, caller) list of every frame's normal simulation step, compares each re-simulation of that frame against
+	// it, and reports the first differing call. Calls made outside both the simulation step and the render section are
+	// counted separately (they advance the simulation stream behind re-simulation's back).
+	void SetRngTrace(bool on);
 	// Split RNG: the game's single RNG state is also consumed by rendering (HUD flicker, particle jitter, script event
 	// handlers on draw passes). Re-simulation doesn't render, so the simulation stream would drift. With this set, the
 	// device swaps in a separate render stream between CMD_RENDER_BEGIN/END; the simulation stream then advances only
