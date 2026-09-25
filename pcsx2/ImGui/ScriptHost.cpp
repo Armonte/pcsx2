@@ -165,6 +165,7 @@ namespace
 		rd.set_function("add_watch", [](uint32_t a, uint32_t n, const std::string& name) { RollbackDevice::AddWatch(a, n, name); });
 		rd.set_function("start", [](int mode, uint32_t frames, bool wp) { RollbackDevice::Start(static_cast<RollbackDevice::Mode>(mode), frames, wp); });
 		rd.set_function("stop", []() { RollbackDevice::Stop(); });
+		rd.set_function("set_gate", [](uint32_t a) { RollbackDevice::SetGate(a); });
 		rd.set_function("status", []() { return RollbackDevice::Status(); });
 		rd.set_function("report", []() { return RollbackDevice::ReportText(); });
 		rd.set("MAGIC", RollbackDevice::MAGIC);

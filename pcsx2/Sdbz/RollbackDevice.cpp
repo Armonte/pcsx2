@@ -52,6 +52,7 @@ namespace RollbackDevice
 		std::vector<Range> s_cfg_regions, s_cfg_excludes, s_cfg_ignore;
 		std::vector<Watch> s_cfg_watches;
 		Range s_cfg_input;
+		u32 s_cfg_gate = 0;
 
 		// ---- runtime (EE thread) ----
 		Mode s_mode = Mode::Off;
@@ -61,6 +62,10 @@ namespace RollbackDevice
 		std::vector<Range> s_compare;              // regions - excludes - input - ignore
 		std::vector<Watch> s_watches;
 		Range s_input;
+		u32 s_gate = 0;
+		u32 s_gate_prev = 0;
+		std::vector<u8> s_gate_ok;                 // [frame % INPUT_HISTORY]: gate counter advanced into this frame
+		u64 s_gated_frames = 0;                    // frames where a sync-test rollback was skipped by the gate
 		std::vector<std::vector<u8>> s_inputs;     // [frame % INPUT_HISTORY]
 		std::vector<std::vector<u8>> s_ref;        // sync test: copy of each compare range before rolling back
 		s32 s_frame = -1;
@@ -233,9 +238,16 @@ namespace RollbackDevice
 		}
 	} // namespace
 
+	void SetGate(u32 counter_addr)
+	{
+		std::lock_guard lk(s_mtx);
+		s_cfg_gate = counter_addr & RAM_MASK;
+	}
+
 	void ClearConfig()
 	{
 		std::lock_guard lk(s_mtx);
+		s_cfg_gate = 0;
 		s_cfg_regions.clear();
 		s_cfg_excludes.clear();
 		s_cfg_ignore.clear();
@@ -281,6 +293,9 @@ namespace RollbackDevice
 		s_rollback = std::clamp(rollback_frames, 1u, 30u);
 		s_write_protect = write_protect;
 		s_input = s_cfg_input;
+		s_gate = s_cfg_gate;
+		s_gate_ok.assign(INPUT_HISTORY, 0);
+		s_gated_frames = 0;
 		s_watches = s_cfg_watches;
 		s_inputs.assign(INPUT_HISTORY, {});
 		std::vector<Range> cut = s_cfg_excludes;
@@ -336,8 +351,26 @@ namespace RollbackDevice
 				RecordInput(s_frame);
 				s_ring->Capture(s_frame);
 
+				// Gate: did the live-simulation counter advance into this frame?
+				bool ok = true;
+				if (s_gate)
+				{
+					const u32 g = *reinterpret_cast<const u32*>(Ram(s_gate));
+					ok = (s_frame > 0) && (g != s_gate_prev);
+					s_gate_prev = g;
+				}
+				s_gate_ok[static_cast<u32>(s_frame) % INPUT_HISTORY] = ok ? 1 : 0;
+
 				if (s_mode != Mode::SyncTest || s_frame - s_first_frame < static_cast<s32>(s_rollback))
 					return 0;
+				for (s32 f = s_frame - static_cast<s32>(s_rollback) + 1; f <= s_frame; f++)
+				{
+					if (!s_gate_ok[static_cast<u32>(f) % INPUT_HISTORY])
+					{
+						s_gated_frames++;
+						return 0; // window touches a non-gameplay frame: never rewind across it
+					}
+				}
 
 				// Sync test: remember this frame's state, rewind R frames, let the game re-simulate them.
 				s_rollback_timer.Reset();
@@ -390,6 +423,7 @@ namespace RollbackDevice
 			s_mode == Mode::SyncTest ? "synctest" : "capture", s_rollback, s_frame, s_rollbacks, s_last_rollback_us, avg,
 			s_max_rollback_us, s_sim_desync_frames, s_first_sim_desync_frame, s_desync_frames, s_last_diff_bytes,
 			s_last_runs.size());
+		s += fmt::format(" | gated (no rollback) frames {}", s_gated_frames);
 		if (s_ring)
 			s += " | " + s_ring->Describe();
 		return s;
