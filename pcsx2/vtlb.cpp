@@ -758,6 +758,13 @@ void vtlb_MapBlock(void* base, u32 start, u32 size, u32 blocksize)
 
 	sptr baseint = (sptr)base;
 	u32 end = start + (size - VTLB_PAGE_SIZE);
+	if ((end >> VTLB_PAGE_BITS) >= std::size(vtlbdata.pmap))
+	{
+		// verify() is compiled out of Release builds; an out-of-range physical mapping would silently write
+		// past vtlbdata.pmap into whatever globals follow it.
+		Console.Error("vtlb_MapBlock: physical 0x%08X-0x%08X is outside the 512 MB physical map, ignored", start, end);
+		return;
+	}
 	verify((end >> VTLB_PAGE_BITS) < std::size(vtlbdata.pmap));
 
 	while (start <= end)
