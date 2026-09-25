@@ -320,12 +320,7 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 			const u32 page = a >> PAGE_SHIFT;
 			const u32 next = std::min(end, (page + 1) << PAGE_SHIFT);
 			if (std::binary_search(m_page_index.begin(), m_page_index.end(), page))
-			{
-				if (!keep.empty() && keep.back().address + keep.back().length == a)
-					keep.back().length += next - a;
-				else
-					keep.push_back({a, next - a});
-			}
+				keep.push_back({a, next - a}); // one segment per page (the load writes each through its page's view)
 			a = next;
 		}
 	};
@@ -340,6 +335,15 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 		std::memcpy(kept[k].data(), &eeMem->Main[keep[k].address & RAM_MASK], keep[k].length);
 	}
 
+	// Write-protect mode: data pages are restored through a writable alias of EE RAM, so their protection
+	// never changes (they end up protected and clean relative to the target). Pages holding recompiled code
+	// must be written through the protected view so the recompiler drops its blocks; without an alias every
+	// page takes that path (contiguous runs unprotected with one call).
+	u8* const alias = (m_mode == DirtyMode::WriteProtect) ? SysMemory::GetEEMainWritableAlias() : nullptr;
+	auto dest_for = [alias](u32 page) -> u8* {
+		return (alias && !vtlb_IsCodeProtectedPage(page)) ? alias + (page << PAGE_SHIFT) : nullptr;
+	};
+
 	u32 restored = 0;
 	u32 run_first = 0, run_len = 0; // consecutive RAM pages -> one unprotect call
 	auto flush_run = [&]() {
@@ -347,7 +351,7 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 			vtlb_DirtyTrack_Unprotect(run_first, run_len);
 		run_len = 0;
 	};
-	std::vector<u32> to_restore;
+	std::vector<u32> via_main;
 	for (u32 w = 0; w < m_words; w++)
 	{
 		u64 bits = restore[w];
@@ -356,6 +360,12 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 			const u32 i = w * 64 + static_cast<u32>(std::countr_zero(bits));
 			bits &= bits - 1;
 			const u32 page = m_page_index[i];
+			restored++;
+			if (u8* dst = dest_for(page))
+			{
+				std::memcpy(dst, it->pages[i]->data, PAGE_SIZE);
+				continue;
+			}
 			if (run_len && page == run_first + run_len)
 				run_len++;
 			else
@@ -364,26 +374,25 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 				run_first = page;
 				run_len = 1;
 			}
-			to_restore.push_back(i);
+			via_main.push_back(i);
 		}
 	}
 	flush_run();
-	for (const u32 i : to_restore)
-	{
+	for (const u32 i : via_main)
 		std::memcpy(RamPage(m_page_index[i]), it->pages[i]->data, PAGE_SIZE);
-		restored++;
-	}
 
 	for (size_t k = 0; k < keep.size(); k++)
 	{
-		const u32 page = (keep[k].address & RAM_MASK) >> PAGE_SHIFT;
-		const u32 last = ((keep[k].address & RAM_MASK) + keep[k].length - 1) >> PAGE_SHIFT;
-		if (m_mode == DirtyMode::WriteProtect)
+		// keep ranges were split per tracked page (add_tracked_parts), so each lies within one page
+		const u32 a = keep[k].address & RAM_MASK;
+		if (u8* dst = dest_for(a >> PAGE_SHIFT))
 		{
-			for (u32 p = page; p <= last; p++)
-				vtlb_DirtyTrack_Unprotect(p);
+			std::memcpy(dst + (a & (PAGE_SIZE - 1)), kept[k].data(), keep[k].length);
+			continue;
 		}
-		std::memcpy(&eeMem->Main[keep[k].address & RAM_MASK], kept[k].data(), keep[k].length);
+		if (m_mode == DirtyMode::WriteProtect)
+			vtlb_DirtyTrack_Unprotect(a >> PAGE_SHIFT);
+		std::memcpy(&eeMem->Main[a], kept[k].data(), keep[k].length);
 	}
 
 	// The target becomes the newest snapshot and the base for the next capture. Memory now equals
@@ -398,13 +407,9 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 		// the kept ranges' pages.
 		const std::vector<u64> hot_ram = HotRamBits();
 		vtlb_DirtyTrack_Rearm(nullptr, &hot_ram);
+		// Pages whose kept (never-rolled-back) bytes differ from the target must be copied by the next capture.
 		for (const Range& r : keep)
-		{
-			const u32 first = (r.address & RAM_MASK) >> PAGE_SHIFT;
-			const u32 last = ((r.address & RAM_MASK) + r.length - 1) >> PAGE_SHIFT;
-			for (u32 p = first; p <= last; p++)
-				vtlb_DirtyTrack_Unprotect(p);
-		}
+			vtlb_DirtyTrack_MarkDirty((r.address & RAM_MASK) >> PAGE_SHIFT);
 	}
 
 	m_stats.snapshots = static_cast<u32>(m_ring.size());

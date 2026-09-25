@@ -105,6 +105,12 @@ namespace SysMemory
 	/// Returns data memory (Main in Memory Map).
 	u8* GetDataPtr(size_t offset);
 
+	/// A second, always-writable view of EE main RAM (same physical pages as eeMem->Main), or nullptr if the
+	/// platform doesn't support it. Lets host code (rollback snapshot loads) write pages that are currently
+	/// write-protected for dirty tracking without changing their protection. Never use it for pages that hold
+	/// recompiled code: those writes must go through the protected view so the recompiler sees them.
+	u8* GetEEMainWritableAlias();
+
 	/// Returns memory used for the recompilers.
 	u8* GetCodePtr(size_t offset);
 
