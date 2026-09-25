@@ -1,0 +1,4 @@
+# Per-game overlay scripts: SERIAL=script.lua (a scripts/<SERIAL>.lua file takes precedence).
+# Games not listed run no script -- a game script patches that game's memory.
+SLUS-21442=sdbz.lua
+SLPM-55108=fuc.lua
