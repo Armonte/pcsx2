@@ -28,7 +28,8 @@ local A = {
 	-- `jal Task_RunMainListNoArg` in Game_MainLoop. Talks to PCSX2's RollbackDevice via syscall.            [code]
 	RB_CAVE = 0x2A1128, RB_HOOK = 0x159F98, RB_HOOK_ORIG = 0x0C084498, RB_HOOK_NEW = 0x0C0A844A,
 	RB_RENDER_HOOKS = { { 0x159FC0, 0x0C08609C, 0x0C0A848A }, { 0x15A108, 0x0C08643C, 0x0C0A8492 } },
-	RB_CAVE_WORDS = { 0x27BDFFE0, 0xFFBF0000, 0xFFB00008, 0xFFB10010, 0x3C035DB2, 0x3463F00D, 0x24040001, 0x0000000C, 0x0040802D, 0x0000882D, 0x12300016, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040002, 0x0220282D, 0x0000000C, 0x0C084498, 0x00000000, 0x0C08444C, 0x24040008, 0x0C0BACA8, 0x00000000, 0x0C08643C, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040003, 0x0220282D, 0x0000000C, 0x26310001, 0x1000FFEA, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040004, 0x0000000C, 0x0C084498, 0x00000000, 0xDFBF0000, 0xDFB00008, 0xDFB10010, 0x03E00008, 0x27BD0020, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040005, 0x0000000C, 0x0808609C, 0x00000000, 0x00000000, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040006, 0x0000000C, 0x0808643C, 0x00000000 },
+	RB_TRACE_HOOKS = { { 0x20E740, 0x3C020052, 0x3C030026, 0x080A849A }, { 0x20E7D0, 0x3C020052, 0x3C034780, 0x080A84AA }, { 0x20E850, 0x3C020052, 0x00A41823, 0x080A84BA }, { 0x20E8C0, 0x3C020052, 0x9C452D80, 0x080A84CA } },
+	RB_CAVE_WORDS = { 0x27BDFFE0, 0xFFBF0000, 0xFFB00008, 0xFFB10010, 0x3C035DB2, 0x3463F00D, 0x24040001, 0x0000000C, 0x0040802D, 0x0000882D, 0x12300016, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040002, 0x0220282D, 0x0000000C, 0x0C084498, 0x00000000, 0x0C08444C, 0x24040008, 0x0C0BACA8, 0x00000000, 0x0C08643C, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040003, 0x0220282D, 0x0000000C, 0x26310001, 0x1000FFEA, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040004, 0x0000000C, 0x0C084498, 0x00000000, 0xDFBF0000, 0xDFB00008, 0xDFB10010, 0x03E00008, 0x27BD0020, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040005, 0x0000000C, 0x0808609C, 0x00000000, 0x00000000, 0x00000000, 0x3C035DB2, 0x3463F00D, 0x24040006, 0x0000000C, 0x0808643C, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040010, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x3C030026, 0x080839D2, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040011, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x3C034780, 0x080839F6, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040012, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x00A41823, 0x08083A16, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0080402D, 0x00A0482D, 0x3C035DB2, 0x3463F00D, 0x24040013, 0x03E0282D, 0x0000000C, 0x0100202D, 0x0120282D, 0x3C020052, 0x9C452D80, 0x08083A32, 0x00000000 },
 	RB_CAVE_ORIG0  = 0x27BDFF20, -- first word of sub_2A1128 as shipped (addiu sp,-0xE0); install refuses otherwise
 	RB_INPUT_BLOCK = 0x522E20, RB_INPUT_LEN = 0x360, -- g_PadMerged + g_Pad[] + raw copies (0x522E20..0x523180)
 	CATCHUP_JAL    = 0x159F88, CATCHUP_WORD = 0x0C056898, -- jal Frame_CatchUpIfLagging (NOP = 1 sim tick/frame) [code]
@@ -99,7 +100,7 @@ local cfg = {
 	p_boxes = true, p_train = false, p_debug = false, p_state = true, p_rollback = false,
 	hurt = true, push = false, attack = true, pos = true, labels = true, hud = true,
 	freeze = false, lock_hp = false, lock_magic = false, magic_value = 3.0, lock_timer = false,
-	dbg_motion = false, dbg_camera = false, one_tick = false, snap_verify = false, netplay_rng = false, rb_frames = 2,
+	dbg_motion = false, dbg_camera = false, one_tick = false, snap_verify = false, netplay_rng = false, rb_frames = 2, rb_trace = false,
 	box_thickness = 1.5, circle_fill_alpha = 0.25,
 	col_hurt   = { 0.24, 0.86, 0.35, 0.80 },
 	col_push   = { 0.35, 0.65, 1.00, 0.70 },
@@ -451,10 +452,26 @@ local function rb_install()
 	return true
 end
 
+-- RNG call-tracing trampolines (desync attribution), toggled independently of the routine install.
+local rb_trace_installed = false
+local function rb_apply_trace(on)
+	if on and not rb_trace_installed then
+		for _, h in ipairs(A.RB_TRACE_HOOKS) do
+			if rd32(h[1]) ~= h[2] or rd32(h[1] + 4) ~= h[3] then return end -- unexpected code: refuse
+		end
+		for _, h in ipairs(A.RB_TRACE_HOOKS) do engine.patch(h[1], h[4]); engine.patch(h[1] + 4, 0) end
+		rb_trace_installed = true
+	elseif not on and rb_trace_installed then
+		for _, h in ipairs(A.RB_TRACE_HOOKS) do engine.unpatch(h[1]); engine.unpatch(h[1] + 4) end
+		rb_trace_installed = false
+	end
+end
+
 local function rb_uninstall()
 	if not rb_installed then return end
 	engine.unpatch(A.RB_HOOK)
 	for _, h in ipairs(A.RB_RENDER_HOOKS) do engine.unpatch(h[1]) end
+	rb_apply_trace(false)
 	for i = 1, #A.RB_CAVE_WORDS do engine.unpatch(A.RB_CAVE + 4 * (i - 1)) end
 	rb_installed = false
 end
@@ -488,7 +505,10 @@ local function rb_start(mode)
 	rbdev.add_exclude(0x522C70, 0x2C)                         -- g_Fdb* file cache metadata
 	rbdev.add_exclude(0x522D00, 0x18)                         -- g_LoadReq* async load requests
 	rbdev.set_gate(A.ROUND_FRAME)                             -- roll back only while the battle sim is ticking
-	rbdev.set_rng_split(A.RAND_SEED, 4)                       -- render passes (HUD flicker, Fx jitter, draw-pass script
+	rbdev.add_gate_stable(0x522D00, 0x18)                     -- g_LoadReq* (file load submissions)
+	rbdev.add_gate_stable(0x51A420, 0x170)                    -- stream channels (voice/BGM ADX streams)
+	rbdev.set_rng_split(A.RAND_SEED, 4)
+	rbdev.set_rng_trace(cfg.rb_trace)                       -- render passes (HUD flicker, Fx jitter, draw-pass script
 	                                                          -- events) get their own RNG stream; sim stream is render-free
 	rbdev.add_ignore(0x523EB4, 12)                            -- g_TaskEventArg0..2 (scratch set before render passes)
 	local camobj = rd32(A.OVERRIDE_CAM)
@@ -516,6 +536,7 @@ local function rb_start(mode)
 	rbdev.add_watch(0x3D6AC8, 4, "g_EmitterSerial")
 	cfg.one_tick = true -- exactly one sim tick per frame while rolling back
 	if not rb_install() then return end
+	rb_apply_trace(cfg.rb_trace)
 	rbdev.start(mode, cfg.rb_frames, true)
 	rb_mode = mode
 end
@@ -560,6 +581,7 @@ local function snap_commands()
 		elseif c == "rb_synctest" then cfg.rb_frames = tonumber(arg) or cfg.rb_frames; rb_start(2)
 		elseif c == "rb_capture" then rb_start(1)
 		elseif c == "rb_off" then rb_start(0)
+		elseif c == "rb_trace" then cfg.rb_trace = (arg == "on")
 		elseif c == "rb_report" and rbdev then
 			local rf = io.open(CMD_DIR .. "/rb_report.txt", "w")
 			if rf then rf:write(rbdev.report()); rf:close() end

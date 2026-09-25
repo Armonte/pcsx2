@@ -53,6 +53,7 @@ namespace RollbackDevice
 		std::vector<Watch> s_cfg_watches;
 		Range s_cfg_input;
 		u32 s_cfg_gate = 0;
+		std::vector<Range> s_cfg_stable;
 		Range s_cfg_rng;
 
 		// ---- runtime (EE thread) ----
@@ -70,6 +71,22 @@ namespace RollbackDevice
 		u32 s_gate_prev = 0;
 		std::vector<u8> s_gate_ok;                 // [frame % INPUT_HISTORY]: gate counter advanced into this frame
 		u64 s_gated_frames = 0;                    // frames where a sync-test rollback was skipped by the gate
+		// ---- RNG call tracing ----
+		enum class Phase : u8 { Other, NormalSim, Resim, Render };
+		bool s_trace = false;
+		Phase s_phase = Phase::Other;
+		s32 s_phase_frame = 0;
+		std::vector<std::vector<u64>> s_norm_trace;  // [frame % INPUT_HISTORY] = (fn << 32 | ra) of the normal sim step
+		std::vector<s32> s_norm_trace_frame;
+		std::vector<u64> s_cur_trace;
+		u64 s_trace_calls_other = 0, s_trace_calls_render = 0, s_trace_mismatches = 0;
+		u32 s_trace_other_first_ra = 0;
+		std::string s_trace_first_mismatch;
+		std::map<u64, u64> s_trace_other_sites;       // (fn<<32|ra) -> count, calls outside sim/render
+
+		std::vector<Range> s_stable;
+		std::vector<u64> s_stable_hash;            // [frame % INPUT_HISTORY]
+		u64 s_io_gated_frames = 0;
 		std::vector<std::vector<u8>> s_inputs;     // [frame % INPUT_HISTORY]
 		std::vector<std::vector<u8>> s_ref;        // sync test: copy of each compare range before rolling back
 		s32 s_frame = -1;
@@ -224,6 +241,42 @@ namespace RollbackDevice
 			}
 		}
 
+		void EndNormalSimTrace()
+		{
+			if (s_phase == Phase::NormalSim)
+			{
+				const u32 slot = static_cast<u32>(s_phase_frame) % INPUT_HISTORY;
+				s_norm_trace[slot] = s_cur_trace;
+				s_norm_trace_frame[slot] = s_phase_frame;
+			}
+			s_cur_trace.clear();
+			s_phase = Phase::Other;
+		}
+
+		void CompareResimTrace(s32 frame)
+		{
+			const u32 slot = static_cast<u32>(frame) % INPUT_HISTORY;
+			if (s_norm_trace_frame[slot] != frame)
+				return;
+			const auto& ref = s_norm_trace[slot];
+			const size_t n = std::max(ref.size(), s_cur_trace.size());
+			for (size_t i = 0; i < n; i++)
+			{
+				const u64 a = i < ref.size() ? ref[i] : 0, b = i < s_cur_trace.size() ? s_cur_trace[i] : 0;
+				if (a == b)
+					continue;
+				s_trace_mismatches++;
+				if (s_trace_first_mismatch.empty())
+				{
+					s_trace_first_mismatch = fmt::format("frame {} call #{}: normal fn{} ra {:08X} vs resim fn{} ra {:08X} "
+														 "(normal {} calls, resim {})",
+						frame, i, a >> 32, static_cast<u32>(a), b >> 32, static_cast<u32>(b), ref.size(), s_cur_trace.size());
+					Console.Error("RollbackDevice: RNG TRACE MISMATCH %s", s_trace_first_mismatch.c_str());
+				}
+				break;
+			}
+		}
+
 		void ResetRuntime()
 		{
 			s_ring.reset();
@@ -248,6 +301,18 @@ namespace RollbackDevice
 		s_cfg_rng = {seed_addr & RAM_MASK, (seed_addr & RAM_MASK) + size};
 	}
 
+	void SetRngTrace(bool on)
+	{
+		std::lock_guard lk(s_mtx);
+		s_trace = on;
+	}
+
+	void AddGateStable(u32 addr, u32 len)
+	{
+		std::lock_guard lk(s_mtx);
+		s_cfg_stable.push_back({addr & RAM_MASK, (addr & RAM_MASK) + len});
+	}
+
 	void SetGate(u32 counter_addr)
 	{
 		std::lock_guard lk(s_mtx);
@@ -259,6 +324,7 @@ namespace RollbackDevice
 		std::lock_guard lk(s_mtx);
 		s_cfg_gate = 0;
 		s_cfg_rng = {};
+		s_cfg_stable.clear();
 		s_cfg_regions.clear();
 		s_cfg_excludes.clear();
 		s_cfg_ignore.clear();
@@ -305,6 +371,17 @@ namespace RollbackDevice
 		s_write_protect = write_protect;
 		s_input = s_cfg_input;
 		s_gate = s_cfg_gate;
+		s_stable = s_cfg_stable;
+		s_phase = Phase::Other;
+		s_norm_trace.assign(INPUT_HISTORY, {});
+		s_norm_trace_frame.assign(INPUT_HISTORY, -1);
+		s_cur_trace.clear();
+		s_trace_calls_other = s_trace_calls_render = s_trace_mismatches = 0;
+		s_trace_other_first_ra = 0;
+		s_trace_first_mismatch.clear();
+		s_trace_other_sites.clear();
+		s_stable_hash.assign(INPUT_HISTORY, 0);
+		s_io_gated_frames = 0;
 		s_rng = s_cfg_rng;
 		s_in_render = false;
 		s_rng_sim.clear();
@@ -361,6 +438,7 @@ namespace RollbackDevice
 					s_frame = -1;
 					s_first_frame = 0;
 				}
+				EndNormalSimTrace(); // (normal sim without a render section this frame)
 				s_frame++;
 				s_frames++;
 				RecordInput(s_frame);
@@ -375,6 +453,16 @@ namespace RollbackDevice
 					s_gate_prev = g;
 				}
 				s_gate_ok[static_cast<u32>(s_frame) % INPUT_HISTORY] = ok ? 1 : 0;
+				{
+					u64 h = 1469598103934665603ull; // FNV-1a over the I/O-stable ranges
+					for (const Range& r : s_stable)
+					{
+						const u8* p = Ram(r.a);
+						for (u32 k = 0; k < r.b - r.a; k++)
+							h = (h ^ p[k]) * 1099511628211ull;
+					}
+					s_stable_hash[static_cast<u32>(s_frame) % INPUT_HISTORY] = h;
+				}
 
 				if (s_mode != Mode::SyncTest || s_frame - s_first_frame < static_cast<s32>(s_rollback))
 					return 0;
@@ -384,6 +472,18 @@ namespace RollbackDevice
 					{
 						s_gated_frames++;
 						return 0; // window touches a non-gameplay frame: never rewind across it
+					}
+				}
+				if (!s_stable.empty())
+				{
+					const u64 h0 = s_stable_hash[static_cast<u32>(s_frame - static_cast<s32>(s_rollback)) % INPUT_HISTORY];
+					for (s32 f = s_frame - static_cast<s32>(s_rollback) + 1; f <= s_frame; f++)
+					{
+						if (s_stable_hash[static_cast<u32>(f) % INPUT_HISTORY] != h0)
+						{
+							s_io_gated_frames++;
+							return 0; // async I/O was submitted inside the window: never re-issue it
+						}
 					}
 				}
 
@@ -402,14 +502,23 @@ namespace RollbackDevice
 			case CMD_RESIM_PRE:
 				if (s_resim_active)
 					InjectInput(s_resim_base + static_cast<s32>(arg));
+				s_phase = Phase::Resim;
+				s_phase_frame = s_resim_base + static_cast<s32>(arg);
+				s_cur_trace.clear();
 				return 0;
 
 			case CMD_RESIM_POST:
+				if (s_trace && s_phase == Phase::Resim)
+					CompareResimTrace(s_phase_frame);
+				s_phase = Phase::Other;
+				s_cur_trace.clear();
 				if (s_resim_active && s_ring)
 					s_ring->Capture(s_resim_base + static_cast<s32>(arg) + 1);
 				return 0;
 
 			case CMD_RENDER_BEGIN:
+				EndNormalSimTrace();
+				s_phase = Phase::Render;
 				if (s_rng.b > s_rng.a && !s_in_render)
 				{
 					const u32 n = s_rng.b - s_rng.a;
@@ -427,6 +536,7 @@ namespace RollbackDevice
 				return 0;
 
 			case CMD_RENDER_END:
+				s_phase = Phase::Other;
 				if (s_in_render)
 				{
 					const u32 n = s_rng.b - s_rng.a;
@@ -447,9 +557,32 @@ namespace RollbackDevice
 					s_max_rollback_us = std::max(s_max_rollback_us, s_last_rollback_us);
 					s_sum_rollback_us += s_last_rollback_us;
 				}
+				s_phase = Phase::NormalSim;
+				s_phase_frame = s_frame;
+				s_cur_trace.clear();
 				return 0;
 
 			default:
+				if (cmd >= CMD_RNG_TRACE && cmd < CMD_RNG_TRACE + 16 && s_trace)
+				{
+					const u64 key = (static_cast<u64>(cmd - CMD_RNG_TRACE) << 32) | arg;
+					switch (s_phase)
+					{
+						case Phase::NormalSim:
+						case Phase::Resim:
+							s_cur_trace.push_back(key);
+							break;
+						case Phase::Render:
+							s_trace_calls_render++;
+							break;
+						default:
+							s_trace_calls_other++;
+							if (!s_trace_other_first_ra)
+								s_trace_other_first_ra = arg;
+							s_trace_other_sites[key]++;
+							break;
+					}
+				}
 				return 0;
 		}
 	}
@@ -465,7 +598,10 @@ namespace RollbackDevice
 			s_mode == Mode::SyncTest ? "synctest" : "capture", s_rollback, s_frame, s_rollbacks, s_last_rollback_us, avg,
 			s_max_rollback_us, s_sim_desync_frames, s_first_sim_desync_frame, s_desync_frames, s_last_diff_bytes,
 			s_last_runs.size());
-		s += fmt::format(" | gated (no rollback) frames {}", s_gated_frames);
+		s += fmt::format(" | gated (no rollback) frames {} (+{} for I/O)", s_gated_frames, s_io_gated_frames);
+		if (s_trace)
+			s += fmt::format(" | RNG trace: mismatches {} first [{}] | calls outside sim/render {} (first ra {:08X}), in render {}",
+				s_trace_mismatches, s_trace_first_mismatch, s_trace_calls_other, s_trace_other_first_ra, s_trace_calls_render);
 		if (s_ring)
 			s += " | " + s_ring->Describe();
 		return s;
@@ -485,6 +621,10 @@ namespace RollbackDevice
 		std::sort(pages.rbegin(), pages.rend());
 		for (const auto& [n, page] : pages)
 			out += fmt::format("{:08X} {} {}\n", page << 12, n, WatchName(page << 12));
+		out += "\n## RNG calls outside the sim step and the render section ((fn, caller) -> count)\n";
+		for (const auto& [key, n] : s_trace_other_sites)
+			out += fmt::format("fn{} ra {:08X}  {}\n", key >> 32, static_cast<u32>(key), n);
+		out += fmt::format("\n## RNG trace first mismatch\n{}\n", s_trace_first_mismatch);
 		out += "\n## last frame's differing runs (addr len now/ref first bytes)\n";
 		for (const DiffRun& r : s_last_runs)
 		{
