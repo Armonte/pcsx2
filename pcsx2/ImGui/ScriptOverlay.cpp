@@ -644,30 +644,25 @@ namespace ScriptBridge
 	void WriteDataF32(uint32_t a, float v) { EeStoreF(a, v); }
 	void WriteData8(uint32_t a, uint8_t v) { EeStore8(a, v); }
 
-	// recompiler-safe EE code-patch registry (script-managed freeze/freecam NOPs). Fixed slots avoid a heap map;
-	// ALL access is on the CPU thread (inside RunOnCPUThread), so no locking is needed.
-	struct LuaPatch { u32 addr; u32 orig; bool used; };
-	static LuaPatch s_lua_patches[64] = {};
+	// recompiler-safe EE code-patch registry (script-managed NOPs, hooks and code caves): address -> original word.
+	// Unbounded (it used to be 64 fixed slots that silently dropped patches when full -- a rollback routine of 78
+	// words + hooks overflowed it and the hooks were never written). ALL access is on the CPU thread.
+	static std::unordered_map<u32, u32> s_lua_patches;
 	void PatchCode(uint32_t addr, uint32_t word) {
 		Host::RunOnCPUThread([addr, word]() {
-			int freeslot = -1;
-			for (int i = 0; i < 64; i++) {
-				if (s_lua_patches[i].used && s_lua_patches[i].addr == addr) { memWrite32(addr, word); if (Cpu) Cpu->Clear(addr, 4); return; }
-				if (freeslot < 0 && !s_lua_patches[i].used) freeslot = i;
-			}
-			if (freeslot < 0) return; // registry full
-			s_lua_patches[freeslot] = {addr, memRead32(addr), true};
+			s_lua_patches.try_emplace(addr, memRead32(addr)); // keep the ORIGINAL word from the first patch
 			memWrite32(addr, word);
 			if (Cpu) Cpu->Clear(addr, 4);
 		}, false);
 	}
 	void UnpatchCode(uint32_t addr) {
 		Host::RunOnCPUThread([addr]() {
-			for (int i = 0; i < 64; i++) {
-				if (s_lua_patches[i].used && s_lua_patches[i].addr == addr) {
-					memWrite32(addr, s_lua_patches[i].orig); s_lua_patches[i].used = false; if (Cpu) Cpu->Clear(addr, 4); return;
-				}
-			}
+			auto it = s_lua_patches.find(addr);
+			if (it == s_lua_patches.end())
+				return;
+			memWrite32(addr, it->second);
+			if (Cpu) Cpu->Clear(addr, 4);
+			s_lua_patches.erase(it);
 		}, false);
 	}
 
@@ -680,13 +675,11 @@ namespace ScriptBridge
 	void UnpatchAll() {
 		g_mouse_claimed = false; // clear any stale claim on script reload/disable
 		Host::RunOnCPUThread([]() {
-			for (int i = 0; i < 64; i++) {
-				if (s_lua_patches[i].used) {
-					memWrite32(s_lua_patches[i].addr, s_lua_patches[i].orig);
-					if (Cpu) Cpu->Clear(s_lua_patches[i].addr, 4);
-					s_lua_patches[i].used = false;
-				}
+			for (const auto& [addr, orig] : s_lua_patches) {
+				memWrite32(addr, orig);
+				if (Cpu) Cpu->Clear(addr, 4);
 			}
+			s_lua_patches.clear();
 		}, false);
 	}
 
