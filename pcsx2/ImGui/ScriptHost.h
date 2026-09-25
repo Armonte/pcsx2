@@ -16,6 +16,7 @@ namespace Script
 	bool        IsActive();           // enabled AND a script with on_frame() is loaded -> C++ box path stands down
 	void        SetEnabled(bool on);  // toggle; first enable triggers a load
 	void        Reload();             // force reload from disk (Ctrl+R)
+	void        AutoEnableOnce();     // GS thread: honour [Script] AutoEnable once per session
 	void        RunFrame();           // GS thread: poll hot-reload + on_frame (bookkeeping/HUD) + on_gui unless popped out
 	void        RunCapture();         // EE/CPU thread (Counters::VSyncStart): on_capture() -- frame-perfect box geometry
 	void        RunGui();             // run on_gui() in the CURRENT imgui context (the engine's popout window calls this)
