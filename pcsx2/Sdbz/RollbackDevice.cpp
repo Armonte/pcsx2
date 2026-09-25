@@ -112,6 +112,9 @@ namespace RollbackDevice
 		// Rollback cost breakdown (sums over all rollbacks, us): sync-test reference copy + compare are test-only
 		// overhead; load + resim captures + game re-simulation are the real cost of a netplay rollback.
 		u64 s_sum_ref_us = 0, s_sum_load_us = 0, s_sum_cap_us = 0, s_sum_cmp_us = 0;
+		Common::Timer s_sim_timer;                 // normal frame: CUR_PRE -> RENDER_BEGIN (sim tick + event pass)
+		bool s_sim_timing = false;
+		u64 s_sum_sim_us = 0, s_sim_frames = 0;
 		u64 s_last_diff_bytes = 0;
 		s32 s_first_desync_frame = -1;
 		std::map<u32, u64> s_page_hits;             // page -> frames it differed in
@@ -300,6 +303,8 @@ namespace RollbackDevice
 			s_first_sim_desync.clear();
 			s_last_rollback_us = s_max_rollback_us = s_sum_rollback_us = 0;
 			s_sum_ref_us = s_sum_load_us = s_sum_cap_us = s_sum_cmp_us = 0;
+			s_sum_sim_us = s_sim_frames = 0;
+			s_sim_timing = false;
 			s_last_diff_bytes = 0;
 			s_first_desync_frame = -1;
 			s_page_hits.clear();
@@ -612,6 +617,12 @@ namespace RollbackDevice
 			}
 
 			case CMD_RENDER_BEGIN:
+				if (s_sim_timing)
+				{
+					s_sum_sim_us += static_cast<u64>(s_sim_timer.GetTimeNanoseconds() / 1000.0);
+					s_sim_frames++;
+					s_sim_timing = false;
+				}
 				EndNormalSimTrace();
 				s_phase = Phase::Render;
 				if (s_rng.b > s_rng.a && !s_in_render)
@@ -658,6 +669,8 @@ namespace RollbackDevice
 				}
 				s_phase = Phase::NormalSim;
 				s_phase_frame = s_frame;
+				s_sim_timing = s_gate_ok[static_cast<u32>(s_frame) % INPUT_HISTORY] != 0; // gameplay frames only
+				s_sim_timer.Reset();
 				s_cur_trace.clear();
 				return 0;
 
@@ -709,6 +722,7 @@ namespace RollbackDevice
 		if (s_rollbacks)
 		{
 			const u64 n = s_rollbacks, other = s_sum_ref_us + s_sum_load_us + s_sum_cap_us + s_sum_cmp_us;
+			s += fmt::format(" | normal sim step {} us/frame", s_sim_frames ? s_sum_sim_us / s_sim_frames : 0);
 			s += fmt::format(" | avg per rollback: load {} us, resim game {} us, resim captures {} us (real {} us) + test-only ref {} us, compare {} us",
 				s_sum_load_us / n, (s_sum_rollback_us > other ? s_sum_rollback_us - other : 0) / n, s_sum_cap_us / n,
 				(s_sum_rollback_us > s_sum_ref_us + s_sum_cmp_us ? s_sum_rollback_us - s_sum_ref_us - s_sum_cmp_us : 0) / n,
