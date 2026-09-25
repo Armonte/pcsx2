@@ -4,6 +4,7 @@
 #include "ImGui/ScriptHost.h"
 #include "ImGui/ScriptBridge.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
+#include "Sdbz/SnapshotBench.h" // snap.* Lua table (incremental page-snapshot ring)
 
 #include "Config.h" // EmuFolders
 
@@ -112,6 +113,18 @@ namespace
 		rb.set_function("clear_excludes", []() { SdbzDeterminism::ClearExcludes(); });
 		rb.set_function("chunk_kb", [](uint32_t kb) { SdbzDeterminism::SetChunkKB(kb); });
 		rb.set_function("max_frames", [](uint32_t n) { SdbzDeterminism::SetMaxFrames(n); });
+
+		// Incremental rollback snapshots (Sdbz/PageSnapshotRing): capture every frame, only dirty
+		// 4 KiB pages are copied. snap.start(capacity, write_protect) after add_region/add_exclude.
+		auto sn = lua.create_named_table("snap");
+		sn.set_function("clear_regions", []() { SnapshotBench::ClearRegions(); });
+		sn.set_function("add_region", [](uint32_t a, uint32_t n) { SnapshotBench::AddRegion(a, n); });
+		sn.set_function("add_exclude", [](uint32_t a, uint32_t n) { SnapshotBench::AddExclude(a, n); });
+		sn.set_function("start", [](uint32_t cap, bool wp) { SnapshotBench::Start(cap, wp); });
+		sn.set_function("stop", []() { SnapshotBench::Stop(); });
+		sn.set_function("rollback", [](uint32_t n) { SnapshotBench::Rollback(n); });
+		sn.set_function("verify", [](bool on) { SnapshotBench::SetVerify(on); });
+		sn.set_function("status", []() { return SnapshotBench::Status(); });
 
 		auto proj = lua.create_named_table("project");
 		proj.set_function("world_to_screen", [](float x, float y, float z) {

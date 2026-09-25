@@ -1,0 +1,107 @@
+// SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
+
+#pragma once
+
+#include "common/Pcsx2Defs.h"
+
+#include <string>
+#include <vector>
+
+// Incremental (page copy-on-write) rollback snapshot ring for in-game (Slippi-style) rollback.
+//
+// Slippi's SlippiSavestate memcpys every region on every capture (~7.5 MiB for Melee). This ring
+// keeps the same contract -- game memory only, captured/restored at a fixed frame-boundary hook,
+// byte-exact exclude + preserve ranges -- but stores memory as 4 KiB pages shared between
+// snapshots: a capture copies only the pages that changed since the previous capture, every
+// unchanged page is a reference to the previous snapshot's buffer. The first capture is a full
+// copy; every later one costs (dirty pages x 4 KiB).
+//
+// Dirty detection (selectable, both exact):
+//  - Compare:      memcmp each tracked page against its last captured version. Catches every
+//                  writer (EE recompiler/interpreter, DMA, IOP-side copies, PINE) with no hooks.
+//  - WriteProtect: host page protection on the tracked EE pages (eeMem->Main + fastmem views),
+//                  first write per page per frame faults once and marks the page dirty
+//                  (vtlb.cpp page-fault handler, same mechanism as recompiler code protection).
+//                  Cost scales with the number of dirty pages, not with the region size.
+//
+// Excluded byte ranges are never rolled back (they keep running linearly, like Slippi's exclude
+// list): their live bytes are saved before a load and put back afterwards.
+//
+// All methods: EE/CPU thread only (frame-boundary hook), except the Stats accessors.
+class PageSnapshotRing
+{
+public:
+	enum class DirtyMode : u8
+	{
+		Compare,
+		WriteProtect,
+	};
+
+	struct Range
+	{
+		u32 address = 0; // EE physical
+		u32 length = 0;
+	};
+
+	struct Stats
+	{
+		u32 tracked_pages = 0;
+		u32 snapshots = 0;
+		u32 last_dirty_pages = 0;    // pages copied by the last capture
+		u32 last_restored_pages = 0; // pages written by the last load
+		u64 last_capture_us = 0;
+		u64 last_load_us = 0;
+		u64 pool_bytes = 0; // all page buffers currently allocated (live + free list)
+		u64 live_bytes = 0; // unique page buffers referenced by snapshots
+	};
+
+	// regions: EE ranges to snapshot (rounded out to 4 KiB pages). excludes: byte ranges inside
+	// them that must never be rolled back. capacity: ring size (Slippi: ROLLBACK_MAX_FRAMES = 7).
+	PageSnapshotRing(std::vector<Range> regions, std::vector<Range> excludes, u32 capacity, DirtyMode mode);
+	~PageSnapshotRing();
+
+	PageSnapshotRing(const PageSnapshotRing&) = delete;
+	PageSnapshotRing& operator=(const PageSnapshotRing&) = delete;
+
+	// Store the current memory as `frame`. Re-capturing an existing frame replaces it; when the
+	// ring is full the oldest snapshot is dropped.
+	void Capture(s32 frame);
+
+	// Restore memory to `frame` (must exist), keeping `preserve` ranges live (Slippi preserve
+	// blocks, e.g. the netplay input buffer). Snapshots newer than `frame` are discarded.
+	bool Load(s32 frame, const std::vector<Range>& preserve = {});
+
+	bool Has(s32 frame) const;
+	void Clear();
+
+	DirtyMode Mode() const { return m_mode; }
+	const Stats& GetStats() const { return m_stats; }
+	std::string Describe() const;
+
+private:
+	struct Page;
+	struct Snapshot
+	{
+		s32 frame = 0;
+		std::vector<Page*> pages;     // one per tracked page
+		std::vector<u64> dirty_bits;  // pages that differ from the previous snapshot
+	};
+
+	Page* AllocPage();
+	void Ref(Page* p);
+	void Unref(Page* p);
+	void DropSnapshot(Snapshot& s);
+	void CollectDirty(std::vector<u64>& bits);
+	void ArmWriteProtect();
+	void UpdateLiveBytes();
+
+	std::vector<u32> m_page_index; // tracked EE page numbers (addr >> 12), sorted
+	std::vector<Range> m_excludes;
+	std::vector<Snapshot> m_ring; // oldest first
+	std::vector<Page*> m_free;
+	u32 m_capacity;
+	DirtyMode m_mode;
+	u32 m_words; // u64 words per dirty bitset
+	Stats m_stats;
+};

@@ -856,8 +856,10 @@ set(pcsx2ImGuiSources
 	ImGui/ImGuiOverlays.cpp
 	ImGui/ScriptOverlay.cpp
 	ImGui/ScriptHost.cpp
+	Sdbz/PageSnapshotRing.cpp
 	Sdbz/SdbzDeterminism.cpp
 	Sdbz/SdbzSavestate.cpp
+	Sdbz/SnapshotBench.cpp
 )
 
 set(pcsx2ImGuiHeaders
@@ -870,8 +872,10 @@ set(pcsx2ImGuiHeaders
 	ImGui/ScriptOverlay.h
 	ImGui/ScriptBridge.h
 	ImGui/ScriptHost.h
+	Sdbz/PageSnapshotRing.h
 	Sdbz/SdbzDeterminism.h
 	Sdbz/SdbzSavestate.h
+	Sdbz/SnapshotBench.h
 )
 
 set(pcsx2InputSources

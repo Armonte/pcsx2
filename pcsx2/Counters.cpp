@@ -13,6 +13,7 @@
 #include "GS/GS.h"
 #include "ImGui/ScriptOverlay.h" // script overlay: capture box geometry on the EE thread at end-of-frame
 #include "Sdbz/SdbzDeterminism.h" // rollback Phase-0 harness: record/replay/compare at the same boundary
+#include "Sdbz/SnapshotBench.h" // incremental page-snapshot ring (Lua `snap`)
 #include "MTGS.h"
 #include "PerformanceMetrics.h"
 #include "Patch.h"
@@ -505,6 +506,7 @@ static __fi void VSyncStart(u64 sCycle)
 
 	// Rollback determinism harness ticks at the same settled-frame boundary (no-op when idle).
 	SdbzDeterminism::OnVSyncStart();
+	SnapshotBench::OnVSyncStart();
 
 	if (!EmuConfig.GS.AdvancedFrameDisplay)
 	{

@@ -31,6 +31,7 @@
 
 #include "GS/GSVector.h"
 
+#include <atomic>
 #include <bit>
 #include <map>
 #include <unordered_set>
@@ -1425,6 +1426,32 @@ struct vtlb_PageProtectionInfo
 
 alignas(16) static vtlb_PageProtectionInfo m_PageProtectInfo[Ps2MemSize::TotalRam >> __pageshift];
 
+// ---- Rollback dirty-page tracking (see vtlb.h vtlb_DirtyTrack_*) ----
+static constexpr u32 DIRTY_TRACK_WORDS = (Ps2MemSize::TotalRam >> __pageshift) / 64;
+static bool s_dirty_track_enabled = false;
+static u64 s_dirty_tracked[DIRTY_TRACK_WORDS];            // pages under tracking
+static std::atomic<u64> s_dirty_bits[DIRTY_TRACK_WORDS];  // tracked pages written since the last rearm
+
+static __fi bool DirtyTrack_IsTracked(u32 rampage)
+{
+	return s_dirty_track_enabled && (s_dirty_tracked[rampage >> 6] & (1ull << (rampage & 63)));
+}
+
+static __fi void DirtyTrack_MarkDirty(u32 rampage)
+{
+	if (DirtyTrack_IsTracked(rampage))
+		s_dirty_bits[rampage >> 6].fetch_or(1ull << (rampage & 63), std::memory_order_relaxed);
+}
+
+static void DirtyTrack_SetPageProtection(u32 first_page, u32 count, const PageProtectionMode& prot)
+{
+	HostSys::MemProtect(&eeMem->Main[first_page << __pageshift], count << __pageshift, prot);
+	vtlb_UpdateFastmemProtection(first_page << __pageshift, count << __pageshift, prot);
+}
+
+// Handles a write fault on a tracked RAM page. Returns false if the page isn't tracked.
+static bool DirtyTrack_HandleFault(u32 offset);
+
 
 // returns:
 //  ProtMode_NotRequired - unchecked block (resides in ROM, thus is integrity is constant)
@@ -1492,6 +1519,7 @@ static __fi void mmap_ClearCpuBlock(uint offset)
 	HostSys::MemProtect(&eeMem->Main[rampage << __pageshift], __pagesize, PageAccess_ReadWrite());
 	vtlb_UpdateFastmemProtection(rampage << __pageshift, __pagesize, PageAccess_ReadWrite());
 	m_PageProtectInfo[rampage].Mode = ProtMode_Manual;
+	DirtyTrack_MarkDirty(rampage); // now writable without faulting
 	Cpu->Clear(m_PageProtectInfo[rampage].ReverseRamMap, __pagesize);
 }
 
@@ -1507,6 +1535,8 @@ PageFaultHandler::HandlerResult PageFaultHandler::HandlePageFault(void* exceptio
 
 		uptr ptr = (uptr)PSM(vaddr);
 		uptr offset = (ptr - (uptr)eeMem->Main);
+		if (ptr && offset < Ps2MemSize::ExposedRam && DirtyTrack_HandleFault(static_cast<u32>(offset)))
+			return HandlerResult::ContinueExecution;
 		if (ptr && m_PageProtectInfo[offset >> __pageshift].Mode == ProtMode_Write)
 		{
 			// fprintf(stderr, "Not backpatching code write at %08X\n", vaddr);
@@ -1529,6 +1559,9 @@ PageFaultHandler::HandlerResult PageFaultHandler::HandlePageFault(void* exceptio
 		if (offset >= Ps2MemSize::ExposedRam)
 			return HandlerResult::ExecuteNextHandler;
 
+		if (DirtyTrack_HandleFault(static_cast<u32>(offset)))
+			return HandlerResult::ContinueExecution;
+
 		mmap_ClearCpuBlock(offset);
 		return HandlerResult::ContinueExecution;
 	}
@@ -1545,4 +1578,94 @@ void mmap_ResetBlockTracking()
 	if (eeMem)
 		HostSys::MemProtect(eeMem->Main, Ps2MemSize::ExposedRam, PageAccess_ReadWrite());
 	vtlb_UpdateFastmemProtection(0, Ps2MemSize::ExposedRam, PageAccess_ReadWrite());
+	for (u32 i = 0; i < DIRTY_TRACK_WORDS; i++)
+		s_dirty_bits[i].fetch_or(s_dirty_tracked[i], std::memory_order_relaxed);
+}
+
+static bool DirtyTrack_HandleFault(u32 offset)
+{
+	const u32 rampage = offset >> __pageshift;
+	if (!DirtyTrack_IsTracked(rampage))
+		return false;
+
+	s_dirty_bits[rampage >> 6].fetch_or(1ull << (rampage & 63), std::memory_order_relaxed);
+	if (m_PageProtectInfo[rampage].Mode == ProtMode_Write)
+		mmap_ClearCpuBlock(offset); // code page: normal self-modifying-code handling, unprotects
+	else
+		DirtyTrack_SetPageProtection(rampage, 1, PageAccess_ReadWrite());
+	return true;
+}
+
+void vtlb_DirtyTrack_Enable(const std::vector<u32>& ram_pages)
+{
+	vtlb_DirtyTrack_Disable();
+	std::memset(s_dirty_tracked, 0, sizeof(s_dirty_tracked));
+	const u32 max_page = Ps2MemSize::ExposedRam >> __pageshift;
+	for (const u32 page : ram_pages)
+	{
+		if (page < max_page)
+			s_dirty_tracked[page >> 6] |= 1ull << (page & 63);
+	}
+	// Unknown history -> everything dirty until the first rearm.
+	for (u32 i = 0; i < DIRTY_TRACK_WORDS; i++)
+		s_dirty_bits[i].store(s_dirty_tracked[i], std::memory_order_relaxed);
+	s_dirty_track_enabled = true;
+}
+
+void vtlb_DirtyTrack_Disable()
+{
+	if (!s_dirty_track_enabled)
+		return;
+	s_dirty_track_enabled = false;
+	// Drop our protection; pages that hold recompiled code keep theirs.
+	for (u32 page = 0; page < (Ps2MemSize::TotalRam >> __pageshift); page++)
+	{
+		if ((s_dirty_tracked[page >> 6] & (1ull << (page & 63))) && m_PageProtectInfo[page].Mode != ProtMode_Write)
+			DirtyTrack_SetPageProtection(page, 1, PageAccess_ReadWrite());
+	}
+	std::memset(s_dirty_tracked, 0, sizeof(s_dirty_tracked));
+	for (u32 i = 0; i < DIRTY_TRACK_WORDS; i++)
+		s_dirty_bits[i].store(0, std::memory_order_relaxed);
+}
+
+bool vtlb_DirtyTrack_IsEnabled()
+{
+	return s_dirty_track_enabled;
+}
+
+void vtlb_DirtyTrack_Rearm(std::vector<u64>* out)
+{
+	if (out)
+		out->assign(DIRTY_TRACK_WORDS, 0);
+	if (!s_dirty_track_enabled)
+		return;
+
+	for (u32 w = 0; w < DIRTY_TRACK_WORDS; w++)
+	{
+		const u64 dirty = s_dirty_bits[w].exchange(0, std::memory_order_relaxed) & s_dirty_tracked[w];
+		if (out)
+			(*out)[w] = dirty;
+
+		// Only dirty pages lost their protection; protect contiguous runs in one call each.
+		u64 bits = dirty;
+		while (bits)
+		{
+			const u32 first = static_cast<u32>(std::countr_zero(bits));
+			const u64 shifted = bits >> first;
+			const u32 run = (shifted == ~0ull) ? (64 - first) : static_cast<u32>(std::countr_one(shifted));
+			DirtyTrack_SetPageProtection(w * 64 + first, run, PageAccess_ReadOnly());
+			bits = (run + first >= 64) ? 0 : (bits & ~(((1ull << run) - 1) << first));
+		}
+	}
+}
+
+void vtlb_DirtyTrack_Unprotect(u32 ram_page)
+{
+	if (!DirtyTrack_IsTracked(ram_page))
+		return;
+	s_dirty_bits[ram_page >> 6].fetch_or(1ull << (ram_page & 63), std::memory_order_relaxed);
+	if (m_PageProtectInfo[ram_page].Mode == ProtMode_Write)
+		mmap_ClearCpuBlock(ram_page << __pageshift);
+	else
+		DirtyTrack_SetPageProtection(ram_page, 1, PageAccess_ReadWrite());
 }
