@@ -252,6 +252,11 @@ extern void vtlb_DirtyTrack_Rearm(std::vector<u64>* out, const std::vector<u64>*
 extern void vtlb_DirtyTrack_Unprotect(u32 ram_page, u32 count = 1);
 // Write-protects a tracked page again (a page the caller had kept writable via stay_writable).
 extern void vtlb_DirtyTrack_Reprotect(u32 ram_page);
+// Flags tracked pages dirty without touching their protection (their contents were changed through a
+// writable alias).
+extern void vtlb_DirtyTrack_MarkDirty(u32 ram_page, u32 count = 1);
+// True if the RAM page is write-protected for recompiled-code (self-modifying code) detection.
+extern bool vtlb_IsCodeProtectedPage(u32 ram_page);
 
 // --------------------------------------------------------------------------------------
 //  Goemon game fix

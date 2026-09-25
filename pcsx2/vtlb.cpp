@@ -1693,6 +1693,17 @@ void vtlb_DirtyTrack_Unprotect(u32 ram_page, u32 count)
 	flush();
 }
 
+void vtlb_DirtyTrack_MarkDirty(u32 ram_page, u32 count)
+{
+	for (u32 page = ram_page; page < ram_page + count; page++)
+		DirtyTrack_MarkDirty(page);
+}
+
+bool vtlb_IsCodeProtectedPage(u32 ram_page)
+{
+	return ram_page < (Ps2MemSize::TotalRam >> __pageshift) && m_PageProtectInfo[ram_page].Mode == ProtMode_Write;
+}
+
 void vtlb_DirtyTrack_Reprotect(u32 ram_page)
 {
 	if (DirtyTrack_IsTracked(ram_page))

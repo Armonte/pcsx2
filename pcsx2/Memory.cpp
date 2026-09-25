@@ -36,6 +36,11 @@ BIOS
 #include "ps2/BiosTools.h"
 
 #include "common/AlignedMalloc.h"
+#if defined(_WIN32)
+#include "common/RedtapeWindows.h"
+#elif defined(__linux__)
+#include <sys/mman.h>
+#endif
 #include "common/Error.h"
 
 #ifdef ENABLECACHE
@@ -56,6 +61,7 @@ namespace SysMemory
 
 	static u8* s_data_memory;
 	static void* s_data_memory_file_handle;
+	static u8* s_ee_main_alias; // lazily mapped writable view of eeMem->Main (GetEEMainWritableAlias)
 	static u8* s_code_memory;
 	static std::unique_ptr<SharedMemoryMappingArea> s_memory_mapping_area;
 } // namespace SysMemory
@@ -149,8 +155,36 @@ void SysMemory::DumpMemoryMap()
 #undef DUMP_REGION
 }
 
+u8* SysMemory::GetEEMainWritableAlias()
+{
+	if (s_ee_main_alias || !s_data_memory_file_handle)
+		return s_ee_main_alias;
+	// eeMem->Main is the first member of EEVM_MemoryAllocMess at HostMemoryMap::EEmemOffset (0), which is
+	// allocation-granularity aligned, so it can be mapped on its own.
+	static_assert(HostMemoryMap::EEmemOffset == 0);
+#if defined(_WIN32)
+	s_ee_main_alias = static_cast<u8*>(MapViewOfFile(static_cast<HANDLE>(s_data_memory_file_handle), FILE_MAP_WRITE, 0,
+		static_cast<DWORD>(HostMemoryMap::EEmemOffset), Ps2MemSize::TotalRam));
+#elif defined(__linux__)
+	void* p = mmap(nullptr, Ps2MemSize::TotalRam, PROT_READ | PROT_WRITE, MAP_SHARED,
+		static_cast<int>(reinterpret_cast<intptr_t>(s_data_memory_file_handle)), HostMemoryMap::EEmemOffset);
+	s_ee_main_alias = (p == MAP_FAILED) ? nullptr : static_cast<u8*>(p);
+#endif
+	return s_ee_main_alias;
+}
+
 void SysMemory::ReleaseMemoryMap()
 {
+	if (s_ee_main_alias)
+	{
+#if defined(_WIN32)
+		UnmapViewOfFile(s_ee_main_alias);
+#elif defined(__linux__)
+		munmap(s_ee_main_alias, Ps2MemSize::TotalRam);
+#endif
+		s_ee_main_alias = nullptr;
+	}
+
 	if (s_code_memory)
 	{
 		s_memory_mapping_area->Unmap(s_code_memory, HostMemoryMap::CodeSize, false);
