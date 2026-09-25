@@ -1,0 +1,44 @@
+# Three-fork merge plan (upstream + reliquary + pcsx2x6 + our sdbz)
+
+Measured 2026-09-25 with `git merge-tree` dry runs in this clone (remotes: `upstream` = PCSX2/pcsx2,
+`reliquary` = DiscoStarslayer/pcsx2-reliquary, `x6` = PS2Homebrew-arcade/pcsx2x6; push disabled on all three).
+
+## Where each tree stands
+| tree | based on upstream | behind upstream | own commits | notes |
+|---|---|---|---|---|
+| `sdbz` (ours) | v2.7.393, 2026-06-04 | 422 | 8 | Lua script host/bridge, rollback harness, PINE GS reads, scripts |
+| `x6/master` (Namco 246/256) | 2026-06-06 | 420 | 217 | never re-synced with upstream (no merges, no cherry-picks) |
+| `reliquary/master` | 2026-09-09 | 95 | 222 | Konami Python 1/2, MagicGate/mechacon, iLink, CHD HDD, soft-float recompilers, ParaLLEl-GS, low-latency audio; synced monthly |
+
+Shared work: 6 low-latency-audio commits (DiscoStarslayer) exist in both reliquary and x6 with
+identical content -> git merges them without conflict.
+
+## Dry-run conflict counts (files)
+| merge | conflicts |
+|---|---|
+| sdbz + upstream/master | 2 (`Counters.cpp`, `PINE.cpp`) |
+| sdbz + reliquary/master | 4 (`.gitignore`, `DisplayWidget.cpp`, `Counters.cpp`, `PINE.cpp`) |
+| sdbz + x6/master | 3 (`.gitignore`, `GSRenderer.cpp`, `ImGuiOverlays.cpp`) |
+| reliquary + upstream/master | 6 (build scripts, `.sln`, `MemoryCardSettingsWidget.cpp`, `pcsx2/CMakeLists.txt`) |
+| x6 + upstream/master | 15 (CI, GameIndex, Audio/Controller settings, DEV9, FullscreenUI, ImGuiManager, InputManager, IopDma, VMManager) |
+| reliquary + x6 (raw) | 131 — mostly 4 months of upstream skew; files BOTH forks changed themselves: 87 |
+
+## Recommended structure (keeps updates cheap)
+1. `sdbz` stays a small patch stack on top of **upstream** (rebase it; 2 conflicts). This is our
+   portable unit: it can be merged into any fork.
+2. `x6-sync` = x6/master merged with upstream/master (15 conflicts, once). Offer it back to
+   PS2Homebrew-arcade as a PR — if they take it, future syncs are theirs.
+3. `integration` = reliquary/master (freshest, synced monthly, has soft-float)
+   + merge `x6-sync` (the real work: the 87 files both arcade forks changed — IOP/CDVD/DEV9 hardware,
+     input, BIOS/arcade settings, game list, FullscreenUI)
+   + merge `sdbz`.
+4. Updating later: `git fetch upstream reliquary x6`, then merge upstream -> sdbz, upstream -> x6-sync,
+   and reliquary/master + x6-sync + sdbz -> integration. Always **merge** (never rebase) the shared
+   branches, and enable `git config rerere.enabled true` so each conflict resolution is recorded and
+   replayed automatically next time.
+
+## Order of work
+- [ ] rebase `sdbz` onto upstream/master (2 conflicts), build, smoke test SDBZ overlay
+- [ ] `x6-sync`: merge upstream into x6 (15 conflicts), build, boot a 246/256 title
+- [ ] `integration`: reliquary + x6-sync (87 real overlaps), build, boot retail + Namco + Python titles
+- [ ] merge `sdbz` into `integration`, then port the 8:7 aspect patch and write `fuc.lua`
