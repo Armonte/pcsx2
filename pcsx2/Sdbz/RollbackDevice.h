@@ -68,6 +68,12 @@ namespace RollbackDevice
 	// Game-side resim flag: an EE word the device sets to 1 while re-simulating and 0 otherwise, so game code
 	// patches (e.g. gates in front of visual-only calls) can skip work during re-simulation. 0 = none.
 	void SetResimFlagAddr(u32 addr);
+	// Frame log (EE thread, at every real frame boundary before any rollback): the u32 values of the registered
+	// addresses, one row per frame. For input recording / replay verification.
+	void LogClear();
+	void LogAdd(u32 addr);
+	void LogEnable(bool on);
+	bool LogDump(const std::string& path); // text: one row per frame, hex words in registration order
 
 	// EE thread, from the SYSCALL interpreter handler. Returns the value for $v0.
 	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2, u32 arg3);

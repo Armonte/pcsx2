@@ -31,6 +31,9 @@ namespace PadFeed
 	void Off(u32 player);
 	void Const(u32 player, const Step& s);
 	void Sequence(u32 player, std::vector<Step> steps, bool loop);
+	// Same, but armed: the sequence starts at the first read where the EE u32 at arm_addr == arm_value (frame-exact
+	// replay start, e.g. a round frame counter); until then the port is left to the real pad.
+	void SequenceArmed(u32 player, std::vector<Step> steps, bool loop, u32 arm_addr, u32 arm_value);
 	// Seeded random masher: every hold is a random subset of `mask` held for [min_hold, max_hold] reads.
 	void Mash(u32 player, u32 seed, u16 mask, u32 min_hold, u32 max_hold);
 	std::string Status();

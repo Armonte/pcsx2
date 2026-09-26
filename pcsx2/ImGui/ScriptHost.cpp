@@ -220,6 +220,22 @@ namespace
 			}
 			PadFeed::Sequence(p - 1, std::move(steps), loop.value_or(false));
 		});
+		rd.set_function("pad_seq_at", [](uint32_t p, sol::table t, uint32_t addr, uint32_t value) {
+			std::vector<PadFeed::Step> steps;
+			for (size_t i = 1; i <= t.size(); i++)
+			{
+				sol::table e = t[i];
+				PadFeed::Step s;
+				s.buttons = static_cast<u16>(e.get_or(1, 0u));
+				s.frames = e.get_or(2, 1u);
+				steps.push_back(s);
+			}
+			PadFeed::SequenceArmed(p - 1, std::move(steps), false, addr, value);
+		});
+		rd.set_function("log_clear", []() { RollbackDevice::LogClear(); });
+		rd.set_function("log_add", [](uint32_t a) { RollbackDevice::LogAdd(a); });
+		rd.set_function("log_enable", [](bool on) { RollbackDevice::LogEnable(on); });
+		rd.set_function("log_dump", [](std::string path) { return RollbackDevice::LogDump(path); });
 		rd.set_function("pad_mash", [](uint32_t p, uint32_t seed, uint32_t mask, uint32_t lo, uint32_t hi) {
 			PadFeed::Mash(p - 1, seed, static_cast<u16>(mask), lo, hi);
 		});

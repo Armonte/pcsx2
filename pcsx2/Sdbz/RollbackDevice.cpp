@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <tuple>
@@ -64,6 +65,8 @@ namespace RollbackDevice
 		std::atomic<bool> s_lever_host_vsync{true}, s_lever_park{true}, s_lever_iop{true};
 		s32 s_confirmed = -1;                      // resim captures below this frame are skipped (-1 = none)
 		u32 s_resim_flag_addr = 0;                 // game-side resim flag word (0 = none)
+		std::vector<u32> s_log_addrs, s_log_data;  // frame log
+		bool s_log_on = false;
 		void WriteResimFlag(u32 v)
 		{
 			if (s_resim_flag_addr && eeMem)
@@ -538,6 +541,46 @@ namespace RollbackDevice
 		u32 s_bench_every = 10;
 	}
 	void SetBenchEvery(u32 frames) { s_bench_every = std::max(frames, 1u); }
+	void LogClear()
+	{
+		std::lock_guard lk(s_mtx);
+		s_log_addrs.clear();
+		s_log_data.clear();
+		s_log_on = false;
+	}
+	void LogAdd(u32 addr)
+	{
+		std::lock_guard lk(s_mtx);
+		s_log_addrs.push_back(addr & RAM_MASK);
+	}
+	void LogEnable(bool on)
+	{
+		std::lock_guard lk(s_mtx);
+		if (on)
+			s_log_data.clear();
+		s_log_on = on;
+	}
+	bool LogDump(const std::string& path)
+	{
+		std::lock_guard lk(s_mtx);
+		std::FILE* f = std::fopen(path.c_str(), "w");
+		if (!f)
+			return false;
+		const size_t n = s_log_addrs.size();
+		std::fprintf(f, "#");
+		for (const u32 a : s_log_addrs)
+			std::fprintf(f, " %08X", a);
+		std::fprintf(f, "\n");
+		for (size_t i = 0; n && i + n <= s_log_data.size(); i += n)
+		{
+			for (size_t k = 0; k < n; k++)
+				std::fprintf(f, k ? " %08X" : "%08X", s_log_data[i + k]);
+			std::fprintf(f, "\n");
+		}
+		std::fclose(f);
+		return true;
+	}
+
 	void SetResimFlagAddr(u32 addr)
 	{
 		std::lock_guard lk(s_mtx);
@@ -653,6 +696,9 @@ namespace RollbackDevice
 				}
 				EndNormalSimTrace(); // (normal sim without a render section this frame)
 				RbProfiler::SetPhase(RbProfiler::PH_FRAME_BEGIN);
+				if (s_log_on && s_log_data.size() < 64u * 1024 * 1024)
+					for (const u32 a : s_log_addrs)
+						s_log_data.push_back(*reinterpret_cast<const u32*>(Ram(a & ~3u)));
 				s_frame++;
 				s_frames++;
 				RecordInput(s_frame);
