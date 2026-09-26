@@ -6,6 +6,8 @@
 #include "Sdbz/GameRollback.h"
 #include "Sdbz/EeHooks.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
+#include "GS/GS.h"
+#include "MTGS.h"
 #include "Sdbz/SnapshotBench.h" // snap.* Lua table (incremental page-snapshot ring)
 #include "Sdbz/RollbackDevice.h"
 #include "Sdbz/RbProfiler.h"
@@ -447,6 +449,10 @@ namespace
 				});
 				Console.WriteLnFmt("[Script] state saved: {}", path);
 			}, false);
+		});
+		// game video output only (the GS's own snapshot: no ImGui/Lua overlay, no desktop), written as PNG to path
+		eng.set_function("gs_snapshot", [](std::string path) {
+			MTGS::RunOnGSThread([path]() { GSQueueSnapshot(path, 0); });
 		});
 		eng.set_function("load_state", [](std::string path) {
 			Host::RunOnCPUThread([path]() {
