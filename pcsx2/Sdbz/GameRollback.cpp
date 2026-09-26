@@ -1332,6 +1332,8 @@ namespace GameRollback
 				s_net = false;
 				return false;
 			}
+			for (const s32 id : s_net_plan.pre_saves) // the session's frame-0 save: the state right now
+				NetBridge::ResolveSave(id, HashState());
 			s_net_resim_saves.clear();
 			if (!s_net_base_set)
 			{
@@ -2131,6 +2133,7 @@ namespace GameRollback
 					else
 						std::memcpy(out, NEUTRAL, sizeof(NEUTRAL));
 				};
+				host.state_checksum = [] { return HashState(); };
 				host.in_game = [] {
 					s64 v = 1;
 					return !s_man.gate_when || (Eval(*s_man.gate_when, 0, &v) && v != 0);

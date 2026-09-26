@@ -104,6 +104,51 @@ namespace NetBridge
 			else
 				Console.WriteLn("NetBridge: %s", line);
 		}
+		// Replay anchor for a token host: the anchor is the session's frame-0 save, i.e. the state the session started
+		// from (the savestate every peer and every playback boots). The blob identifies it by the watched-state hash;
+		// playback starts from the same savestate and import_state proves it is at that exact state.
+		struct AnchorBlob
+		{
+			u32 magic;
+			s32 frame;
+			u32 checksum;
+			char serial[20];
+		};
+		static constexpr u32 ANCHOR_MAGIC = 0x41425250; // "PRBA"
+		u32 s_resolving_checksum = 0;                   // raw hash of the save being answered (export_state runs inside)
+
+		uint32_t PCB_CALL CbExportState(void*, int32_t frame, uint8_t* dst, uint32_t cap)
+		{
+			if (!dst)
+				return sizeof(AnchorBlob);
+			if (cap < sizeof(AnchorBlob))
+				return 0;
+			AnchorBlob b = {};
+			b.magic = ANCHOR_MAGIC;
+			b.frame = frame;
+			b.checksum = s_resolving_checksum;
+			std::strncpy(b.serial, s_cfg.game_id.c_str(), sizeof(b.serial) - 1);
+			std::memcpy(dst, &b, sizeof(b));
+			return sizeof(b);
+		}
+		int32_t PCB_CALL CbImportState(void*, int32_t frame, const uint8_t* src, uint32_t len)
+		{
+			AnchorBlob b = {};
+			if (len != sizeof(b))
+				return 0;
+			std::memcpy(&b, src, sizeof(b));
+			const u32 now = s_host.state_checksum ? s_host.state_checksum() : 0;
+			if (b.magic != ANCHOR_MAGIC || b.checksum != now)
+			{
+				Console.Error("NetBridge: replay anchor (frame %d, %s, state %08X) is not the current state %08X: start playback "
+							  "from the recording's savestate",
+					frame, b.serial, b.checksum, now);
+				return 0;
+			}
+			Console.WriteLn("NetBridge: replay anchor verified (frame %d, state %08X)", frame, now);
+			return 1;
+		}
+
 		void PCB_CALL CbDesync(void*, const pcb_desync_info* info)
 		{
 			Console.Error("NetBridge: DESYNC at frame %d (local %08X remote %08X kind %d)", info->frame, info->local_checksum,
@@ -151,6 +196,12 @@ namespace NetBridge
 				for (int k = 0; k < 12; k++)
 					st.inputs[k / 6][k % 6] = static_cast<u8>(b[k]);
 				s_jplans.back().plan.steps.push_back(st);
+			}
+			else if (line[0] == 'Q' && !s_jplans.empty())
+			{
+				int id = -1;
+				std::sscanf(line + 1, "%d", &id);
+				s_jplans.back().plan.pre_saves.push_back(id);
 			}
 			else if (line[0] == 'C')
 			{
@@ -215,6 +266,8 @@ namespace NetBridge
 		h.scene = CbScene;
 		h.log = CbLog;
 		h.on_desync = CbDesync;
+		h.export_state = CbExportState;
+		h.import_state = CbImportState;
 		if (cfg.mode == Mode::Replay)
 		{
 			c.replay_path = nullptr;
@@ -279,6 +332,7 @@ namespace NetBridge
 		plan->load_frame = -1;
 		plan->rollback_advances = 0;
 		plan->steps.clear();
+		plan->pre_saves.clear();
 		s_save_to_bridge.clear();
 		if (s_cfg.mode == Mode::JournalReplay)
 		{
@@ -304,6 +358,8 @@ namespace NetBridge
 			{
 				plan->has_load = true;
 				plan->load_frame = e.frame;
+				if ((e.flags & PCB_EVF_ANCHOR_BLOB) && CbImportState(nullptr, e.frame, e.state, e.state_len) != 1)
+					return -1; // playback not started at the recording's anchor state
 			}
 			else if (e.type == PCB_EV_ADVANCE)
 			{
@@ -315,11 +371,14 @@ namespace NetBridge
 				if (s.rolling_back)
 					plan->rollback_advances++;
 			}
-			else if (e.type == PCB_EV_SAVE && !plan->steps.empty())
+			else if (e.type == PCB_EV_SAVE)
 			{
 				const s32 id = s_save_seq++;
 				s_save_to_bridge[id] = e.save_index;
-				plan->steps.back().save_index = id;
+				if (plan->steps.empty())
+					plan->pre_saves.push_back(id);
+				else
+					plan->steps.back().save_index = id;
 			}
 		}
 		if (s_replay_h)
@@ -328,6 +387,8 @@ namespace NetBridge
 		{
 			std::fprintf(s_journal, "P %zu %d %d %u\n", plan->steps.size(), plan->has_load ? 1 : 0, plan->load_frame,
 				plan->rollback_advances);
+			for (const s32 id : plan->pre_saves)
+				std::fprintf(s_journal, "Q %d\n", id);
 			for (const Step& st : plan->steps)
 			{
 				std::fprintf(s_journal, "S %d %d %d", st.frame, st.rolling_back ? 1 : 0, st.save_index);
@@ -343,6 +404,7 @@ namespace NetBridge
 	{
 		if (save_id < 0)
 			return;
+		s_resolving_checksum = checksum;
 		checksum = pcb_finalize_checksum(checksum);
 		if (s_journal)
 			std::fprintf(s_journal, "C %d %08x\n", save_id, checksum);
