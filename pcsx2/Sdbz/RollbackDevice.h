@@ -76,8 +76,11 @@ namespace RollbackDevice
 	bool LogDump(const std::string& path); // text: one row per frame, hex words in registration order
 	// Byte that is nonzero while the device re-simulates frames (tested by native EeHooks resim gates).
 	const u8* ResimulatingFlag();
-		bool ProbeLogDump(const std::string& path); // every probe call (trace on): frame, gate value, phase, fn, ra, a0..a3
+	bool ProbeLogDump(const std::string& path); // every probe call (trace on): frame, gate value, phase, fn, ra, a0..a3
 
+	// Call tracing from host-side hooks (EeHooks): id as CMD_RNG_TRACE ids, the caller's return address and a0..a3.
+	bool TraceOn();
+	void TraceCall(u32 id, u32 ra, u32 a0, u32 a1, u32 a2, u32 a3);
 	// EE thread, from the SYSCALL interpreter handler. Returns the value for $v0.
 	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2, u32 arg3);
 

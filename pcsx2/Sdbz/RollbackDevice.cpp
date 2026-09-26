@@ -608,6 +608,53 @@ namespace RollbackDevice
 		return true;
 	}
 
+	namespace
+	{
+		// A traced call (RNG function, probe or pass marker): id, caller return address, the call's a0..a3.
+		void TraceCallLocked(u32 id, u32 ra_raw, u32 a0, u32 a1, u32 a2, u32 a3)
+		{
+			if (id == TRACE_PASS_MARKER)
+			{
+				s_trace_pass = a1; // Task_RunList(list, pass): attributes the following calls to a task pass
+				return;
+			}
+			if (id >= TRACE_PROBE_FIRST && s_probe_log.size() < PROBE_LOG_MAX)
+				s_probe_log.push_back({s_frame, s_cfg_gate ? *reinterpret_cast<const u32*>(Ram(s_cfg_gate)) : 0u,
+					static_cast<u8>(s_phase), static_cast<u8>(id), ra_raw, a0, a1, a2, a3});
+			const auto al = s_trace_alias.find(ra_raw);
+			const u32 ra = (al != s_trace_alias.end()) ? al->second : ra_raw;
+			const u64 key = (static_cast<u64>(id) << 32) | ra;
+			switch (s_phase)
+			{
+				case Phase::NormalSim:
+				case Phase::Resim:
+					if (id < TRACE_PROBE_FIRST) // probes are a render-section census only
+						s_cur_trace.push_back(key);
+					else if (s_phase == Phase::Resim) // e.g. IOP RPCs that re-simulation must never issue
+						s_trace_resim_probes[{id, ra, a1}]++;
+					break;
+				case Phase::Render:
+					s_trace_calls_render++;
+					s_trace_render_sites[{id, s_trace_pass, ra}]++;
+					break;
+				default:
+					s_trace_calls_other++;
+					if (!s_trace_other_first_ra)
+						s_trace_other_first_ra = ra_raw;
+					s_trace_other_sites[key]++;
+					break;
+			}
+		}
+	} // namespace
+
+	bool TraceOn() { return s_trace; }
+	void TraceCall(u32 id, u32 ra, u32 a0, u32 a1, u32 a2, u32 a3)
+	{
+		std::lock_guard lk(s_mtx);
+		if (s_trace)
+			TraceCallLocked(id, ra, a0, a1, a2, a3);
+	}
+
 	const u8* ResimulatingFlag()
 	{
 		static_assert(sizeof(std::atomic<bool>) == 1, "EeHooks tests the flag as a byte");
@@ -964,43 +1011,10 @@ namespace RollbackDevice
 			default:
 				if (cmd >= CMD_RNG_TRACE && cmd < CMD_RNG_TRACE + 16 && s_trace)
 				{
-					if (cmd == CMD_RNG_TRACE + TRACE_PASS_MARKER)
-					{
-						s_trace_pass = arg2; // Task_RunList(list, pass): attributes the following calls to a task pass
-						return 0;
-					}
-					if (cmd - CMD_RNG_TRACE >= TRACE_PROBE_FIRST && s_probe_log.size() < PROBE_LOG_MAX)
-					{
-						const u32 sp = cpuRegs.GPR.n.sp.UL[0];
-						u32 a2 = 0;
-						std::memcpy(&a2, Ram(sp & RAM_MASK), 4);
-						s_probe_log.push_back({s_frame, s_cfg_gate ? *reinterpret_cast<const u32*>(Ram(s_cfg_gate)) : 0u,
-							static_cast<u8>(s_phase), static_cast<u8>(cmd - CMD_RNG_TRACE), arg, cpuRegs.GPR.n.at.UL[0], arg2, a2,
-							cpuRegs.GPR.n.a3.UL[0]});
-					}
-					const auto al = s_trace_alias.find(arg);
-					const u32 ra = (al != s_trace_alias.end()) ? al->second : arg;
-					const u64 key = (static_cast<u64>(cmd - CMD_RNG_TRACE) << 32) | ra;
-					switch (s_phase)
-					{
-						case Phase::NormalSim:
-						case Phase::Resim:
-							if (cmd - CMD_RNG_TRACE < TRACE_PROBE_FIRST) // probes are a render-section census only
-								s_cur_trace.push_back(key);
-							else if (s_phase == Phase::Resim) // e.g. IOP RPCs that re-simulation must never issue
-								s_trace_resim_probes[{cmd - CMD_RNG_TRACE, ra, arg2}]++;
-							break;
-						case Phase::Render:
-							s_trace_calls_render++;
-							s_trace_render_sites[{cmd - CMD_RNG_TRACE, s_trace_pass, ra}]++;
-							break;
-						default:
-							s_trace_calls_other++;
-							if (!s_trace_other_first_ra)
-								s_trace_other_first_ra = arg;
-							s_trace_other_sites[key]++;
-							break;
-					}
+					// cave trampolines keep a0 in $at and a2 at 0($sp) across the syscall
+					u32 a2 = 0;
+					std::memcpy(&a2, Ram(cpuRegs.GPR.n.sp.UL[0] & RAM_MASK), 4);
+					TraceCallLocked(cmd - CMD_RNG_TRACE, arg, cpuRegs.GPR.n.at.UL[0], arg2, a2, cpuRegs.GPR.n.a3.UL[0]);
 				}
 				return 0;
 		}

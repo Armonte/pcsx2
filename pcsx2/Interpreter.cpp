@@ -175,11 +175,28 @@ static void execI()
 	// EE hooks (Sdbz/EeHooks.h), same semantics as the recompiler's block-entry hooks
 	if (const EeHooks::Kind hook = EeHooks::Lookup(cpuRegs.pc); hook != EeHooks::Kind::None) [[unlikely]]
 	{
-		if ((hook == EeHooks::Kind::ResimGate && *EeHooks::ResimFlag()) ||
-			(hook == EeHooks::Kind::Call && EeHooks::RunCall(cpuRegs.pc) == EeHooks::Action::Return))
+		if (hook == EeHooks::Kind::ResimGate && *EeHooks::ResimFlag())
 		{
 			cpuRegs.pc = cpuRegs.GPR.n.ra.UL[0];
 			return;
+		}
+		if (hook == EeHooks::Kind::SkipCallAlways || (hook == EeHooks::Kind::SkipCallResim && *EeHooks::ResimFlag()))
+		{
+			cpuRegs.pc += 4; // the delay slot runs next, then execution continues after the call
+			return;
+		}
+		if (hook == EeHooks::Kind::Call)
+		{
+			switch (EeHooks::RunCall(cpuRegs.pc))
+			{
+				case EeHooks::Action::Return:
+					cpuRegs.pc = cpuRegs.GPR.n.ra.UL[0];
+					return;
+				case EeHooks::Action::Jump:
+					return;
+				default:
+					break;
+			}
 		}
 	}
 
