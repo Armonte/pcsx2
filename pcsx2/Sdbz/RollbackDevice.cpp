@@ -58,7 +58,14 @@ namespace RollbackDevice
 		std::vector<Range> s_dyn_excludes;         // replaceable exclude set (per-object fields in pools that move)
 		bool s_dyn_dirty = false;                  // rebuild the ring at the next FRAME_BEGIN
 		std::atomic<bool> s_resimulating{false};   // between a rollback and CUR_PRE (read by other threads)
+		std::atomic<bool> s_lever_host_vsync{true}, s_lever_park{true}, s_lever_iop{true};
 		s32 s_confirmed = -1;                      // resim captures below this frame are skipped (-1 = none)
+		u32 s_resim_flag_addr = 0;                 // game-side resim flag word (0 = none)
+		void WriteResimFlag(u32 v)
+		{
+			if (s_resim_flag_addr && eeMem)
+				*reinterpret_cast<u32*>(&eeMem->Main[s_resim_flag_addr & 0x01FFFFFFu]) = v;
+		}
 		u64 s_resim_caps_skipped = 0;
 		u32 s_dyn_rebuilds = 0;
 		std::vector<Watch> s_cfg_watches;
@@ -486,12 +493,27 @@ namespace RollbackDevice
 		u32 s_bench_every = 10;
 	}
 	void SetBenchEvery(u32 frames) { s_bench_every = std::max(frames, 1u); }
+	void SetResimFlagAddr(u32 addr)
+	{
+		std::lock_guard lk(s_mtx);
+		s_resim_flag_addr = addr;
+	}
+
 	void SetConfirmedFrame(s32 frame)
 	{
 		std::lock_guard lk(s_mtx);
 		s_confirmed = frame;
 	}
 	bool IsResimulating() { return s_resimulating.load(std::memory_order_relaxed); }
+	void SetLevers(bool host_vsync, bool park_sync, bool skip_iop)
+	{
+		s_lever_host_vsync = host_vsync;
+		s_lever_park = park_sync;
+		s_lever_iop = skip_iop;
+		Console.WriteLn("RollbackDevice: levers host_vsync=%d park_sync=%d skip_iop=%d", host_vsync, park_sync, skip_iop);
+	}
+	bool SkipHostVSync() { return IsResimulating() && s_lever_host_vsync.load(std::memory_order_relaxed); }
+	bool SkipIop() { return IsResimulating() && s_lever_iop.load(std::memory_order_relaxed); }
 
 	// Presentation pacing: host time between consecutive presented vsyncs (after the frame limiter) -- what the
 	// player sees. Counted only while the device runs.
@@ -656,7 +678,9 @@ namespace RollbackDevice
 				if (s_mode == Mode::Bench)
 					s_confirmed = s_frame + static_cast<s32>(s_bench_every) - static_cast<s32>(s_rollback); // next target
 				s_resimulating.store(true, std::memory_order_relaxed);
-				rcntRollbackPark(); // re-simulation takes no display time
+				if (s_lever_park.load(std::memory_order_relaxed))
+					rcntRollbackPark(); // re-simulation takes no display time
+				WriteResimFlag(1);
 				s_rollbacks++;
 				return s_rollback;
 			}
@@ -760,6 +784,7 @@ namespace RollbackDevice
 					s_resim_active = false;
 					s_resimulating.store(false, std::memory_order_relaxed);
 					rcntRollbackUnpark();
+					WriteResimFlag(0);
 					s_last_rollback_us = static_cast<u64>(s_rollback_timer.GetTimeNanoseconds() / 1000.0);
 					s_max_rollback_us = std::max(s_max_rollback_us, s_last_rollback_us);
 					s_sum_rollback_us += s_last_rollback_us;

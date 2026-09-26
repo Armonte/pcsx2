@@ -530,7 +530,7 @@ static __fi void VSyncStart(u64 sCycle)
 	// Rollback re-simulation: the game re-runs past frames inside one real frame. Emulated time (and every emulated
 	// interrupt below) advances as usual, but the host-only per-vsync work is skipped: no frame pacing sleep, no
 	// present of a stale frame, no overlay capture, no input polling -- it would only slow the resim and stutter.
-	const bool resim = RollbackDevice::IsResimulating();
+	const bool resim = RollbackDevice::SkipHostVSync();
 	if (!resim)
 		VMManager::Internal::VSyncOnCPUThread();
 
@@ -624,7 +624,7 @@ static __fi void GSVSync()
 static __fi void VSyncEnd(u64 sCycle)
 {
 	EECNT_LOG("    ================  EE COUNTER VSYNC END (frame: %d)  ================", g_FrameCount);
-	const bool resim = RollbackDevice::IsResimulating();
+	const bool resim = RollbackDevice::SkipHostVSync();
 	if (!resim)
 		VMManager::Internal::Throttle(false);
 

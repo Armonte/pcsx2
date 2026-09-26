@@ -65,6 +65,9 @@ namespace RollbackDevice
 	// Netplay: the earliest frame a future rollback can target (last frame with confirmed inputs from every peer).
 	// Re-simulated frames before it can never be rolled back to again, so they are not captured. -1 = capture all.
 	void SetConfirmedFrame(s32 frame);
+	// Game-side resim flag: an EE word the device sets to 1 while re-simulating and 0 otherwise, so game code
+	// patches (e.g. gates in front of visual-only calls) can skip work during re-simulation. 0 = none.
+	void SetResimFlagAddr(u32 addr);
 
 	// EE thread, from the SYSCALL interpreter handler. Returns the value for $v0.
 	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2, u32 arg3);
@@ -73,6 +76,13 @@ namespace RollbackDevice
 	// True while the game re-simulates rolled-back frames (between a rollback and CUR_PRE). Emulated time keeps
 	// running, but host-only per-vsync work (frame pacing, presenting, input polling, overlay capture) is skipped.
 	bool IsResimulating();
+	// Re-simulation levers (A/B-able at runtime; all on by default):
+	//   host_vsync: skip host-only per-vsync work while re-simulating (throttle, present, overlay capture, input poll)
+	//   park_sync:  re-simulation takes no display time (hsync/vsync parked, then shifted by the cycles used)
+	//   skip_iop:   the IOP / SPU2 is not credited re-simulated EE time (audio unaffected by rollbacks)
+	void SetLevers(bool host_vsync, bool park_sync, bool skip_iop);
+	bool SkipHostVSync(); // IsResimulating() && host_vsync
+	bool SkipIop();       // IsResimulating() && skip_iop
 	void OnPresentVSync(); // CPU thread, at each presented vsync (after frame limiting): pacing stats
 	// EE memory was replaced by a savestate load (CPU thread): every snapshot describes the old memory. Keeps the
 	// mode and configuration; the ring is rebuilt from the loaded state at the next frame.
