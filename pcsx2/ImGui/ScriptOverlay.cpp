@@ -649,7 +649,9 @@ namespace ScriptBridge
 	// recompiler-safe EE code-patch registry (script-managed NOPs, hooks and code caves): address -> {original word,
 	// patched word}. Unbounded (it used to be 64 fixed slots that silently dropped patches when full -- a rollback
 	// routine of 78 words + hooks overflowed it and the hooks were never written). ALL access is on the CPU thread.
-	struct LuaPatch { u32 orig, patched; };
+	// persistent: code the EE may still be executing or hold return addresses into (code caves) -- never removed by
+	// UnpatchAll (script reload / overlay disable run at arbitrary EE points); only its hooks are.
+	struct LuaPatch { u32 orig, patched; bool persistent; };
 	static std::unordered_map<u32, LuaPatch> s_lua_patches;
 	static std::atomic<u32> s_state_load_serial{0};
 	static std::atomic<u32> s_state_load_stats[3]; // reapplied, kept, dropped (last load)
@@ -657,11 +659,12 @@ namespace ScriptBridge
 		memWrite32(addr, word);
 		if (Cpu) Cpu->Clear(addr, 4);
 	}
-	void PatchCode(uint32_t addr, uint32_t word) {
-		Host::RunOnCPUThread([addr, word]() {
+	void PatchCode(uint32_t addr, uint32_t word, bool persistent) {
+		Host::RunOnCPUThread([addr, word, persistent]() {
 			// keep the ORIGINAL word from the first patch; remember the latest patched word
-			auto [it, inserted] = s_lua_patches.try_emplace(addr, LuaPatch{memRead32(addr), word});
+			auto [it, inserted] = s_lua_patches.try_emplace(addr, LuaPatch{memRead32(addr), word, persistent});
 			it->second.patched = word;
+			it->second.persistent = it->second.persistent || persistent;
 			WritePatchWord(addr, word);
 		}, false);
 	}
@@ -729,9 +732,11 @@ namespace ScriptBridge
 	void UnpatchAll() {
 		g_mouse_claimed = false; // clear any stale claim on script reload/disable
 		Host::RunOnCPUThread([]() {
-			for (const auto& [addr, p] : s_lua_patches)
-				WritePatchWord(addr, p.orig);
-			s_lua_patches.clear();
+			for (auto it = s_lua_patches.begin(); it != s_lua_patches.end();) {
+				if (it->second.persistent) { ++it; continue; } // caves stay (the EE may return into them)
+				WritePatchWord(it->first, it->second.orig);
+				it = s_lua_patches.erase(it);
+			}
 		}, false);
 	}
 

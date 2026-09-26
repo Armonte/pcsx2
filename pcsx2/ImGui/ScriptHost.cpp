@@ -333,7 +333,10 @@ namespace
 		eng.set_function("claim_mouse", [](bool on) { ScriptBridge::SetMouseClaimed(on); }); // over a script widget (gizmo) -> no dbl-click fullscreen
 		eng.set_function("set_frame_delay", [](int n) { ScriptBridge::SetFrameDelay(n); });
 		// recompiler-safe EE code patching, for script-owned freeze/freecam NOPs (saves+restores the original)
-		eng.set_function("patch", [](uint32_t addr, uint32_t word) { ScriptBridge::PatchCode(addr, word); });
+		// patch(addr, word[, persistent]): persistent = code-cave words (never removed by reload/disable)
+		eng.set_function("patch", [](uint32_t addr, uint32_t word, sol::optional<bool> persistent) {
+			ScriptBridge::PatchCode(addr, word, persistent.value_or(false));
+		});
 		eng.set_function("unpatch", [](uint32_t addr) { ScriptBridge::UnpatchCode(addr); });
 		// savestates for fast iteration (queued on the CPU thread; states are saved without script patches and a
 		// load reconciles them, then on_state_load(reapplied, kept, dropped) runs on the next frame)

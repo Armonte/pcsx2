@@ -72,7 +72,8 @@ namespace ScriptBridge
 	// These let the SCRIPT own freeze/freecam/camera/training logic instead of native C++.
 	void  WriteDataF32(uint32_t addr, float value);
 	void  WriteData8(uint32_t addr, uint8_t value);
-	void  PatchCode(uint32_t addr, uint32_t word); // save original once, write word, invalidate block (CPU thread)
+	void  PatchCode(uint32_t addr, uint32_t word, bool persistent = false); // save original once, write word,
+	                                               // invalidate block (CPU thread); persistent = code cave, kept by UnpatchAll
 	void  UnpatchCode(uint32_t addr);              // restore the saved original (CPU thread)
 	void  UnpatchAll();                            // restore EVERY active patch (script reload/disable teardown)
 	// Savestate integration (CPU thread): states are saved without patches; a load reconciles the registry.
