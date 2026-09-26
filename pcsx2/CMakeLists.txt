@@ -875,6 +875,7 @@ set(pcsx2ImGuiHeaders
 	ImGui/ScriptOverlay.h
 	ImGui/ScriptBridge.h
 	ImGui/ScriptHost.h
+	Sdbz/CpuTimer.h
 	Sdbz/PadFeed.h
 	Sdbz/PageSnapshotRing.h
 	Sdbz/RbProfiler.h

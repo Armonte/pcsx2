@@ -11,6 +11,7 @@
 
 #include "common/Console.h"
 #include "common/Timer.h"
+#include "Sdbz/CpuTimer.h"
 
 #include "fmt/format.h"
 
@@ -115,7 +116,7 @@ namespace RollbackDevice
 		s32 s_first_frame = 0;
 		s32 s_resim_base = 0;
 		bool s_resim_active = false;
-		Common::Timer s_rollback_timer;
+		CpuTimer s_rollback_timer;
 
 		// ---- stats ----
 		u64 s_frames = 0, s_rollbacks = 0, s_desync_frames = 0;
@@ -126,7 +127,7 @@ namespace RollbackDevice
 		// Rollback cost breakdown (sums over all rollbacks, us): sync-test reference copy + compare are test-only
 		// overhead; load + resim captures + game re-simulation are the real cost of a netplay rollback.
 		u64 s_sum_ref_us = 0, s_sum_load_us = 0, s_sum_cap_us = 0, s_sum_cmp_us = 0;
-		Common::Timer s_sim_timer;                 // normal frame: CUR_PRE -> RENDER_BEGIN (sim tick + event pass)
+		CpuTimer s_sim_timer;                 // normal frame: CUR_PRE -> RENDER_BEGIN (sim tick + event pass)
 		bool s_sim_timing = false;
 		u64 s_sum_sim_us = 0, s_sim_frames = 0;
 		// Frame pacing: host time between consecutive FRAME_BEGINs (what the player feels). Histogram in 1 ms bins.
@@ -697,7 +698,7 @@ namespace RollbackDevice
 
 				// Sync test: remember this frame's state, rewind R frames, let the game re-simulate them.
 				s_rollback_timer.Reset();
-				Common::Timer t;
+				CpuTimer t;
 				RbProfiler::SetPhase(RbProfiler::PH_SYNCTEST);
 				if (s_mode == Mode::SyncTest && (!s_ring || !s_ring->Pin(s_frame, s_ref_pages)))
 					TakeReference(); // fallback: full copy
@@ -739,7 +740,7 @@ namespace RollbackDevice
 				if (s_resim_active && s_ring &&
 					(s_confirmed < 0 || s_resim_base + static_cast<s32>(arg) + 1 >= s_confirmed))
 				{
-					Common::Timer t;
+					CpuTimer t;
 					RbProfiler::SetPhase(RbProfiler::PH_RESIM_CAPTURE);
 					s_ring->Capture(s_resim_base + static_cast<s32>(arg) + 1);
 					s_sum_cap_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
@@ -810,7 +811,7 @@ namespace RollbackDevice
 				{
 					if (s_mode == Mode::SyncTest)
 					{
-						Common::Timer t;
+						CpuTimer t;
 						RbProfiler::SetPhase(RbProfiler::PH_SYNCTEST);
 						CompareToReference();
 						s_sum_cmp_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);

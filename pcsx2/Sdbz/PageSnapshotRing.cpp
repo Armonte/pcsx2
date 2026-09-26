@@ -8,6 +8,7 @@
 
 #include "common/Console.h"
 #include "common/Timer.h"
+#include "Sdbz/CpuTimer.h"
 
 #include "fmt/format.h"
 
@@ -482,10 +483,10 @@ void PageSnapshotRing::Capture(s32 frame)
 	if (!eeMem)
 		return;
 
-	Common::Timer timer;
+	CpuTimer timer;
 
 	std::vector<u64> dirty;
-	Common::Timer st;
+	CpuTimer st;
 	CollectDirty(dirty);
 	m_stats.cap_collect_ns += static_cast<u64>(st.GetTimeNanoseconds());
 	st.Reset();
@@ -538,9 +539,10 @@ void PageSnapshotRing::Capture(s32 frame)
 	}
 	m_stats.cap_table_ns += static_cast<u64>(st.GetTimeNanoseconds());
 	st.Reset();
+	Common::Timer copy_wall; // wall time: includes waiting for the copy workers
 	CopyPool::Get().Run(jobs, PAGE_SIZE);
 	const u32 copied = static_cast<u32>(jobs.size());
-	m_stats.cap_copy_ns += static_cast<u64>(st.GetTimeNanoseconds());
+	m_stats.cap_copy_ns += static_cast<u64>(copy_wall.GetTimeNanoseconds());
 	st.Reset();
 
 	// Remove an older entry for the same frame, then evict the oldest if over capacity.
@@ -582,7 +584,7 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 	if (it == m_ring.end())
 		return false;
 
-	Common::Timer timer;
+	CpuTimer timer;
 
 	// Pages that may differ from the target: everything written since the newest snapshot, plus
 	// every page that changed in any snapshot after the target.
