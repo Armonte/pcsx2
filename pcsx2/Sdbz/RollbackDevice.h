@@ -116,6 +116,8 @@ namespace RollbackDevice
 	// saved when a rollback starts and restored when re-simulation ends, so nothing the re-simulated frames did
 	// there survives (no replayed sounds, no leaked slots). They must also be excluded (never rolled back).
 	void AddResimRestore(u32 addr, u32 len);
+	// Replaceable set of the same kind for per-object fields whose addresses change (e.g. player voice state).
+	void SetDynamicResimRestore(const std::vector<std::pair<u32, u32>>& ranges);
 	// RNG call tracing (game-side trampolines on the RNG functions report each call): the device records the ordered
 	// (function, caller) list of every frame's normal simulation step, compares each re-simulation of that frame against
 	// it, and reports the first differing call. Calls made outside both the simulation step and the render section are

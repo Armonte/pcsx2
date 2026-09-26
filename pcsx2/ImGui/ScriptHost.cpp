@@ -175,6 +175,17 @@ namespace
 			}
 			RollbackDevice::SetDynamicExcludes(v);
 		});
+		// set_dynamic_resim_restore({ {addr, len}, ... }): replaceable add_resim_restore set (per-object audio fields)
+		rd.set_function("set_dynamic_resim_restore", [](sol::table t) {
+			std::vector<std::pair<u32, u32>> v;
+			v.reserve(t.size());
+			for (const auto& kv : t)
+			{
+				sol::table r = kv.second.as<sol::table>();
+				v.emplace_back(r.get<uint32_t>(1), r.get<uint32_t>(2));
+			}
+			RollbackDevice::SetDynamicResimRestore(v);
+		});
 		rd.set_function("set_input_block", [](uint32_t a, uint32_t n) { RollbackDevice::SetInputBlock(a, n); });
 		rd.set_function("add_ignore", [](uint32_t a, uint32_t n) { RollbackDevice::AddCompareIgnore(a, n); });
 		rd.set_function("add_watch", [](uint32_t a, uint32_t n, const std::string& name) { RollbackDevice::AddWatch(a, n, name); });
