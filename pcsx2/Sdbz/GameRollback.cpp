@@ -2094,7 +2094,12 @@ namespace GameRollback
 			{
 				s_watch_tick = 0;
 				const s64 mt = MTime(s_path);
-				if (mt && mt != s_mtime)
+				if (mt && mt != s_mtime && s_net)
+				{
+					// a reload restarts the rollback state on this peer only: never during a netplay session
+					Console.Warning("GameRollback: manifest changed during netplay: reload deferred to the session end");
+				}
+				else if (mt && mt != s_mtime)
 				{
 					Console.WriteLn("GameRollback: manifest changed, reloading");
 					DoAttach(s_path);
@@ -2159,6 +2164,22 @@ namespace GameRollback
 	// hook here, and everything else happens at the next frame boundary on the EE thread.
 	bool Attach(const std::string& manifest_path, std::string* error)
 	{
+		// Attaching the manifest that is already attached (unchanged on disk) is a no-op: a harness or UI that
+		// attaches on demand must not restart the rollback state under a running session (the launcher attaches
+		// from PS2RB_MANIFEST; a later Lua attach re-applied it on one peer mid-match = desync).
+		auto norm = [](std::string p) {
+			for (char& c : p)
+				c = (c == '/') ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			return p;
+		};
+		if (s_attached && norm(manifest_path) == norm(s_path) && MTime(s_path) == s_mtime)
+			return true;
+		if (s_net)
+		{
+			if (error)
+				*error = "a netplay session is running: stop it before attaching another manifest";
+			return false;
+		}
 		Manifest probe;
 		if (!LoadFile(manifest_path, &probe, error))
 			return false;
