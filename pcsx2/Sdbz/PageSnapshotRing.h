@@ -76,6 +76,15 @@ public:
 	bool Has(s32 frame) const;
 	void Clear();
 
+	// Sync-test support: pin a snapshot's page buffers (no copy; they survive the snapshot being dropped), then
+	// compare against the newest snapshot page by page -- a page whose buffer is shared is identical by
+	// construction and needs no memcmp. Handles are opaque page buffers (PageData() = 4 KiB of bytes).
+	bool Pin(s32 frame, std::vector<const void*>& out);
+	void Unpin(std::vector<const void*>& pages);
+	bool NewestPages(s32 frame, std::vector<const void*>& out) const; // newest snapshot must be `frame`
+	static const u8* PageData(const void* page);
+	const std::vector<u32>& PageIndex() const { return m_page_index; }
+
 	DirtyMode Mode() const { return m_mode; }
 	const Stats& GetStats() const { return m_stats; }
 	std::string Describe() const;

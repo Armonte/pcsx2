@@ -159,6 +159,7 @@ namespace RollbackDevice
 				if (cur < r.b)
 					out.push_back({cur, r.b});
 			}
+			std::sort(out.begin(), out.end(), [](const Range& x, const Range& y) { return x.a < y.a; });
 			return out;
 		}
 
@@ -199,18 +200,13 @@ namespace RollbackDevice
 		}
 
 		// Sync test: the re-simulated state must equal the state captured before the rollback.
-		void CompareToReference()
+		// Byte diff of one compare range (live vs reference) into s_last_runs / page histogram.
+		void DiffRange(u32 a, const u8* live, const u8* ref, u32 len, u64& diff_bytes)
 		{
-			s_last_runs.clear();
-			u64 diff_bytes = 0;
-			for (size_t i = 0; i < s_compare.size() && i < s_ref.size(); i++)
+			const Range r{a, a + len};
 			{
-				const Range& r = s_compare[i];
-				const u8* live = Ram(r.a);
-				const u8* ref = s_ref[i].data();
-				const u32 len = r.b - r.a;
 				if (std::memcmp(live, ref, len) == 0)
-					continue;
+					return;
 				u32 off = 0;
 				while (off < len)
 				{
@@ -239,6 +235,44 @@ namespace RollbackDevice
 					off += chunk;
 				}
 			}
+		}
+
+		std::vector<const void*> s_ref_pages; // sync test: pinned page buffers of the pre-rollback snapshot
+		std::vector<const void*> s_new_pages;
+
+		void CompareToReference()
+		{
+			s_last_runs.clear();
+			u64 diff_bytes = 0;
+			if (!s_ref_pages.empty() && s_ring && s_ring->NewestPages(s_frame, s_new_pages) &&
+				s_new_pages.size() == s_ref_pages.size())
+			{
+				// Page-level: a page whose buffer is shared with the reference is identical by construction.
+				const std::vector<u32>& idx = s_ring->PageIndex();
+				size_t ci = 0;
+				for (size_t i = 0; i < idx.size(); i++)
+				{
+					if (s_new_pages[i] == s_ref_pages[i])
+						continue;
+					const u32 pa = idx[i] << 12, pb = pa + 4096;
+					const u8* ref = PageSnapshotRing::PageData(s_ref_pages[i]);
+					while (ci < s_compare.size() && s_compare[ci].b <= pa)
+						ci++;
+					for (size_t k = ci; k < s_compare.size() && s_compare[k].a < pb; k++)
+					{
+						const u32 a = std::max(pa, s_compare[k].a), b = std::min(pb, s_compare[k].b);
+						if (a < b)
+							DiffRange(a, Ram(a), ref + (a - pa), b - a, diff_bytes);
+					}
+				}
+			}
+			else
+			{
+				for (size_t i = 0; i < s_compare.size() && i < s_ref.size(); i++)
+					DiffRange(s_compare[i].a, Ram(s_compare[i].a), s_ref[i].data(), s_compare[i].b - s_compare[i].a, diff_bytes);
+			}
+			if (s_ring && !s_ref_pages.empty())
+				s_ring->Unpin(s_ref_pages);
 			s_last_diff_bytes = diff_bytes;
 			// Gameplay state (named watches) must never differ; other memory (render caches, leftovers) may.
 			std::string sim;
@@ -312,6 +346,7 @@ namespace RollbackDevice
 
 		void ResetRuntime()
 		{
+			s_ref_pages.clear(); // pins of a dropped ring: never unpinned into another ring
 			s_ring.reset();
 			s_resimulating.store(false, std::memory_order_relaxed);
 			s_frame = -1;
@@ -664,8 +699,8 @@ namespace RollbackDevice
 				s_rollback_timer.Reset();
 				Common::Timer t;
 				RbProfiler::SetPhase(RbProfiler::PH_SYNCTEST);
-				if (s_mode == Mode::SyncTest)
-					TakeReference();
+				if (s_mode == Mode::SyncTest && (!s_ring || !s_ring->Pin(s_frame, s_ref_pages)))
+					TakeReference(); // fallback: full copy
 				s_sum_ref_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
 				const s32 target = s_frame - static_cast<s32>(s_rollback);
 				t.Reset();
