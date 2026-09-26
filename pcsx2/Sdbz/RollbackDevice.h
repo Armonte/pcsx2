@@ -65,6 +65,9 @@ namespace RollbackDevice
 	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2, u32 arg3);
 
 	void OnVMShutdown();
+	// True while the game re-simulates rolled-back frames (between a rollback and CUR_PRE). Emulated time keeps
+	// running, but host-only per-vsync work (frame pacing, presenting, input polling, overlay capture) is skipped.
+	bool IsResimulating();
 	// EE memory was replaced by a savestate load (CPU thread): every snapshot describes the old memory. Keeps the
 	// mode and configuration; the ring is rebuilt from the loaded state at the next frame.
 	void OnStateLoaded();

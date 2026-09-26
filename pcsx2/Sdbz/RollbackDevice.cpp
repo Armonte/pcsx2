@@ -464,6 +464,12 @@ namespace RollbackDevice
 		s_ring.reset();
 	}
 
+	namespace
+	{
+		std::atomic<bool> s_resimulating{false};
+	}
+	bool IsResimulating() { return s_resimulating.load(std::memory_order_relaxed); }
+
 	void OnStateLoaded()
 	{
 		Mode mode;
@@ -597,6 +603,7 @@ namespace RollbackDevice
 				s_sum_load_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
 				s_resim_base = target;
 				s_resim_active = true;
+				s_resimulating.store(true, std::memory_order_relaxed);
 				s_rollbacks++;
 				return s_rollback;
 			}
@@ -695,6 +702,7 @@ namespace RollbackDevice
 					}
 					InjectInput(s_frame);
 					s_resim_active = false;
+					s_resimulating.store(false, std::memory_order_relaxed);
 					s_last_rollback_us = static_cast<u64>(s_rollback_timer.GetTimeNanoseconds() / 1000.0);
 					s_max_rollback_us = std::max(s_max_rollback_us, s_last_rollback_us);
 					s_sum_rollback_us += s_last_rollback_us;

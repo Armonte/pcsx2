@@ -16,6 +16,7 @@
 #include "ImGui/ScriptOverlay.h" // script overlay: capture box geometry on the EE thread at end-of-frame
 #include "Sdbz/SdbzDeterminism.h" // rollback Phase-0 harness: record/replay/compare at the same boundary
 #include "Sdbz/SnapshotBench.h" // incremental page-snapshot ring (Lua `snap`)
+#include "Sdbz/RollbackDevice.h" // skip host-only vsync work while the game re-simulates
 #include "MTGS.h"
 #include "PerformanceMetrics.h"
 #include "Patch.h"
@@ -498,28 +499,35 @@ static __fi void VSyncStart(u64 sCycle)
 {
 	// End-of-frame tasks.
 	DoFMVSwitch();
-	VMManager::Internal::VSyncOnCPUThread();
+	// Rollback re-simulation: the game re-runs past frames inside one real frame. Emulated time (and every emulated
+	// interrupt below) advances as usual, but the host-only per-vsync work is skipped: no frame pacing sleep, no
+	// present of a stale frame, no overlay capture, no input polling -- it would only slow the resim and stutter.
+	const bool resim = RollbackDevice::IsResimulating();
+	if (!resim)
+		VMManager::Internal::VSyncOnCPUThread();
 
 	// Don't bother throttling if we're going to pause.
-	if (!VMManager::Internal::IsExecutionInterrupted())
+	if (!resim && !VMManager::Internal::IsExecutionInterrupted())
 		VMManager::Internal::Throttle(true);
 
 	// Capture the script overlay's box geometry HERE, on the EE/CPU thread, with this frame's game state fully
 	// settled in eeMem and BEFORE it's pushed to the GS. The prims ride a FIFO to the GS thread in frame order, so
 	// the overlay lines up exactly with the displayed frame (no read-ahead jitter). No-op unless a script is loaded.
-	ScriptOverlay::CaptureOnEEThread();
+	if (!resim)
+		ScriptOverlay::CaptureOnEEThread();
 
 	// Rollback determinism harness ticks at the same settled-frame boundary (no-op when idle).
 	SdbzDeterminism::OnVSyncStart();
 	SnapshotBench::OnVSyncStart();
 
-	if (!EmuConfig.GS.AdvancedFrameDisplay)
+	if (!EmuConfig.GS.AdvancedFrameDisplay && !resim)
 	{
 		gsPostVsyncStart(); // MUST be after framelimit; doing so before causes funk with frame times!
 	}
 
 	// Poll input after MTGS frame push, just in case it has to stall to catch up.
-	VMManager::Internal::PollInputOnCPUThread();
+	if (!resim)
+		VMManager::Internal::PollInputOnCPUThread();
 
 	EECNT_LOG("    ================  EE COUNTER VSYNC START (frame: %d)  ================", g_FrameCount);
 
@@ -586,9 +594,11 @@ static __fi void GSVSync()
 static __fi void VSyncEnd(u64 sCycle)
 {
 	EECNT_LOG("    ================  EE COUNTER VSYNC END (frame: %d)  ================", g_FrameCount);
-	VMManager::Internal::Throttle(false);
+	const bool resim = RollbackDevice::IsResimulating();
+	if (!resim)
+		VMManager::Internal::Throttle(false);
 
-	if (EmuConfig.GS.AdvancedFrameDisplay)
+	if (EmuConfig.GS.AdvancedFrameDisplay && !resim)
 	{
 		gsPostVsyncStart();
 	}
