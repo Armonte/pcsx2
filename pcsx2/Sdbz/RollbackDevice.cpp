@@ -58,6 +58,8 @@ namespace RollbackDevice
 		std::vector<Range> s_dyn_excludes;         // replaceable exclude set (per-object fields in pools that move)
 		bool s_dyn_dirty = false;                  // rebuild the ring at the next FRAME_BEGIN
 		std::atomic<bool> s_resimulating{false};   // between a rollback and CUR_PRE (read by other threads)
+		s32 s_confirmed = -1;                      // resim captures below this frame are skipped (-1 = none)
+		u64 s_resim_caps_skipped = 0;
 		u32 s_dyn_rebuilds = 0;
 		std::vector<Watch> s_cfg_watches;
 		Range s_cfg_input;
@@ -314,6 +316,8 @@ namespace RollbackDevice
 			s_first_sim_desync.clear();
 			s_last_rollback_us = s_max_rollback_us = s_sum_rollback_us = 0;
 			s_sum_ref_us = s_sum_load_us = s_sum_cap_us = s_sum_cmp_us = 0;
+			s_resim_caps_skipped = 0;
+			s_confirmed = -1;
 			s_sum_sim_us = s_sim_frames = 0;
 			s_sim_timing = false;
 			s_pace_started = false;
@@ -482,6 +486,11 @@ namespace RollbackDevice
 		u32 s_bench_every = 10;
 	}
 	void SetBenchEvery(u32 frames) { s_bench_every = std::max(frames, 1u); }
+	void SetConfirmedFrame(s32 frame)
+	{
+		std::lock_guard lk(s_mtx);
+		s_confirmed = frame;
+	}
 	bool IsResimulating() { return s_resimulating.load(std::memory_order_relaxed); }
 
 	// Presentation pacing: host time between consecutive presented vsyncs (after the frame limiter) -- what the
@@ -644,6 +653,8 @@ namespace RollbackDevice
 				s_sum_load_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
 				s_resim_base = target;
 				s_resim_active = true;
+				if (s_mode == Mode::Bench)
+					s_confirmed = s_frame + static_cast<s32>(s_bench_every) - static_cast<s32>(s_rollback); // next target
 				s_resimulating.store(true, std::memory_order_relaxed);
 				rcntRollbackPark(); // re-simulation takes no display time
 				s_rollbacks++;
@@ -664,7 +675,10 @@ namespace RollbackDevice
 					CompareResimTrace(s_phase_frame);
 				s_phase = Phase::Other;
 				s_cur_trace.clear();
-				if (s_resim_active && s_ring)
+				if (s_resim_active && s_ring && s_confirmed >= 0 && s_resim_base + static_cast<s32>(arg) + 1 < s_confirmed)
+					s_resim_caps_skipped++; // never a rollback target again: the next capture diffs against the newest
+				if (s_resim_active && s_ring &&
+					(s_confirmed < 0 || s_resim_base + static_cast<s32>(arg) + 1 >= s_confirmed))
 				{
 					Common::Timer t;
 					RbProfiler::SetPhase(RbProfiler::PH_RESIM_CAPTURE);
@@ -824,6 +838,7 @@ namespace RollbackDevice
 				s_pace_sum_us / 1000.0 / s_pace_frames, p99, s_pace_max_us / 1000.0, s_pace_over,
 				100.0 * s_pace_over / s_pace_frames, s_pace_over2);
 		}
+		s += fmt::format(" | resim captures skipped {}", s_resim_caps_skipped);
 		s += fmt::format(" | gated (no rollback) frames {} (+{} for I/O) | ring rebuilds {} ({} dynamic excludes)", s_gated_frames,
 			s_io_gated_frames, s_dyn_rebuilds, s_dyn_excludes.size());
 		if (s_trace)
