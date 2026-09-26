@@ -3,6 +3,8 @@
 
 #include "Sdbz/PadFeed.h"
 
+#include "Memory.h"
+
 #include "common/Console.h"
 
 #include "fmt/format.h"
@@ -29,6 +31,8 @@ namespace PadFeed
 			u32 min_hold = 1, max_hold = 1;
 			Step cur;
 			u64 reads = 0;
+			u32 arm_addr = 0, arm_value = 0; // armed sequence: wait for *(arm_addr) == arm_value
+			bool armed = false;
 		};
 
 		std::mutex s_mtx;
@@ -53,6 +57,12 @@ namespace PadFeed
 				case Kind::Sequence:
 					if (f.steps.empty())
 						return false;
+					if (f.armed)
+					{
+						if (!eeMem || *reinterpret_cast<const u32*>(&eeMem->Main[f.arm_addr & 0x01FFFFFCu]) != f.arm_value)
+							return false;
+						f.armed = false;
+					}
 					if (f.left == 0)
 					{
 						if (f.idx >= f.steps.size())
@@ -123,6 +133,20 @@ namespace PadFeed
 		s_feeds[player].kind = Kind::Sequence;
 		s_feeds[player].steps = std::move(steps);
 		s_feeds[player].loop = loop;
+	}
+
+	void SequenceArmed(u32 player, std::vector<Step> steps, bool loop, u32 arm_addr, u32 arm_value)
+	{
+		std::lock_guard lk(s_mtx);
+		if (player >= MAX_PLAYERS)
+			return;
+		s_feeds[player] = {};
+		s_feeds[player].kind = Kind::Sequence;
+		s_feeds[player].steps = std::move(steps);
+		s_feeds[player].loop = loop;
+		s_feeds[player].armed = true;
+		s_feeds[player].arm_addr = arm_addr;
+		s_feeds[player].arm_value = arm_value;
 	}
 
 	void Mash(u32 player, u32 seed, u16 mask, u32 min_hold, u32 max_hold)
