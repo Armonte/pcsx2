@@ -149,5 +149,7 @@ private:
 	std::vector<u8> m_dirty_streak;  // consecutive dirty captures
 	std::vector<u8> m_clean_streak;  // consecutive clean captures while hot
 	std::vector<u32> m_dirty_count;  // captures that copied each tracked page (census)
+	std::vector<u64> m_streak_nz;    // tracked pages with a nonzero dirty streak (UpdateHotPages visits only these)
+	std::vector<s32> m_ram_to_index; // EE RAM page -> tracked index (-1 = untracked)
 	Stats m_stats;
 };

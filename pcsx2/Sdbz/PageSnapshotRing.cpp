@@ -218,6 +218,10 @@ PageSnapshotRing::PageSnapshotRing(std::vector<Range> regions, std::vector<Range
 	m_dirty_streak.assign(m_page_index.size(), 0);
 	m_clean_streak.assign(m_page_index.size(), 0);
 	m_dirty_count.assign(m_page_index.size(), 0);
+	m_streak_nz.assign(m_words, 0);
+	m_ram_to_index.assign(Ps2MemSize::TotalRam >> PAGE_SHIFT, -1);
+	for (u32 i = 0; i < m_page_index.size(); i++)
+		m_ram_to_index[m_page_index[i]] = static_cast<s32>(i);
 	m_stats.tracked_pages = static_cast<u32>(m_page_index.size());
 
 	// Exclude ranges -> per-tracked-page segments, once. Every load keeps these live bytes.
@@ -405,11 +409,18 @@ void PageSnapshotRing::CollectDirty(std::vector<u64>& bits)
 	for (size_t k = 0; k < hot_idx.size(); k++)
 		if (differs[k])
 			SetBit(bits, hot_idx[k]);
-	for (u32 i = 0; i < m_page_index.size(); i++)
+	// Fault-dirty pages: iterate the (few) RAM pages the fault handler flagged, not every tracked page.
+	for (u32 w = 0; w < ram_dirty.size(); w++)
 	{
-		const u32 page = m_page_index[i];
-		if (!TestBit(m_hot, i) && ((ram_dirty[page >> 6] >> (page & 63)) & 1))
-			SetBit(bits, i);
+		u64 b = ram_dirty[w];
+		while (b)
+		{
+			const u32 page = w * 64 + static_cast<u32>(std::countr_zero(b));
+			b &= b - 1;
+			const s32 i = (page < m_ram_to_index.size()) ? m_ram_to_index[page] : -1;
+			if (i >= 0 && !TestBit(m_hot, static_cast<u32>(i)))
+				SetBit(bits, static_cast<u32>(i));
+		}
 	}
 }
 
@@ -433,29 +444,37 @@ void PageSnapshotRing::UpdateHotPages(const std::vector<u64>& dirty)
 {
 	if (m_mode != DirtyMode::WriteProtect)
 		return;
-	u32 hot = 0;
-	for (u32 i = 0; i < m_page_index.size(); i++)
+	// Only pages that are dirty now, hot, or were dirty last time can change state: visit those bits only.
+	for (u32 w = 0; w < m_words; w++)
 	{
-		const bool d = TestBit(dirty, i);
-		m_dirty_streak[i] = d ? static_cast<u8>(std::min(255, m_dirty_streak[i] + 1)) : 0;
-		if (TestBit(m_hot, i))
+		u64 cand = dirty[w] | m_hot[w] | m_streak_nz[w];
+		m_streak_nz[w] = 0;
+		while (cand)
 		{
-			m_clean_streak[i] = d ? 0 : static_cast<u8>(std::min(255, m_clean_streak[i] + 1));
-			if (m_clean_streak[i] >= HOT_COOLDOWN)
+			const u32 i = w * 64 + static_cast<u32>(std::countr_zero(cand));
+			cand &= cand - 1;
+			const bool d = (dirty[w] >> (i & 63)) & 1;
+			m_dirty_streak[i] = d ? static_cast<u8>(std::min(255, m_dirty_streak[i] + 1)) : 0;
+			if (m_dirty_streak[i])
+				m_streak_nz[w] |= 1ull << (i & 63);
+			if (TestBit(m_hot, i))
 			{
-				m_hot[i >> 6] &= ~(1ull << (i & 63));
-				vtlb_DirtyTrack_Reprotect(m_page_index[i]); // back to fault-based tracking
-				continue;
+				m_clean_streak[i] = d ? 0 : static_cast<u8>(std::min(255, m_clean_streak[i] + 1));
+				if (m_clean_streak[i] >= HOT_COOLDOWN)
+				{
+					m_hot[w] &= ~(1ull << (i & 63));
+					m_stats.hot_pages--;
+					vtlb_DirtyTrack_Reprotect(m_page_index[i]); // back to fault-based tracking
+				}
+			}
+			else if (m_dirty_streak[i] >= HOT_PROMOTE)
+			{
+				SetBit(m_hot, i); // stays writable from the next rearm on
+				m_clean_streak[i] = 0;
+				m_stats.hot_pages++;
 			}
 		}
-		else if (m_dirty_streak[i] >= HOT_PROMOTE)
-		{
-			SetBit(m_hot, i); // stays writable from the next rearm on
-			m_clean_streak[i] = 0;
-		}
-		hot += TestBit(m_hot, i) ? 1 : 0;
 	}
-	m_stats.hot_pages = hot;
 }
 
 void PageSnapshotRing::Capture(s32 frame)
