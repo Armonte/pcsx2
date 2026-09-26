@@ -4,3 +4,4 @@
 [submodule "3rdparty/creamybinder"]
 	path = 3rdparty/creamybinder
 	url = https://github.com/Armonte/creamybinder.git
+	branch = master
