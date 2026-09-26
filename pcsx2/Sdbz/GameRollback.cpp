@@ -1011,10 +1011,17 @@ namespace GameRollback
 				if (++stale >= 6 && !reported) // 3 s without a frame boundary
 				{
 					reported = true;
-					Console.Error("GameRollback watchdog: no frame boundary for 3 s: EE pc %08X ra %08X sp %08X | driving %d step %zu i %u/%u "
-								  "passthrough %d mode %d resim %d",
-						cpuRegs.pc, cpuRegs.GPR.n.ra.UL[0], cpuRegs.GPR.n.sp.UL[0], s_driving, s_step, s_i, s_R, s_passthrough,
-						s_mode, RollbackDevice::IsResimulating());
+					Console.Error("GameRollback watchdog: no frame boundary for 3 s: EE pc %08X ra %08X sp %08X epc %08X errorepc %08X "
+								  "| driving %d step %zu i %u/%u passthrough %d mode %d resim %d",
+						cpuRegs.pc, cpuRegs.GPR.n.ra.UL[0], cpuRegs.GPR.n.sp.UL[0], cpuRegs.CP0.n.EPC, cpuRegs.CP0.n.ErrorEPC,
+						s_driving, s_step, s_i, s_R, s_passthrough, s_mode, RollbackDevice::IsResimulating());
+					// sample the pc a few times: a busy-wait shows the same few user pcs (EPC) around its syscalls
+					for (int k = 0; k < 8; k++)
+					{
+						std::this_thread::sleep_for(std::chrono::milliseconds(37));
+						Console.Error("  sample pc %08X epc %08X ra %08X v1 %08X", cpuRegs.pc, cpuRegs.CP0.n.EPC,
+							cpuRegs.GPR.n.ra.UL[0], cpuRegs.GPR.n.v1.UL[0]);
+					}
 					Console.Error("GameRollback watchdog: EE threads:%s", DumpEeThreads().c_str());
 					if (RollbackDevice::TraceOn()) // what the EE called last (probe log), next to the manifest
 					{
