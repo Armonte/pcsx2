@@ -74,6 +74,7 @@ namespace RollbackDevice
 	void LogAdd(u32 addr);
 	void LogEnable(bool on);
 	bool LogDump(const std::string& path); // text: one row per frame, hex words in registration order
+	bool ProbeLogDump(const std::string& path); // every probe call (trace on): frame, gate value, phase, fn, ra, a0..a3
 
 	// EE thread, from the SYSCALL interpreter handler. Returns the value for $v0.
 	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2, u32 arg3);
