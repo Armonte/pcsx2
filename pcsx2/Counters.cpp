@@ -509,6 +509,8 @@ static __fi void VSyncStart(u64 sCycle)
 	// Don't bother throttling if we're going to pause.
 	if (!resim && !VMManager::Internal::IsExecutionInterrupted())
 		VMManager::Internal::Throttle(true);
+	if (!resim)
+		RollbackDevice::OnPresentVSync();
 
 	// Capture the script overlay's box geometry HERE, on the EE/CPU thread, with this frame's game state fully
 	// settled in eeMem and BEFORE it's pushed to the GS. The prims ride a FIFO to the GS thread in frame order, so
