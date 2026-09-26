@@ -198,6 +198,7 @@ PageSnapshotRing::PageSnapshotRing(std::vector<Range> regions, std::vector<Range
 	m_hot.assign(m_words, 0);
 	m_dirty_streak.assign(m_page_index.size(), 0);
 	m_clean_streak.assign(m_page_index.size(), 0);
+	m_dirty_count.assign(m_page_index.size(), 0);
 	m_stats.tracked_pages = static_cast<u32>(m_page_index.size());
 
 	// Exclude ranges -> per-tracked-page segments, once. Every load keeps these live bytes.
@@ -310,6 +311,20 @@ bool PageSnapshotRing::NewestPages(s32 frame, std::vector<u32>& out) const
 		return false;
 	out = m_ring.back().pages;
 	return true;
+}
+
+std::vector<std::pair<u32, u32>> PageSnapshotRing::TopDirtyPages(u32 n) const
+{
+	std::vector<std::pair<u32, u32>> v;
+	for (u32 i = 0; i < m_page_index.size(); i++)
+		if (m_dirty_count[i])
+			v.push_back({m_dirty_count[i], m_page_index[i] << PAGE_SHIFT});
+	std::sort(v.rbegin(), v.rend());
+	if (v.size() > n)
+		v.resize(n);
+	for (auto& e : v)
+		std::swap(e.first, e.second); // (address, count)
+	return v;
 }
 
 const u8* PageSnapshotRing::PageData(u32 id) const
@@ -447,6 +462,7 @@ void PageSnapshotRing::Capture(s32 frame)
 			Unref(snap.pages[i]); // base keeps its own reference
 		const u32 id = AllocPage();
 		snap.pages[i] = id;
+		m_dirty_count[i]++;
 		jobs.push_back({Data(id), RamPage(m_page_index[i])});
 	};
 	if (base)

@@ -923,6 +923,12 @@ namespace RollbackDevice
 		std::sort(pages.rbegin(), pages.rend());
 		for (const auto& [n, page] : pages)
 			out += fmt::format("{:08X} {} {}\n", page << 12, n, WatchName(page << 12));
+		if (s_ring)
+		{
+			out += fmt::format("\n## most-captured pages (EE address, captures that copied it; {} frames)\n", s_frames);
+			for (const auto& [addr, n] : s_ring->TopDirtyPages(256))
+				out += fmt::format("{:08X} {}\n", addr, n);
+		}
 		out += "\n## RNG calls outside the sim step and the render section ((fn, caller) -> count)\n";
 		for (const auto& [key, n] : s_trace_other_sites)
 			out += fmt::format("fn{} ra {:08X}  {}\n", key >> 32, static_cast<u32>(key), n);
