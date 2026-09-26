@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
+#include "Sdbz/PcInput.h"
 #include "BuildVersion.h"
 #include "Config.h"
 #include "Counters.h"
@@ -1812,6 +1813,7 @@ void ImGuiManager::RenderOverlays()
 	DrawInputsOverlay(scale, margin, spacing);
 	if (SaveStateSelectorUI::s_open)
 		SaveStateSelectorUI::Draw();
+	PcInput::DrawOverlay(); // creamybinder binder (PovertyCaster session input), on top
 }
 
 std::string SaveStateSelectorUI::GetSaveStateTimestampSummary(const std::time_t& modification_time)
