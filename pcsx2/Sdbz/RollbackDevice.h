@@ -62,6 +62,9 @@ namespace RollbackDevice
 		Bench = 3, // netplay-like load: roll back R frames every K frames, no reference copy / compare
 	};
 	void SetBenchEvery(u32 frames); // Bench mode: K (>= 1)
+	// Netplay: the earliest frame a future rollback can target (last frame with confirmed inputs from every peer).
+	// Re-simulated frames before it can never be rolled back to again, so they are not captured. -1 = capture all.
+	void SetConfirmedFrame(s32 frame);
 
 	// EE thread, from the SYSCALL interpreter handler. Returns the value for $v0.
 	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2, u32 arg3);
