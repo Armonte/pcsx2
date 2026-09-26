@@ -1417,7 +1417,8 @@ namespace GameRollback
 			if (s_net && R != s_net_plan.rollback_advances)
 			{
 				s_net_refused++;
-				Console.Error("GameRollback: netcode asked for a %u-frame rollback at frame %d, device did %u (gated)",
+				Console.Error("GameRollback: UNCORRECTABLE misprediction: netcode asked for a %u-frame rollback at frame %d, device "
+							  "did %u (async I/O inside the window): this peer will desync",
 					s_net_plan.rollback_advances, s_host_frame, R);
 			}
 			if (R == 0)

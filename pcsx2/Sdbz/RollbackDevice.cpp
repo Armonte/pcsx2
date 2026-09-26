@@ -854,7 +854,10 @@ namespace RollbackDevice
 					return 0;
 				if (s_mode == Mode::Bench && (s_frame % static_cast<s32>(s_bench_every)) != 0)
 					return 0;
-				for (s32 f = s_frame - static_cast<s32>(depth) + 1; f <= s_frame; f++)
+				// Netplay: the netcode only predicts frames the host reported as rollback phase (gate_when), so the window
+				// holds predicted frames plus at most the one frame that left that phase. Refusing here would leave a
+				// misprediction uncorrected (= a guaranteed desync), so only async I/O (below) may refuse.
+				for (s32 f = s_frame - static_cast<s32>(depth) + 1; s_mode != Mode::Netplay && f <= s_frame; f++)
 				{
 					if (!s_gate_ok[static_cast<u32>(f) % INPUT_HISTORY])
 					{
