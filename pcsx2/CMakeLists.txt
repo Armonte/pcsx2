@@ -859,6 +859,7 @@ set(pcsx2ImGuiSources
 	Sdbz/EeHooks.cpp
 	Sdbz/GameRollback.cpp
 	Sdbz/NetBridge.cpp
+	Sdbz/PcInput.cpp
 	Sdbz/PadFeed.cpp
 	Sdbz/PageSnapshotRing.cpp
 	Sdbz/RbProfiler.cpp
@@ -882,6 +883,7 @@ set(pcsx2ImGuiHeaders
 	Sdbz/EeHooks.h
 	Sdbz/GameRollback.h
 	Sdbz/NetBridge.h
+	Sdbz/PcInput.h
 	Sdbz/pc_ps2_bridge.h
 	Sdbz/PadFeed.h
 	Sdbz/PageSnapshotRing.h
