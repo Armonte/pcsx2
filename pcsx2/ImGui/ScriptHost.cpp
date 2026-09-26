@@ -393,6 +393,7 @@ namespace
 		eng.set_function("hook_gate", [](uint32_t a) { EeHooks::AddResimGate(a); });
 		eng.set_function("hook_remove", [](uint32_t a) { EeHooks::Remove(a); });
 		eng.set_function("hook_clear", []() { EeHooks::Clear(); });
+		eng.set_function("hook_gate_returns", []() { return static_cast<double>(EeHooks::GateReturns()); });
 		// patch_many({{addr, word}, ...}[, persistent]) / unpatch_many({addr, ...}): all words in one CPU-thread task
 		eng.set_function("patch_many", [](sol::table t, sol::optional<bool> persistent) {
 			std::vector<std::pair<uint32_t, uint32_t>> v;

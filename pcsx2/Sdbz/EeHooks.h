@@ -40,4 +40,6 @@ namespace EeHooks
 	Kind Lookup(u32 pc);          // cheap: page bitmap first
 	Action RunCall(u32 pc);       // Kind::Call
 	const u8* ResimFlag();        // byte the ResimGate tests (nonzero while re-simulating)
+	u64* GateReturnCounter();     // incremented natively each time a ResimGate returns early
+	u64 GateReturns();
 } // namespace EeHooks

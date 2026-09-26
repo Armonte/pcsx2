@@ -104,4 +104,11 @@ namespace EeHooks
 	}
 
 	const u8* ResimFlag() { return RollbackDevice::ResimulatingFlag(); }
+
+	namespace
+	{
+		u64 s_gate_returns = 0;
+	}
+	u64* GateReturnCounter() { return &s_gate_returns; }
+	u64 GateReturns() { return s_gate_returns; }
 } // namespace EeHooks
