@@ -3,6 +3,7 @@
 
 #include "Common.h"
 #include "R5900OpcodeTables.h"
+#include "Sdbz/EeHooks.h"
 #include "VMManager.h"
 #include "Elfheader.h"
 #include "Cache.h"
@@ -170,6 +171,17 @@ static void execI()
 
 	CBreakPoints::CommitClearSkipFirst(BREAKPOINT_EE);
 #endif
+
+	// EE hooks (Sdbz/EeHooks.h), same semantics as the recompiler's block-entry hooks
+	if (const EeHooks::Kind hook = EeHooks::Lookup(cpuRegs.pc); hook != EeHooks::Kind::None) [[unlikely]]
+	{
+		if ((hook == EeHooks::Kind::ResimGate && *EeHooks::ResimFlag()) ||
+			(hook == EeHooks::Kind::Call && EeHooks::RunCall(cpuRegs.pc) == EeHooks::Action::Return))
+		{
+			cpuRegs.pc = cpuRegs.GPR.n.ra.UL[0];
+			return;
+		}
+	}
 
 	const u32 pc = cpuRegs.pc;
 	// We need to increase the pc before executing the memRead32. An exception could appears

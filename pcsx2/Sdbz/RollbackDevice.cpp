@@ -608,6 +608,12 @@ namespace RollbackDevice
 		return true;
 	}
 
+	const u8* ResimulatingFlag()
+	{
+		static_assert(sizeof(std::atomic<bool>) == 1, "EeHooks tests the flag as a byte");
+		return reinterpret_cast<const u8*>(&s_resimulating);
+	}
+
 	bool ProbeLogDump(const std::string& path)
 	{
 		std::lock_guard lk(s_mtx);

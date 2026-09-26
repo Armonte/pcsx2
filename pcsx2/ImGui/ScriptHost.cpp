@@ -3,6 +3,7 @@
 
 #include "ImGui/ScriptHost.h"
 #include "ImGui/ScriptBridge.h"
+#include "Sdbz/EeHooks.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
 #include "Sdbz/SnapshotBench.h" // snap.* Lua table (incremental page-snapshot ring)
 #include "Sdbz/RollbackDevice.h"
@@ -387,6 +388,11 @@ namespace
 			ScriptBridge::PatchCode(addr, word, persistent.value_or(false));
 		});
 		eng.set_function("unpatch", [](uint32_t addr) { ScriptBridge::UnpatchCode(addr); });
+		// Emulator-level EE hooks (Sdbz/EeHooks.h): no game memory is patched; hot reload drops and re-registers them.
+		//   hook_gate(addr): at this function entry, return at once while the rollback device re-simulates
+		eng.set_function("hook_gate", [](uint32_t a) { EeHooks::AddResimGate(a); });
+		eng.set_function("hook_remove", [](uint32_t a) { EeHooks::Remove(a); });
+		eng.set_function("hook_clear", []() { EeHooks::Clear(); });
 		// patch_many({{addr, word}, ...}[, persistent]) / unpatch_many({addr, ...}): all words in one CPU-thread task
 		eng.set_function("patch_many", [](sol::table t, sol::optional<bool> persistent) {
 			std::vector<std::pair<uint32_t, uint32_t>> v;
@@ -598,6 +604,7 @@ namespace
 		{
 			// Different game (or none): the old script's patches and state belong to the old game.
 			ScriptBridge::UnpatchAll();
+			EeHooks::Clear(); // script hooks go with the script (re-registered by the reloaded script)
 			s_state.reset();
 			s_haveOnFrame = s_haveOnGui = s_haveOnCapture = false;
 		}
@@ -630,6 +637,7 @@ namespace
 		// would survive the reload and freeze the timer with freeze showing OFF. The new state re-asserts its
 		// cfg-driven patches on its first on_frame. (No-op on the very first load -- nothing patched yet.)
 		ScriptBridge::UnpatchAll();
+		EeHooks::Clear(); // script hooks go with the script (re-registered by the reloaded script)
 
 		s_state = std::move(st);
 		s_haveOnFrame = ((*s_state)["on_frame"].get_type() == sol::type::function);
@@ -731,8 +739,11 @@ namespace Script
 		if (on && !was)
 			s_loadReq.store(true); // first enable this session -> GS thread loads it
 		else if (!on && was)
+		{
 			ScriptBridge::UnpatchAll(); // disabling the overlay must revert its code patches (else a stale freeze
 			                            // NOP keeps the timer frozen); RunOnCPUThread is safe from this thread.
+			EeHooks::Clear();           // and drop its EE hooks
+		}
 		Console.WriteLn(on ? "[Script] enabled" : "[Script] disabled");
 	}
 

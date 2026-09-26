@@ -928,6 +928,7 @@ set(pcsx2ImGuiSources
 	ImGui/ImGuiOverlays.cpp
 	ImGui/ScriptOverlay.cpp
 	ImGui/ScriptHost.cpp
+	Sdbz/EeHooks.cpp
 	Sdbz/PadFeed.cpp
 	Sdbz/PageSnapshotRing.cpp
 	Sdbz/RbProfiler.cpp
@@ -948,6 +949,7 @@ set(pcsx2ImGuiHeaders
 	ImGui/ScriptBridge.h
 	ImGui/ScriptHost.h
 	Sdbz/CpuTimer.h
+	Sdbz/EeHooks.h
 	Sdbz/PadFeed.h
 	Sdbz/PageSnapshotRing.h
 	Sdbz/RbProfiler.h
