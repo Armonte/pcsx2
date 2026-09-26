@@ -12,8 +12,13 @@
 #include "fmt/format.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
+#include <thread>
 
 namespace
 {
@@ -35,6 +40,118 @@ namespace
 	{
 		bits[i >> 6] |= 1ull << (i & 63);
 	}
+} // namespace
+
+namespace
+{
+	// Parallel page copy for captures. A rollback captures after every re-simulated frame, so jobs arrive back to
+	// back: workers spin briefly after a job (no wake-up latency inside a rollback burst), then sleep. The calling
+	// thread copies a share too. Small jobs are copied inline (handoff would cost more than it saves).
+	class CopyPool
+	{
+	public:
+		struct Job
+		{
+			void* dst;
+			const void* src;
+		};
+
+		static CopyPool& Get()
+		{
+			static CopyPool pool;
+			return pool;
+		}
+
+		void Run(const std::vector<Job>& jobs, u32 bytes_each)
+		{
+			const u32 n = static_cast<u32>(jobs.size());
+			if (n < MIN_PARALLEL || m_workers.empty())
+			{
+				for (const Job& j : jobs)
+					std::memcpy(j.dst, j.src, bytes_each);
+				return;
+			}
+			m_jobs = jobs.data();
+			m_count = n;
+			m_bytes = bytes_each;
+			m_next.store(0, std::memory_order_relaxed);
+			m_done.store(0, std::memory_order_relaxed);
+			{
+				std::lock_guard lk(m_mtx);
+				m_gen.fetch_add(1, std::memory_order_release);
+			}
+			m_cv.notify_all();
+			Work();
+			while (m_done.load(std::memory_order_acquire) < n)
+				std::this_thread::yield();
+		}
+
+	private:
+		static constexpr u32 MIN_PARALLEL = 48;  // pages
+		static constexpr u32 CHUNK = 16;         // pages per grab
+		static constexpr u32 WORKERS = 3;
+
+		CopyPool()
+		{
+			for (u32 i = 0; i < WORKERS; i++)
+				m_workers.emplace_back([this]() { Loop(); });
+		}
+		~CopyPool()
+		{
+			m_quit = true;
+			{
+				std::lock_guard lk(m_mtx);
+				m_gen.fetch_add(1);
+			}
+			m_cv.notify_all();
+			for (std::thread& t : m_workers)
+				t.join();
+		}
+
+		void Work()
+		{
+			for (;;)
+			{
+				const u32 first = m_next.fetch_add(CHUNK, std::memory_order_relaxed);
+				if (first >= m_count)
+					return;
+				const u32 last = std::min(first + CHUNK, m_count);
+				for (u32 i = first; i < last; i++)
+					std::memcpy(m_jobs[i].dst, m_jobs[i].src, m_bytes);
+				m_done.fetch_add(last - first, std::memory_order_release);
+			}
+		}
+
+		void Loop()
+		{
+			u64 seen = 0;
+			for (;;)
+			{
+				// spin ~2 ms for the next job (rollback bursts), then sleep
+				const auto spin_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+				while (m_gen.load(std::memory_order_acquire) == seen && std::chrono::steady_clock::now() < spin_until)
+					std::this_thread::yield();
+				if (m_gen.load(std::memory_order_acquire) == seen)
+				{
+					std::unique_lock lk(m_mtx);
+					m_cv.wait(lk, [&]() { return m_gen.load() != seen; });
+				}
+				seen = m_gen.load(std::memory_order_acquire);
+				if (m_quit)
+					return;
+				Work();
+			}
+		}
+
+		std::vector<std::thread> m_workers;
+		std::mutex m_mtx;
+		std::condition_variable m_cv;
+		std::atomic<u64> m_gen{0};
+		std::atomic<u32> m_next{0}, m_done{0};
+		const Job* m_jobs = nullptr;
+		u32 m_count = 0, m_bytes = 0;
+		std::atomic<bool> m_quit{false};
+	};
 } // namespace
 
 struct PageSnapshotRing::Page
@@ -315,20 +432,42 @@ void PageSnapshotRing::Capture(s32 frame)
 	snap.pages.resize(m_page_index.size());
 
 	const Snapshot* base = m_ring.empty() ? nullptr : &m_ring.back();
-	u32 copied = 0;
-	for (u32 i = 0; i < m_page_index.size(); i++)
+	const u32 n = static_cast<u32>(m_page_index.size());
+	// Share every page of the base (one table copy + a tight refcount pass), then give the dirty ones new buffers.
+	if (base)
 	{
-		if (base && !TestBit(dirty, i))
-		{
-			snap.pages[i] = base->pages[i];
-			Ref(snap.pages[i]);
-			continue;
-		}
-		const u32 id = AllocPage();
-		std::memcpy(Data(id), RamPage(m_page_index[i]), PAGE_SIZE);
-		snap.pages[i] = id;
-		copied++;
+		std::memcpy(snap.pages.data(), base->pages.data(), n * sizeof(u32));
+		for (u32 i = 0; i < n; i++)
+			m_refs[snap.pages[i]]++;
 	}
+	static std::vector<CopyPool::Job> jobs;
+	jobs.clear();
+	auto take = [&](u32 i) {
+		if (base)
+			Unref(snap.pages[i]); // base keeps its own reference
+		const u32 id = AllocPage();
+		snap.pages[i] = id;
+		jobs.push_back({Data(id), RamPage(m_page_index[i])});
+	};
+	if (base)
+	{
+		for (u32 w = 0; w < m_words; w++)
+		{
+			u64 bits = dirty[w];
+			while (bits)
+			{
+				take(w * 64 + static_cast<u32>(std::countr_zero(bits)));
+				bits &= bits - 1;
+			}
+		}
+	}
+	else
+	{
+		for (u32 i = 0; i < n; i++)
+			take(i);
+	}
+	CopyPool::Get().Run(jobs, PAGE_SIZE);
+	const u32 copied = static_cast<u32>(jobs.size());
 
 	// Remove an older entry for the same frame, then evict the oldest if over capacity.
 	for (auto it = m_ring.begin(); it != m_ring.end(); ++it)
