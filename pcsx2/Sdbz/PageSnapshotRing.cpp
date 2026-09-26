@@ -171,6 +171,43 @@ void PageSnapshotRing::Clear()
 	m_stats.live_bytes = 0;
 }
 
+bool PageSnapshotRing::Pin(s32 frame, std::vector<const void*>& out)
+{
+	out.clear();
+	auto it = std::find_if(m_ring.begin(), m_ring.end(), [frame](const Snapshot& s) { return s.frame == frame; });
+	if (it == m_ring.end())
+		return false;
+	out.reserve(it->pages.size());
+	for (Page* p : it->pages)
+	{
+		Ref(p);
+		out.push_back(p);
+	}
+	return true;
+}
+
+void PageSnapshotRing::Unpin(std::vector<const void*>& pages)
+{
+	for (const void* p : pages)
+		Unref(const_cast<Page*>(static_cast<const Page*>(p)));
+	pages.clear();
+	UpdateLiveBytes();
+}
+
+bool PageSnapshotRing::NewestPages(s32 frame, std::vector<const void*>& out) const
+{
+	out.clear();
+	if (m_ring.empty() || m_ring.back().frame != frame)
+		return false;
+	out.assign(m_ring.back().pages.begin(), m_ring.back().pages.end());
+	return true;
+}
+
+const u8* PageSnapshotRing::PageData(const void* page)
+{
+	return static_cast<const Page*>(page)->data;
+}
+
 bool PageSnapshotRing::Has(s32 frame) const
 {
 	return std::any_of(m_ring.begin(), m_ring.end(), [frame](const Snapshot& s) { return s.frame == frame; });
