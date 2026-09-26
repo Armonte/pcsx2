@@ -219,14 +219,16 @@ namespace PcInput
 		std::lock_guard slk(s_session_mtx);
 		if (!s_session || !s_binder)
 			return;
-		// the pchost F4 host window: a centred, title-less 640x480 pane (x overlay scale) clamped to the display
-		// (main viewport origin), so the skin (which draws into the current window) sits in the middle
+		// the pchost F4 host window: a title-less pane 640 wide (x overlay scale); the skin draws into the current window
 		const ImGuiIO& io = ImGui::GetIO();
 		const float sc = ImGuiManager::GetGlobalScale();
-		const float w = std::min(io.DisplaySize.x, 640.0f * sc), h = std::min(io.DisplaySize.y, 480.0f * sc);
+		// pchost setNextWindowPane(fullHeight): horizontally centred, hanging from the top of the screen and running the
+		// full height below it (the logo drop-in sits in the top offset)
+		const float top = 8.0f * sc;
+		const float w = std::min(io.DisplaySize.x, 640.0f * sc);
 		const ImVec2 o = ImGui::GetMainViewport()->Pos;
-		ImGui::SetNextWindowPos(ImVec2(o.x + (io.DisplaySize.x - w) * 0.5f, o.y + (io.DisplaySize.y - h) * 0.5f), ImGuiCond_Always);
-		ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
+		ImGui::SetNextWindowPos(ImVec2(o.x + (io.DisplaySize.x - w) * 0.5f, o.y + top), ImGuiCond_Always);
+		ImGui::SetNextWindowSize(ImVec2(w, io.DisplaySize.y - top), ImGuiCond_Always);
 		constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
 										   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings;
 		if (ImGui::Begin("##pcbinder", nullptr, flags))
