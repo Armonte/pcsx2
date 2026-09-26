@@ -14,6 +14,7 @@
 #include "common/Console.h"
 #include "common/FileSystem.h"
 #include "common/Path.h"
+#include "common/StringUtil.h"
 #include "common/YAML.h"
 
 #include "fmt/format.h"
@@ -999,6 +1000,26 @@ namespace GameRollback
 		bool s_live_valid[PAD_PLAYERS] = {};
 		std::vector<std::pair<u32, u32>> s_hash_ranges; // the manifest's watched (gameplay) state
 		u64 s_net_refused = 0;
+		// Desync forensics: EE RAM written at chosen netcode frames (the state after frame F, before F+1 runs, i.e. after
+		// this tick's corrections). Requested with a journal/replay path suffix ";dump=F1,F2,..." (next to the journal).
+		u32 HashState();
+		std::vector<s32> s_dump_frames;
+		std::string s_dump_prefix;
+		void DumpBeforeCurrentFrame()
+		{
+			if (!s_net || s_dump_frames.empty())
+				return;
+			const s32 f = s_host_frame - s_net_frame_base - 1;
+			if (std::find(s_dump_frames.begin(), s_dump_frames.end(), f) == s_dump_frames.end())
+				return;
+			const std::string path = fmt::format("{}.f{}.ee", s_dump_prefix, f);
+			if (std::FILE* fp = FileSystem::OpenCFile(path.c_str(), "wb"))
+			{
+				std::fwrite(eeMem->Main, 1, Ps2MemSize::MainRam, fp);
+				std::fclose(fp);
+				Console.WriteLn("GameRollback: EE RAM after netcode frame %d -> %s (state hash %08X)", f, path.c_str(), HashState());
+			}
+		}
 
 		u32 HashState()
 		{
@@ -1290,6 +1311,7 @@ namespace GameRollback
 					continue;
 				}
 				RollbackDevice::HandleSyscall(RollbackDevice::CMD_CUR_PRE, 0, 0, 0);
+				DumpBeforeCurrentFrame();
 				s_driving = false;
 				s_passthrough = true;
 				cpuRegs.pc = s_man.sim_tick_site; // the original call now runs for the current frame
@@ -1401,6 +1423,7 @@ namespace GameRollback
 			if (R == 0)
 			{
 				RollbackDevice::HandleSyscall(RollbackDevice::CMD_CUR_PRE, 0, 0, 0);
+				DumpBeforeCurrentFrame();
 				return EeHooks::Action::Continue;
 			}
 			s_R = R;
@@ -2144,6 +2167,15 @@ namespace GameRollback
 					return !s_man.gate_when || (Eval(*s_man.gate_when, 0, &v) && v != 0);
 				};
 				std::string err;
+				s_dump_frames.clear();
+				for (std::string* pth : {&r.net.journal_path, &r.net.replay_path})
+					if (const size_t k = pth->find(";dump="); k != std::string::npos)
+					{
+						for (const std::string_view v : StringUtil::SplitString(std::string_view(*pth).substr(k + 6), ','))
+							s_dump_frames.push_back(std::atoi(std::string(v).c_str()));
+						pth->resize(k);
+						s_dump_prefix = *pth;
+					}
 				if (!NetBridge::Start(r.net, host, &err))
 					Console.Error("GameRollback: netplay start failed: %s", err.c_str());
 				else
