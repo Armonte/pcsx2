@@ -657,6 +657,16 @@ namespace RollbackDevice
 			TraceCallLocked(id, ra, a0, a1, a2, a3);
 	}
 
+	namespace
+	{
+		std::atomic<bool> s_lever_dma_sink{true};
+	}
+	void SetDmaSink(bool on) { s_lever_dma_sink.store(on, std::memory_order_relaxed); }
+	bool SinkResimDma()
+	{
+		return s_resimulating.load(std::memory_order_relaxed) && s_lever_dma_sink.load(std::memory_order_relaxed);
+	}
+
 	void SetFrameGateCondition(bool ok) { s_gate_condition.store(ok, std::memory_order_relaxed); }
 
 	const u8* ResimulatingFlag()

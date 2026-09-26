@@ -95,6 +95,11 @@ namespace RollbackDevice
 	void SetLevers(bool host_vsync, bool park_sync, bool skip_iop);
 	bool SkipHostVSync(); // IsResimulating() && host_vsync
 	bool SkipIop();       // IsResimulating() && skip_iop
+	// Render DMA sink: while re-simulating, VIF1 / GIF DMA kicks complete at once without transferring anything, so
+	// nothing a re-simulated frame draws reaches VU1 or the GS (duplicate packets would corrupt the GS; the work is
+	// wasted anyway). Generic for every game; on by default.
+	void SetDmaSink(bool on);
+	bool SinkResimDma();
 	void OnPresentVSync(); // CPU thread, at each presented vsync (after frame limiting): pacing stats
 	// EE memory was replaced by a savestate load (CPU thread): every snapshot describes the old memory. Keeps the
 	// mode and configuration; the ring is rebuilt from the loaded state at the next frame.

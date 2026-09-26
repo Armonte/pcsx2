@@ -4,6 +4,7 @@
 #include "Common.h"
 #include "GS.h"
 #include "Gif_Unit.h"
+#include "Sdbz/RollbackDevice.h"
 #include "Vif_Dma.h"
 
 // A three-way toggle used to determine if the GIF is stalling (transferring) or done (finished).
@@ -468,6 +469,15 @@ void dmaGIF()
 
 	gif.gspath3done = false; // For some reason this doesn't clear? So when the system starts the thread, we will clear it :)
 	CPU_SET_DMASTALL(DMAC_GIF, false);
+	if (RollbackDevice::SinkResimDma())
+	{
+		// re-simulated frame: complete at once, nothing reaches the GS
+		gifch.qwc = 0;
+		gif.gspath3done = true;
+		gifch.chcr.STR = false;
+		hwDmacIrq(DMAC_GIF);
+		return;
+	}
 	if (gifch.chcr.MOD == NORMAL_MODE)
 	{ // Else it really is a normal transfer and we want to quit, else it gets confused with chains
 		gif.gspath3done = true;
