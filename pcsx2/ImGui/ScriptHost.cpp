@@ -358,6 +358,22 @@ namespace
 			ScriptBridge::PatchCode(addr, word, persistent.value_or(false));
 		});
 		eng.set_function("unpatch", [](uint32_t addr) { ScriptBridge::UnpatchCode(addr); });
+		// patch_many({{addr, word}, ...}[, persistent]) / unpatch_many({addr, ...}): all words in one CPU-thread task
+		eng.set_function("patch_many", [](sol::table t, sol::optional<bool> persistent) {
+			std::vector<std::pair<uint32_t, uint32_t>> v;
+			for (size_t i = 1; i <= t.size(); i++)
+			{
+				sol::table e = t[i];
+				v.emplace_back(e.get<uint32_t>(1), e.get<uint32_t>(2));
+			}
+			ScriptBridge::PatchMany(v, persistent.value_or(false));
+		});
+		eng.set_function("unpatch_many", [](sol::table t) {
+			std::vector<uint32_t> v;
+			for (size_t i = 1; i <= t.size(); i++)
+				v.push_back(t.get<uint32_t>(i));
+			ScriptBridge::UnpatchMany(v);
+		});
 		// savestates for fast iteration (queued on the CPU thread; states are saved without script patches and a
 		// load reconciles them, then on_state_load(reapplied, kept, dropped) runs on the next frame)
 		eng.set_function("save_state", [](std::string path) {

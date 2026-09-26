@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #pragma once
+#include <utility>
+#include <vector>
 #include <cstdint>
 
 // Engine seam between the compiled C++ overlay (ScriptOverlay.cpp -- owns EE-RAM access, the projection
@@ -76,6 +78,10 @@ namespace ScriptBridge
 	                                               // invalidate block (CPU thread); persistent = code cave, kept by UnpatchAll
 	void  UnpatchCode(uint32_t addr);              // restore the saved original (CPU thread)
 	void  UnpatchAll();                            // restore EVERY active patch (script reload/disable teardown)
+	// Several words applied / restored in ONE CPU-thread task: the EE never runs between them (multi-word hooks,
+	// e.g. an entry trampoline `j stub; nop`, must never be observed half-written).
+	void  PatchMany(const std::vector<std::pair<uint32_t, uint32_t>>& words, bool persistent);
+	void  UnpatchMany(const std::vector<uint32_t>& addrs);
 	// Savestate integration (CPU thread): states are saved without patches; a load reconciles the registry.
 	void  BeginStateSave();
 	void  EndStateSave();
