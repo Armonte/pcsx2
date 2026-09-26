@@ -34,6 +34,12 @@ namespace GameRollback
 	int RunningMode();
 	void OnStateLoaded(); // CPU thread, after EE memory was replaced by a savestate
 
+	// Netplay through PovertyCaster (Sdbz/NetBridge): mode 0 sync test (GekkoNet stress), 1 local, 2 p2p.
+	bool NetStart(int mode, int local_player, const std::string& remote, u16 port, u8 delay, const std::string& replay,
+		std::string* error = nullptr);
+	void NetStop();
+	std::string NetStatus();
+
 	std::string Status();
 	void SetFileWatch(bool on);
 } // namespace GameRollback

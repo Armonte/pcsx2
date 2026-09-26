@@ -3,6 +3,7 @@
 
 #include "Sdbz/GameRollback.h"
 #include "Sdbz/EeHooks.h"
+#include "Sdbz/NetBridge.h"
 #include "Sdbz/RollbackDevice.h"
 
 #include "DebugTools/BiosDebugData.h"
@@ -379,6 +380,7 @@ namespace GameRollback
 			std::vector<u32> resim_gates, resim_skips, always_skips;
 			std::vector<EntryAction> entry_actions;
 			u32 pad_read_fn = 0, pad_site = 0;
+			u32 pad_mode = 0x73; // report mode byte every netplay peer builds reports with (the game's configured pad mode)
 			// optional separate record/replay point (a higher-level read whose output is replayed in resim, e.g. the
 			// game's port-state read that wraps the pad library): player = sum of player_regs, output at buf_reg
 			u32 replay_fn = 0, replay_site = 0, replay_len = 32;
@@ -819,6 +821,7 @@ namespace GameRollback
 			{
 				m->pad_read_fn = Get(Child(root, "pad"), "read_fn", 0);
 				m->pad_site = Get(Child(root, "pad"), "site", 0);
+				m->pad_mode = Get(Child(root, "pad"), "mode", 0x73);
 				m->pad_record_replay = GetStr(Child(root, "pad"), "record_replay") == "true";
 				if (Has(Child(root, "pad"), "replay"))
 				{
@@ -947,7 +950,8 @@ namespace GameRollback
 		std::mutex s_req_mtx; // guards the pending request fields (any thread -> EE thread)
 		struct Request
 		{
-			bool attach = false, detach = false, start = false, stop = false;
+			bool attach = false, detach = false, start = false, stop = false, net_start = false, net_stop = false;
+			NetBridge::Config net;
 			std::string path;
 			int mode = 0;
 			u32 frames = 8;
@@ -983,6 +987,56 @@ namespace GameRollback
 		};
 		PadRec s_pad_hist[PAD_HIST][PAD_PLAYERS];
 		s32 s_host_frame = -1; // frame index of the current real frame (advanced at every FRAME_BEGIN)
+
+		// netplay (NetBridge): every player's report is rebuilt from the 6-byte wire input, identically on every peer
+		bool s_net = false;
+		NetBridge::Plan s_net_plan;
+		std::vector<s32> s_net_resim_saves; // save index per re-simulated step
+		s32 s_net_fwd_save = -1;            // the forward frame's save, answered at the next frame boundary
+		u8 s_live_report[PAD_PLAYERS][PAD_REPORT] = {};
+		bool s_live_valid[PAD_PLAYERS] = {};
+		std::vector<std::pair<u32, u32>> s_hash_ranges; // the manifest's watched (gameplay) state
+		u64 s_net_refused = 0;
+
+		u32 HashState()
+		{
+			u64 h = 1469598103934665603ull;
+			for (const auto& [a, l] : s_hash_ranges)
+			{
+				const u8* p = &eeMem->Main[a & RAM_MASK];
+				for (u32 k = 0; k < l; k++)
+					h = (h ^ p[k]) * 1099511628211ull;
+			}
+			return static_cast<u32>(h ^ (h >> 32));
+		}
+		void BuildReport(const u8* in, u8* out)
+		{
+			std::memset(out, 0, PAD_REPORT);
+			out[0] = 0;
+			out[1] = static_cast<u8>(s_man.pad_mode);
+			out[2] = static_cast<u8>(~in[0]);
+			out[3] = static_cast<u8>(~in[1]);
+			out[4] = in[2];
+			out[5] = in[3];
+			out[6] = in[4];
+			out[7] = in[5];
+			if ((s_man.pad_mode & 0x0F) >= 9)
+			{
+				const u16 buttons = static_cast<u16>((in[0] << 8) | in[1]); // PadFeed layout ((b2 << 8) | b3) ^ 0xFFFF
+				static constexpr u16 PRESS_BITS[12] = {0x2000, 0x8000, 0x1000, 0x4000, 0x10, 0x20, 0x40, 0x80, 0x4, 0x8, 0x1, 0x2};
+				for (u32 i = 0; i < 12; i++)
+					out[8 + i] = (buttons & PRESS_BITS[i]) ? 0xFF : 0x00;
+			}
+		}
+		void ReportToInput(const u8* rep, u8* out)
+		{
+			out[0] = static_cast<u8>(~rep[2]);
+			out[1] = static_cast<u8>(~rep[3]);
+			out[2] = rep[4];
+			out[3] = rep[5];
+			out[4] = rep[6];
+			out[5] = rep[7];
+		}
 
 		// dynamic ranges
 		u64 s_dyn_sig = 0;
@@ -1226,6 +1280,8 @@ namespace GameRollback
 					}
 				}
 				RollbackDevice::HandleSyscall(RollbackDevice::CMD_RESIM_POST, s_i, 0, 0);
+				if (s_net && s_i < s_net_resim_saves.size())
+					NetBridge::ResolveSave(s_net_resim_saves[s_i], HashState());
 				if (++s_i < s_R)
 				{
 					BeginResimFrame();
@@ -1240,6 +1296,58 @@ namespace GameRollback
 		}
 
 		void ApplyRequests();
+
+		// Netplay, before FRAME_BEGIN: answer the previous forward frame's save, get this frame's plan (holding while
+		// the netcode waits), write every planned frame's inputs as rebuilt reports, request the rollback depth.
+		bool NetFrameBegin()
+		{
+			if (s_net_fwd_save >= 0)
+			{
+				NetBridge::ResolveSave(s_net_fwd_save, HashState());
+				s_net_fwd_save = -1;
+			}
+			int n = 0;
+			for (int waited = 0;; waited++)
+			{
+				n = NetBridge::Frame(&s_net_plan);
+				if (n != 0)
+					break;
+				if (waited > 10000) // ~10 s without a frame: give up
+				{
+					n = -1;
+					break;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			if (n < 0)
+			{
+				Console.Error("GameRollback: netcode stopped (%s)", NetBridge::Status().c_str());
+				NetBridge::Stop();
+				s_net = false;
+				return false;
+			}
+			s_net_resim_saves.clear();
+			for (const NetBridge::Step& st : s_net_plan.steps)
+			{
+				for (u32 p = 0; p < 2; p++)
+				{
+					PadRec& r = s_pad_hist[static_cast<u32>(st.frame) % PAD_HIST][p];
+					r.frame = st.frame;
+					r.ret = 1;
+					BuildReport(st.inputs[p], r.report);
+				}
+				if (st.rolling_back)
+					s_net_resim_saves.push_back(st.save_index);
+				else
+				{
+					s_net_fwd_save = st.save_index;
+					if (st.frame != s_host_frame + 1)
+						Console.Error("GameRollback: netcode frame %d != host frame %d", st.frame, s_host_frame + 1);
+				}
+			}
+			RollbackDevice::SetExternalRollback(s_net_plan.rollback_advances);
+			return true;
+		}
 
 		EeHooks::Action OnSimTickSite(u32)
 		{
@@ -1258,8 +1366,16 @@ namespace GameRollback
 				s64 v = 0;
 				RollbackDevice::SetFrameGateCondition(Eval(*s_man.gate_when, 0, &v) && v != 0);
 			}
+			if (s_net && !NetFrameBegin())
+				return EeHooks::Action::Continue; // session failed: the frame runs without netcode
 			s_host_frame++;
 			const u32 R = static_cast<u32>(RollbackDevice::HandleSyscall(RollbackDevice::CMD_FRAME_BEGIN, 0, 0, 0));
+			if (s_net && R != s_net_plan.rollback_advances)
+			{
+				s_net_refused++;
+				Console.Error("GameRollback: netcode asked for a %u-frame rollback at frame %d, device did %u (gated)",
+					s_net_plan.rollback_advances, s_host_frame, R);
+			}
 			if (R == 0)
 			{
 				RollbackDevice::HandleSyscall(RollbackDevice::CMD_CUR_PRE, 0, 0, 0);
@@ -1329,6 +1445,19 @@ namespace GameRollback
 			}
 			cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(RollbackDevice::HandleSyscall(
 				RollbackDevice::CMD_PAD_FEED, s_pad_player, s_pad_buf, cpuRegs.GPR.n.v0.UL[0]));
+			if (s_net)
+			{
+				// this peer's live input (real pad or feed) goes to the netcode; the game gets the session's input
+				std::memcpy(s_live_report[player], buf, PAD_REPORT);
+				s_live_valid[player] = true;
+				const PadRec& r = s_pad_hist[static_cast<u32>(s_host_frame) % PAD_HIST][player];
+				if (r.frame == s_host_frame)
+				{
+					std::memcpy(buf, r.report, PAD_REPORT);
+					cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(r.ret);
+				}
+				return EeHooks::Action::Continue;
+			}
 			if (s_man.pad_record_replay && !s_man.replay_fn && s_mode != 0 && s_host_frame >= 0)
 			{
 				PadRec& r = s_pad_hist[static_cast<u32>(s_host_frame) % PAD_HIST][player];
@@ -1844,9 +1973,13 @@ namespace GameRollback
 			SetResimFlagAddr(0);
 			if (s_man.rng_split.len)
 				SetRngSplit(s_man.rng_split.addr, s_man.rng_split.len);
+			s_hash_ranges.clear();
 			for (const Item& it : s_man.watches)
 				if (const std::optional<u32> a = Resolve(it.where))
+				{
 					AddWatch(*a, it.len, it.name);
+					s_hash_ranges.emplace_back(*a, it.len);
+				}
 			s_dyn_sig = 0;
 			RefreshDynamic(true);
 		}
@@ -1961,6 +2094,38 @@ namespace GameRollback
 				DoStop();
 			if (r.start && s_attached)
 				DoStart(r.mode, r.frames);
+			if (r.net_stop && s_net)
+			{
+				NetBridge::Stop();
+				s_net = false;
+				DoStop();
+			}
+			if (r.net_start && s_attached)
+			{
+				NetBridge::Host host;
+				host.poll_local_input = [](int player, u8* out) {
+					static constexpr u8 NEUTRAL[NetBridge::INPUT_SIZE] = {0, 0, 0x80, 0x80, 0x80, 0x80};
+					if (player >= 0 && player < static_cast<int>(PAD_PLAYERS) && s_live_valid[player])
+						ReportToInput(s_live_report[player], out);
+					else
+						std::memcpy(out, NEUTRAL, sizeof(NEUTRAL));
+				};
+				host.in_game = [] {
+					s64 v = 1;
+					return !s_man.gate_when || (Eval(*s_man.gate_when, 0, &v) && v != 0);
+				};
+				std::string err;
+				if (!NetBridge::Start(r.net, host, &err))
+					Console.Error("GameRollback: netplay start failed: %s", err.c_str());
+				else
+				{
+					DoStart(static_cast<int>(RollbackDevice::Mode::Netplay), 8); // rollback depth fixed at 8
+					s_net = true;
+					s_net_fwd_save = -1;
+					for (bool& v : s_live_valid)
+						v = false;
+				}
+			}
 		}
 	} // namespace
 
@@ -2012,6 +2177,35 @@ namespace GameRollback
 		s_req_pending = true;
 	}
 	int RunningMode() { return s_mode; }
+
+	bool NetStart(int mode, int local_player, const std::string& remote, u16 port, u8 delay, const std::string& replay,
+		std::string* error)
+	{
+		std::lock_guard lk(s_req_mtx);
+		if (!s_attached && !s_req.attach)
+		{
+			if (error)
+				*error = "no manifest attached";
+			return false;
+		}
+		s_req.net_start = true;
+		s_req.net.mode = static_cast<NetBridge::Mode>(mode);
+		s_req.net.local_player = local_player;
+		s_req.net.remote = remote;
+		s_req.net.port = port;
+		s_req.net.input_delay = delay;
+		s_req.net.replay_path = replay;
+		s_req.net.game_id = s_man.serial;
+		s_req_pending = true;
+		return true;
+	}
+	void NetStop()
+	{
+		std::lock_guard lk(s_req_mtx);
+		s_req.net_stop = true;
+		s_req_pending = true;
+	}
+	std::string NetStatus() { return NetBridge::Status() + fmt::format(" | refused rollbacks {}", s_net_refused); }
 	void OnStateLoaded()
 	{
 		// a savestate never lands inside a re-simulation, but the driver must not carry one over either
