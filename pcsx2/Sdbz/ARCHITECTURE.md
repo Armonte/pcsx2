@@ -249,4 +249,11 @@ Every new mechanism is A/B-tested against the previous one (interleaved pairs, m
     Two fixes came out of this:
     - Attaching an already-attached manifest is a no-op, and there is no reload or re-attach during netplay. Before, a Lua attach re-applied the manifest mid-match on one peer and caused a desync.
     - Auto-start runs at the first state load, so the session starts at the savestate's first frame boundary.
-  - **Open:** a real two-machine run (only loopback so far).
+  - **M5 done (2026-09-26).** The user waived the two-PC run. It is replaced by internet conditions on one PC: `WAN=40,12,0.03 tools/fuc_p2p_test.sh ... --playback` routes both peers through `tools/udp_wan_sim.py`, which adds 40 ms one-way delay ±12 ms jitter (reordering), 3% loss and 0.5% duplicates. The test also runs `.pcrep` playback and journal replay.
+
+    | Game | Ping | Rollbacks | Desync | `.pcrep` checks | Journal compares |
+    |---|---|---|---|---|---|
+    | FUC | ~105 ms | 137 / 159 | 0 | 48/48, 48/48 | 1773 / 1855, 0 mismatches |
+    | SDBZ | ~95 ms | 123 on peer A | 0 | 47/47, 48/48 | 1773 / 1637, 0 mismatches |
+
+    Up to 3-deep rollbacks and ~190 dropped packets per direction per run. A real two-PC match is still worth running when convenient (`FUC/dist/netplay_bundle.zip`, `netplay.cmd host|join`).
