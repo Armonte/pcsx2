@@ -1,3 +1,6 @@
 [submodule "pcsx2/GS/parallel-gs"]
 	path = pcsx2/GS/parallel-gs
 	url = https://github.com/Arntzen-Software/parallel-gs.git
+[submodule "3rdparty/creamybinder"]
+	path = 3rdparty/creamybinder
+	url = https://github.com/Armonte/creamybinder.git

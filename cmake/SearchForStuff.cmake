@@ -89,6 +89,12 @@ disable_compiler_warnings_for_target(libcdio)
 add_subdirectory(3rdparty/soundtouch EXCLUDE_FROM_ALL)
 add_subdirectory(3rdparty/simpleini EXCLUDE_FROM_ALL)
 add_subdirectory(3rdparty/imgui EXCLUDE_FROM_ALL)
+# creamybinder (PovertyCaster's shared SDL3 controller/keyboard binding core, pinned to PovertyCaster's commit): owns
+# local input during a netplay session. Uses THIS project's SDL3::SDL3 (one SDL3 per process) and imgui target.
+set(CB_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CB_BUILD_DEMO OFF CACHE BOOL "" FORCE)
+set(CB_IMGUI_TARGET imgui CACHE STRING "" FORCE)
+add_subdirectory(3rdparty/creamybinder EXCLUDE_FROM_ALL)
 add_subdirectory(3rdparty/cpuinfo EXCLUDE_FROM_ALL)
 disable_compiler_warnings_for_target(cpuinfo)
 add_subdirectory(3rdparty/libzip EXCLUDE_FROM_ALL)

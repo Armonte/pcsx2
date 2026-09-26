@@ -1285,6 +1285,8 @@ target_link_libraries(PCSX2_FLAGS INTERFACE
 	freesurround
 	Freetype::Freetype
 	SDL3::SDL3
+	creamybinder
+	creamybinder_imgui
 	ZLIB::ZLIB
 	LZ4::LZ4
 	SoundTouch::SoundTouch
