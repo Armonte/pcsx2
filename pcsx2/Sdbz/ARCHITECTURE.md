@@ -216,3 +216,29 @@ Every new mechanism is A/B-tested against the previous one (interleaved pairs, m
   - `pad.record_replay` for games whose re-simulated frame re-reads the pad. SDBZ records the raw DS2 report per player and frame, and replays it into the same read during resim.
 
   The file watcher hot-reloads the manifest at the next frame boundary and keeps the mode. The generic harness script is `FUC/lua/ps2rb.lua`, and the SDBZ manifest is `sdbz/rollback/sdbz.yaml`.
+- **M2 done.** Both games run from manifests (`manifests/fuc.yaml`, `sdbz/rollback/sdbz.yaml`) with file-watch hot reload. SDBZ CPU-vs-CPU and mash sync tests give 0 desync after the heap region was widened to the whole sbrk range (`SDBZ_CPU_RESIM_CRASH.md`).
+- **M4 done (FUC).** The virtual stream clock plus the rolled-back sound RNG make forward and 8f runs identical by device frame for stream starts, SE requests and voice ids (0 desync over 8,722 rollbacks).
+- **M3 done.** `NetBridge` loads `pc_ps2bridge.dll` (PovertyCaster, DEFERRED dispatch) at runtime. A GekkoNet stress session through `SessionDriver` gives 0 desync on both games (FUC 598 rollbacks, SDBZ 453). The hot-swappable adapter DLL ABI is not needed yet: per-game code is manifest data.
+- **M5 (2026-09-26).** `tools/fuc_p2p_test.sh [--playback]` (`GAME=sdbz` for SDBZ) runs two PCSX2 instances as a GekkoNet P2P session over UDP. Each peer records a `.pcrep` and a host schedule journal; `--playback` then plays both back offline.
+
+  | Game | Live P2P, delay 1 | `.pcrep` playback | Journal replay |
+  |---|---|---|---|
+  | FUC | 0 desync, 17 rollbacks, 1516 cross-peer compares | 48/48 CHECKs ok per peer | 1575 and 1572 compares, 0 mismatches |
+  | SDBZ | 0 desync, 73 rollbacks, 1522 compares | 48/48 CHECKs ok per peer | 1545 and 1686 compares, 0 mismatches |
+
+  - **Replay anchor.** The anchor is GekkoNet's frame-0 save, which holds the state after frame 0 ran. The token host's `export_state` blob carries three things:
+    - the session start-state hash, from the pre-advance save;
+    - that post-frame-0 hash;
+    - frame 0's confirmed inputs.
+
+    Playback boots the recording's savestate. `import_state` proves the current state is the start state, runs frame 0 as a prelude, then plays the recording's plans.
+  - **Host schedule journal.** This is our own text journal, because the bridge journal needs inline state. It holds `P` plan, `Q` pre-advance save, `S` step (frame, rollback flag, save id, both inputs) and `C` checksum records. `net_journal` replays the exact plans, rollbacks included, and compares every checksum.
+  - **Fixes found by playback:**
+    - saves before the first ADVANCE were dropped (the one abandoned save);
+    - `NetBridge::Start` moved the host callbacks twice (the session ran on neutral input);
+    - EeHooks invalidation was queued via `RunOnCPUThread`, so after a stop/start the next frame ran stale blocks without the new hooks. It is now synchronous on the EE thread, like the recompiler's own self-modifying-code clears.
+  - **P2P pacing.** Each frame sleeps `(pace_factor - 1) * 16.7 ms`, clamped at 1.5.
+  - **Harness note.** Stop the mashers before `load_setup`. The EE runs part of a frame before `on_state_load`'s commands take effect, so a masher read there changes the start state.
+  - **Open:**
+    - a real two-machine run (only localhost so far);
+    - launcher integration (PovertyCaster PS2 host game family, env contract `PS2RB_*` including `PS2RB_NET=replay|journal` and `PS2RB_JOURNAL`).
