@@ -59,7 +59,9 @@ namespace RollbackDevice
 		Off = 0,
 		Capture = 1,
 		SyncTest = 2,
+		Bench = 3, // netplay-like load: roll back R frames every K frames, no reference copy / compare
 	};
+	void SetBenchEvery(u32 frames); // Bench mode: K (>= 1)
 
 	// EE thread, from the SYSCALL interpreter handler. Returns the value for $v0.
 	u64 HandleSyscall(u32 cmd, u32 arg, u32 arg2, u32 arg3);
