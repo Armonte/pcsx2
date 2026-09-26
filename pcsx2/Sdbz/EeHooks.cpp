@@ -24,6 +24,7 @@ namespace EeHooks
 			Handler handler;
 			Owner owner = OWNER_SCRIPT;
 			std::vector<u32> ra_filter;
+			u32 v0 = 0; // ResimGateRet
 		};
 		std::mutex s_mtx;
 		std::unordered_map<u32, Hook> s_hooks;
@@ -53,6 +54,13 @@ namespace EeHooks
 	} // namespace
 
 	void AddResimGate(u32 pc, Owner owner) { Set(pc, {Kind::ResimGate, {}, owner}); }
+	void AddResimGateRet(u32 pc, u32 v0, Owner owner) { Set(pc, {Kind::ResimGateRet, {}, owner, {}, v0}); }
+	u32 GateReturnValue(u32 pc)
+	{
+		std::lock_guard lk(s_mtx);
+		const auto it = s_hooks.find(Key(pc));
+		return it == s_hooks.end() ? 0 : it->second.v0;
+	}
 	void AddCall(u32 pc, Handler handler, Owner owner) { Set(pc, {Kind::Call, std::move(handler), owner}); }
 	void AddCallFiltered(u32 pc, Handler handler, std::vector<u32> ra_filter, Owner owner)
 	{

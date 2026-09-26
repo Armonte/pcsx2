@@ -114,6 +114,9 @@ namespace RollbackDevice
 	// simulation is live (e.g. the battle frame counter). A rollback happens only if it advanced on every frame of the
 	// window; menus, pauses, round transitions and loads (async IO that must not be rewound) are never rolled back.
 	void SetGate(u32 counter_addr);
+	// Extra gate condition for the next frame boundary (e.g. a manifest phase predicate "fighting"): a frame is a
+	// gameplay frame only if the counter advanced AND this was true. Set by the host just before CMD_FRAME_BEGIN.
+	void SetFrameGateCondition(bool ok);
 	// Rollback gate, I/O side: ranges that change when the game submits asynchronous I/O the simulation later waits on
 	// (file loads, voice/BGM streams). A rollback window in which any of them changed is not rolled back: re-simulating
 	// the submitting frame would issue the request a second time against un-rewound I/O state.

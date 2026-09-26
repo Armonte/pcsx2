@@ -1583,12 +1583,18 @@ static u32 recEeHookCall(u32 pc)
 
 static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
 {
-	if (kind == EeHooks::Kind::ResimGate)
+	if (kind == EeHooks::Kind::ResimGate || kind == EeHooks::Kind::ResimGateRet)
 	{
-		// if (resimulating) { pc = ra; exit block } -- one byte compare on the fast path
+		// if (resimulating) { [v0 = value;] pc = ra; exit block } -- one byte compare on the fast path
 		xCMP(ptr8[EeHooks::ResimFlag()], 0);
 		xForwardJZ32 run;
 		xADD(ptr64[EeHooks::GateReturnCounter()], 1);
+		if (kind == EeHooks::Kind::ResimGateRet)
+		{
+			const u32 v = EeHooks::GateReturnValue(startpc);
+			xMOV(ptr32[&cpuRegs.GPR.n.v0.UL[0]], v);
+			xMOV(ptr32[&cpuRegs.GPR.n.v0.UL[1]], (v & 0x80000000u) ? 0xFFFFFFFFu : 0u);
+		}
 		xMOV(eax, ptr32[&cpuRegs.GPR.n.ra.UL[0]]);
 		xMOV(ptr32[&cpuRegs.pc], eax);
 		iBranchTest();
