@@ -79,6 +79,27 @@ PageSnapshotRing::PageSnapshotRing(std::vector<Range> regions, std::vector<Range
 	m_clean_streak.assign(m_page_index.size(), 0);
 	m_stats.tracked_pages = static_cast<u32>(m_page_index.size());
 
+	// Exclude ranges -> per-tracked-page segments, once. Every load keeps these live bytes.
+	u32 keep_bytes = 0;
+	for (const Range& r : m_excludes)
+	{
+		u32 a = r.address & RAM_MASK;
+		const u32 end = a + r.length;
+		while (a < end)
+		{
+			const u32 page = a >> PAGE_SHIFT;
+			const u32 next = std::min(end, (page + 1) << PAGE_SHIFT);
+			const auto it = std::lower_bound(m_page_index.begin(), m_page_index.end(), page);
+			if (it != m_page_index.end() && *it == page)
+			{
+				m_keep.push_back({a, next - a, static_cast<u32>(it - m_page_index.begin()), keep_bytes});
+				keep_bytes += next - a;
+			}
+			a = next;
+		}
+	}
+	m_keep_buf.resize(keep_bytes);
+
 	if (m_mode == DirtyMode::WriteProtect)
 	{
 		vtlb_DirtyTrack_Enable(m_page_index);
@@ -138,7 +159,7 @@ void PageSnapshotRing::DropSnapshot(Snapshot& s)
 {
 	for (Page* p : s.pages)
 		Unref(p);
-	s.pages.clear();
+	s.pages.clear(); // capacity kept: the storage is recycled through m_snap_pool
 }
 
 void PageSnapshotRing::Clear()
@@ -255,8 +276,13 @@ void PageSnapshotRing::Capture(s32 frame)
 	CollectDirty(dirty);
 
 	Snapshot snap;
+	if (!m_snap_pool.empty())
+	{
+		snap = std::move(m_snap_pool.back());
+		m_snap_pool.pop_back();
+	}
 	snap.frame = frame;
-	snap.dirty_bits = dirty;
+	snap.dirty_bits.assign(dirty.begin(), dirty.end());
 	snap.pages.resize(m_page_index.size());
 
 	const Snapshot* base = m_ring.empty() ? nullptr : &m_ring.back();
@@ -281,6 +307,7 @@ void PageSnapshotRing::Capture(s32 frame)
 		if (it->frame == frame)
 		{
 			DropSnapshot(*it);
+			m_snap_pool.push_back(std::move(*it));
 			m_ring.erase(it);
 			break;
 		}
@@ -289,6 +316,7 @@ void PageSnapshotRing::Capture(s32 frame)
 	while (m_ring.size() > m_capacity)
 	{
 		DropSnapshot(m_ring.front());
+		m_snap_pool.push_back(std::move(m_ring.front()));
 		m_ring.erase(m_ring.begin());
 	}
 
@@ -320,31 +348,42 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 			restore[w] |= later->dirty_bits[w];
 	}
 
-	// Live bytes that must survive the rewind: excludes (never rolled back) + caller preserves.
-	// Only the parts that fall in tracked pages matter: untracked pages are never written by a load.
-	std::vector<Range> keep;
-	auto add_tracked_parts = [this, &keep](const Range& r) {
+	// Live bytes that must survive the rewind: excludes (never rolled back, precomputed per-page segments in
+	// m_keep) + caller preserves. Only segments in pages this load restores need saving: other pages keep their
+	// live bytes untouched.
+	std::vector<KeepSeg> extra; // caller preserves (rare): computed per call
+	u32 extra_bytes = 0;
+	for (const Range& r : preserve)
+	{
 		u32 a = r.address & RAM_MASK;
 		const u32 end = a + r.length;
 		while (a < end)
 		{
 			const u32 page = a >> PAGE_SHIFT;
 			const u32 next = std::min(end, (page + 1) << PAGE_SHIFT);
-			if (std::binary_search(m_page_index.begin(), m_page_index.end(), page))
-				keep.push_back({a, next - a}); // one segment per page (the load writes each through its page's view)
+			const auto pit = std::lower_bound(m_page_index.begin(), m_page_index.end(), page);
+			if (pit != m_page_index.end() && *pit == page)
+			{
+				extra.push_back({a, next - a, static_cast<u32>(pit - m_page_index.begin()),
+					static_cast<u32>(m_keep_buf.size()) + extra_bytes});
+				extra_bytes += next - a;
+			}
 			a = next;
 		}
-	};
-	for (const Range& r : m_excludes)
-		add_tracked_parts(r);
-	for (const Range& r : preserve)
-		add_tracked_parts(r);
-	std::vector<std::vector<u8>> kept(keep.size());
-	for (size_t k = 0; k < keep.size(); k++)
-	{
-		kept[k].resize(keep[k].length);
-		std::memcpy(kept[k].data(), &eeMem->Main[keep[k].address & RAM_MASK], keep[k].length);
 	}
+	std::vector<u8> extra_buf(extra_bytes);
+	auto seg_buf = [this, &extra_buf](const KeepSeg& k) -> u8* {
+		return (k.offset < m_keep_buf.size()) ? &m_keep_buf[k.offset] : &extra_buf[k.offset - m_keep_buf.size()];
+	};
+	auto restored_page = [&restore](u32 i) { return (restore[i >> 6] >> (i & 63)) & 1; };
+	auto save_keep = [&](const KeepSeg& k) {
+		if (restored_page(k.index))
+			std::memcpy(seg_buf(k), &eeMem->Main[k.address], k.length);
+	};
+	for (const KeepSeg& k : m_keep)
+		save_keep(k);
+	for (const KeepSeg& k : extra)
+		save_keep(k);
 
 	// Write-protect mode: data pages are restored through a writable alias of EE RAM, so their protection
 	// never changes (they end up protected and clean relative to the target). Pages holding recompiled code
@@ -392,24 +431,38 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 	for (const u32 i : via_main)
 		std::memcpy(RamPage(m_page_index[i]), it->pages[i]->data, PAGE_SIZE);
 
-	for (size_t k = 0; k < keep.size(); k++)
-	{
-		// keep ranges were split per tracked page (add_tracked_parts), so each lies within one page
-		const u32 a = keep[k].address & RAM_MASK;
+	// Put the kept live bytes back (restored pages only). A page whose kept bytes differ from the target
+	// snapshot's must be captured again; one where they are equal is clean relative to the target.
+	std::vector<u32> keep_dirty_pages;
+	auto restore_keep = [&](const KeepSeg& k) {
+		if (!restored_page(k.index))
+			return;
+		const u8* src = seg_buf(k);
+		const u32 a = k.address;
+		if (std::memcmp(src, it->pages[k.index]->data + (a & (PAGE_SIZE - 1)), k.length) == 0)
+			return; // live bytes == target bytes: the page as restored is already right
+		keep_dirty_pages.push_back(a >> PAGE_SHIFT);
 		if (u8* dst = dest_for(a >> PAGE_SHIFT))
 		{
-			std::memcpy(dst + (a & (PAGE_SIZE - 1)), kept[k].data(), keep[k].length);
-			continue;
+			std::memcpy(dst + (a & (PAGE_SIZE - 1)), src, k.length);
+			return;
 		}
 		if (m_mode == DirtyMode::WriteProtect)
 			vtlb_DirtyTrack_Unprotect(a >> PAGE_SHIFT);
-		std::memcpy(&eeMem->Main[a], kept[k].data(), keep[k].length);
-	}
+		std::memcpy(&eeMem->Main[a], src, k.length);
+	};
+	for (const KeepSeg& k : m_keep)
+		restore_keep(k);
+	for (const KeepSeg& k : extra)
+		restore_keep(k);
 
 	// The target becomes the newest snapshot and the base for the next capture. Memory now equals
 	// it except for the kept ranges, so those pages must count as dirty for the next capture.
 	for (auto later = it + 1; later != m_ring.end(); ++later)
+	{
 		DropSnapshot(*later);
+		m_snap_pool.push_back(std::move(*later));
+	}
 	m_ring.erase(it + 1, m_ring.end());
 
 	if (m_mode == DirtyMode::WriteProtect)
@@ -419,8 +472,8 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 		const std::vector<u64> hot_ram = HotRamBits();
 		vtlb_DirtyTrack_Rearm(nullptr, &hot_ram);
 		// Pages whose kept (never-rolled-back) bytes differ from the target must be copied by the next capture.
-		for (const Range& r : keep)
-			vtlb_DirtyTrack_MarkDirty((r.address & RAM_MASK) >> PAGE_SHIFT);
+		for (const u32 page : keep_dirty_pages)
+			vtlb_DirtyTrack_MarkDirty(page);
 	}
 
 	m_stats.snapshots = static_cast<u32>(m_ring.size());
