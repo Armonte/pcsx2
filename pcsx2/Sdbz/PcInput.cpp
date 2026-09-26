@@ -12,6 +12,12 @@
 #include "fmt/format.h"
 
 #include <creamybinder/creamybinder.hpp>
+#include <creamybinder/binder.hpp>
+#include <creamybinder/imgui_binder.hpp>
+
+#ifdef _WIN32
+#include "common/RedtapeWindows.h"
+#endif
 
 #include <atomic>
 #include <memory>
@@ -41,7 +47,11 @@ namespace PcInput
 		Params s_req_params;
 
 		std::atomic<bool> s_owns{false};
+		std::mutex s_session_mtx; // CPU thread poll/update vs GS thread binder draw
 		std::unique_ptr<cb::Session> s_session;
+		std::unique_ptr<cb::BinderController> s_binder;
+		std::atomic<bool> s_binder_open{false};
+		bool s_f4_was_down = false;
 		Params s_params;
 		u16 s_buttons[2] = {};
 		std::string s_status = "pcinput: off";
@@ -80,6 +90,7 @@ namespace PcInput
 			cfg.deadzone = 0.30f;
 			cfg.keyboardBackend = cb::KeyboardBackend::Win32;
 			cfg.focusGate = true;
+			std::lock_guard slk(s_session_mtx);
 			s_session = cb::Session::create(desc, cfg);
 			if (!s_session)
 			{
@@ -89,6 +100,7 @@ namespace PcInput
 				s_status = "pcinput: session create failed";
 				return;
 			}
+			s_binder = std::make_unique<cb::BinderController>(*s_session);
 			if (s_params.online_seat >= 0)
 				s_session->setOnlineSeat(s_params.online_seat);
 			s_session->poll(); // enumerate devices before the first frame reads them
@@ -101,7 +113,12 @@ namespace PcInput
 		{
 			if (!s_owns.load(std::memory_order_acquire))
 				return;
-			s_session.reset(); // releases the devices and creamybinder's SDL subsystem references
+			{
+				std::lock_guard slk(s_session_mtx);
+				s_binder_open.store(false);
+				s_binder.reset();
+				s_session.reset(); // releases the devices and creamybinder's SDL subsystem references
+			}
 			s_buttons[0] = s_buttons[1] = 0;
 			s_owns.store(false, std::memory_order_release);
 			ReloadPcsx2Sources(); // PCSX2's own sources from the user's settings again
@@ -144,7 +161,38 @@ namespace PcInput
 		}
 		if (!s_session)
 			return;
+		std::lock_guard slk(s_session_mtx);
 		s_session->poll(); // SDL pump + gamepads + Win32 keyboard, SOCD, focus gate
+		// binder open/close: F4 (like pchost's binder tab) while a window of this process has focus, or the
+		// controller open gesture
+		bool f4 = false;
+#ifdef _WIN32
+		DWORD fg_pid = 0;
+		if (HWND fg = GetForegroundWindow())
+			GetWindowThreadProcessId(fg, &fg_pid);
+		f4 = fg_pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_F4) & 0x8000) != 0;
+#endif
+		const bool toggle = (f4 && !s_f4_was_down) || (!s_binder_open.load() && s_session->binderOpenGesture());
+		s_f4_was_down = f4;
+		if (toggle)
+		{
+			const bool open = !s_binder_open.load();
+			if (open)
+				s_binder->reopen();
+			else
+				s_session->saveConfig();
+			s_binder_open.store(open);
+		}
+		if (s_binder_open.load())
+		{
+			s_binder->update(); // gates game input while it runs
+			if (s_binder->allDone())
+			{
+				s_session->saveConfig();
+				s_binder_open.store(false);
+				Console.WriteLn("PcInput: binds saved to %s", s_session->configPath().c_str());
+			}
+		}
 		for (int seat = 0; seat < 2; seat++)
 		{
 			const cb::ActionMask held = s_session->read(seat).held;
@@ -158,5 +206,15 @@ namespace PcInput
 	}
 
 	u16 Buttons(int seat) { return (seat >= 0 && seat < 2) ? s_buttons[seat] : 0; }
+
+	bool BinderOpen() { return s_binder_open.load(); }
+	void DrawOverlay()
+	{
+		if (!s_binder_open.load())
+			return;
+		std::lock_guard slk(s_session_mtx);
+		if (s_session && s_binder)
+			cb::imgui::drawBinder(*s_binder, *s_session);
+	}
 	std::string Status() { return s_status; }
 } // namespace PcInput

@@ -37,4 +37,10 @@ namespace PcInput
 	u16 Buttons(int seat);
 
 	std::string Status();
+
+	// The creamybinder binder (the same ImGui skin as PovertyCaster's F4 tab): F4 or the controller open gesture
+	// toggles it; while it is open the game gets neutral input and the wizard drives the binds, saved to
+	// <config_dir>/creamybinder-<profile>.ini when every player is done. GS thread, inside the ImGui frame:
+	void DrawOverlay();
+	bool BinderOpen();
 } // namespace PcInput
