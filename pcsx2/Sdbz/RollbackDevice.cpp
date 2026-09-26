@@ -57,6 +57,8 @@ namespace RollbackDevice
 		// ---- configuration (Lua) ----
 		std::vector<Range> s_cfg_regions, s_cfg_excludes, s_cfg_ignore;
 		std::vector<Range> s_dyn_excludes;         // replaceable exclude set (per-object fields in pools that move)
+		std::vector<Range> s_cfg_resim_restore;    // saved at rollback start, restored at resim end
+		std::vector<u8> s_resim_restore_buf;
 		bool s_dyn_dirty = false;                  // rebuild the ring at the next FRAME_BEGIN
 		std::atomic<bool> s_resimulating{false};   // between a rollback and CUR_PRE (read by other threads)
 		std::atomic<bool> s_lever_host_vsync{true}, s_lever_park{true}, s_lever_iop{true};
@@ -413,6 +415,7 @@ namespace RollbackDevice
 		s_cfg_regions.clear();
 		s_cfg_excludes.clear();
 		s_dyn_excludes.clear();
+		s_cfg_resim_restore.clear();
 		s_cfg_ignore.clear();
 		s_cfg_watches.clear();
 		s_cfg_input = {};
@@ -422,6 +425,12 @@ namespace RollbackDevice
 	{
 		std::lock_guard lk(s_mtx);
 		s_cfg_regions.push_back({addr & RAM_MASK, (addr & RAM_MASK) + len});
+	}
+
+	void AddResimRestore(u32 addr, u32 len)
+	{
+		std::lock_guard lk(s_mtx);
+		s_cfg_resim_restore.push_back({addr & RAM_MASK, (addr & RAM_MASK) + len});
 	}
 
 	void AddExclude(u32 addr, u32 len)
@@ -717,6 +726,19 @@ namespace RollbackDevice
 				if (s_lever_park.load(std::memory_order_relaxed))
 					rcntRollbackPark(); // re-simulation takes no display time
 				WriteResimFlag(1);
+				{
+					// resim-invisible state (audio): remember it as it is now, put it back when resim ends
+					size_t total = 0;
+					for (const Range& r : s_cfg_resim_restore)
+						total += r.b - r.a;
+					s_resim_restore_buf.resize(total);
+					size_t off = 0;
+					for (const Range& r : s_cfg_resim_restore)
+					{
+						std::memcpy(&s_resim_restore_buf[off], Ram(r.a), r.b - r.a);
+						off += r.b - r.a;
+					}
+				}
 				s_rollbacks++;
 				return s_rollback;
 			}
@@ -821,6 +843,16 @@ namespace RollbackDevice
 					s_resimulating.store(false, std::memory_order_relaxed);
 					rcntRollbackUnpark();
 					WriteResimFlag(0);
+					{
+						size_t off = 0;
+						for (const Range& r : s_cfg_resim_restore)
+						{
+							if (off + (r.b - r.a) > s_resim_restore_buf.size())
+								break;
+							std::memcpy(Ram(r.a), &s_resim_restore_buf[off], r.b - r.a);
+							off += r.b - r.a;
+						}
+					}
 					s_last_rollback_us = static_cast<u64>(s_rollback_timer.GetTimeNanoseconds() / 1000.0);
 					s_max_rollback_us = std::max(s_max_rollback_us, s_last_rollback_us);
 					s_sum_rollback_us += s_last_rollback_us;

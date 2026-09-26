@@ -191,6 +191,7 @@ namespace
 		rd.set_function("prof_start", [](sol::optional<uint32_t> hz) { RbProfiler::Start(hz.value_or(2000)); });
 		rd.set_function("prof_stop", []() { RbProfiler::Stop(); });
 		rd.set_function("set_bench_every", [](uint32_t k) { RollbackDevice::SetBenchEvery(k); });
+		rd.set_function("add_resim_restore", [](uint32_t a, uint32_t n) { RollbackDevice::AddResimRestore(a, n); });
 		rd.set_function("set_resim_flag", [](uint32_t a) { RollbackDevice::SetResimFlagAddr(a); });
 		rd.set_function("set_levers", [](bool host_vsync, bool park, bool iop) { RollbackDevice::SetLevers(host_vsync, park, iop); });
 		// Deterministic controller feed (player 1-based; buttons = game layout, see PadFeed.h):

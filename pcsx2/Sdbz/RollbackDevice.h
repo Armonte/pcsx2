@@ -106,6 +106,10 @@ namespace RollbackDevice
 	// (file loads, voice/BGM streams). A rollback window in which any of them changed is not rolled back: re-simulating
 	// the submitting frame would issue the request a second time against un-rewound I/O state.
 	void AddGateStable(u32 addr, u32 len);
+	// Resim-invisible ranges (e.g. the game's EE-side audio state: sound command ring, voice/SE slots, streams):
+	// saved when a rollback starts and restored when re-simulation ends, so nothing the re-simulated frames did
+	// there survives (no replayed sounds, no leaked slots). They must also be excluded (never rolled back).
+	void AddResimRestore(u32 addr, u32 len);
 	// RNG call tracing (game-side trampolines on the RNG functions report each call): the device records the ordered
 	// (function, caller) list of every frame's normal simulation step, compares each re-simulation of that frame against
 	// it, and reports the first differing call. Calls made outside both the simulation step and the render section are
