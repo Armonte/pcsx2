@@ -84,6 +84,8 @@ public:
 	bool NewestPages(s32 frame, std::vector<u32>& out) const; // newest snapshot must be `frame`
 	const u8* PageData(u32 id) const;
 	const std::vector<u32>& PageIndex() const { return m_page_index; }
+	// Dirty-page census: how many captures copied each tracked page (EE page address, count), most first.
+	std::vector<std::pair<u32, u32>> TopDirtyPages(u32 n) const;
 
 	DirtyMode Mode() const { return m_mode; }
 	const Stats& GetStats() const { return m_stats; }
@@ -144,5 +146,6 @@ private:
 	std::vector<u64> m_hot;          // bit per tracked index
 	std::vector<u8> m_dirty_streak;  // consecutive dirty captures
 	std::vector<u8> m_clean_streak;  // consecutive clean captures while hot
+	std::vector<u32> m_dirty_count;  // captures that copied each tracked page (census)
 	Stats m_stats;
 };
