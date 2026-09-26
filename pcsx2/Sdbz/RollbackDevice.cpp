@@ -5,6 +5,8 @@
 #include "Sdbz/PageSnapshotRing.h"
 #include "Sdbz/RbProfiler.h"
 #include "Sdbz/PadFeed.h"
+#include "SPU2/spu2.h"
+#include "Host.h"
 
 #include "Memory.h"
 #include "Counters.h"
@@ -433,8 +435,24 @@ namespace RollbackDevice
 		}
 	} // namespace
 
+	namespace
+	{
+		bool s_we_muted = false;
+		// The every-frame sync test runs the game below real time on purpose (it re-simulates R frames per
+		// frame); its audio would only come out time-stretched. Mute it for that mode, restore otherwise.
+		void ApplyAudioForMode(Mode mode)
+		{
+			const bool want = (mode == Mode::SyncTest);
+			if (want == s_we_muted)
+				return;
+			s_we_muted = want;
+			Host::RunOnCPUThread([want]() { SPU2::SetOutputMuted(want); }, false);
+		}
+	} // namespace
+
 	void Start(Mode mode, u32 rollback_frames, bool write_protect)
 	{
+		ApplyAudioForMode(mode);
 		std::lock_guard lk(s_mtx);
 		ResetRuntime();
 		s_mode = mode;
@@ -482,6 +500,7 @@ namespace RollbackDevice
 
 	void Stop()
 	{
+		ApplyAudioForMode(Mode::Off);
 		std::lock_guard lk(s_mtx);
 		s_mode = Mode::Off;
 		s_resimulating.store(false, std::memory_order_relaxed); // EE unparks the sync counters at its next event test
