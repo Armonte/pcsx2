@@ -112,6 +112,7 @@ namespace RollbackDevice
 		std::map<u64, u64> s_trace_other_sites;       // (fn<<32|ra) -> count, calls outside sim/render
 		std::map<u32, u32> s_trace_alias;             // stub ra -> original call-site ra
 		std::map<std::tuple<u32, u32, u32>, u64> s_trace_render_sites; // (fn, task pass, ra) -> count, render section
+		std::map<std::tuple<u32, u32, u32>, u64> s_trace_resim_probes; // (probe fn, ra, 2nd arg) -> count, during resim
 		u32 s_trace_pass = 0;                         // last task pass reported by the pass marker (trace id 15)
 
 		std::vector<Range> s_stable;
@@ -511,6 +512,7 @@ namespace RollbackDevice
 		s_trace_first_mismatch.clear();
 		s_trace_other_sites.clear();
 		s_trace_render_sites.clear();
+		s_trace_resim_probes.clear();
 		s_trace_pass = 0;
 		s_stable_hash.assign(INPUT_HISTORY, 0);
 		s_io_gated_frames = 0;
@@ -941,6 +943,8 @@ namespace RollbackDevice
 						case Phase::Resim:
 							if (cmd - CMD_RNG_TRACE < TRACE_PROBE_FIRST) // probes are a render-section census only
 								s_cur_trace.push_back(key);
+							else if (s_phase == Phase::Resim) // e.g. IOP RPCs that re-simulation must never issue
+								s_trace_resim_probes[{cmd - CMD_RNG_TRACE, ra, arg2}]++;
 							break;
 						case Phase::Render:
 							s_trace_calls_render++;
@@ -1027,6 +1031,9 @@ namespace RollbackDevice
 		out += "\n## traced calls in the render section ((fn, task pass, caller) -> count)\n";
 		for (const auto& [key, n] : s_trace_render_sites)
 			out += fmt::format("fn{} pass {:X} ra {:08X}  {}\n", std::get<0>(key), std::get<1>(key), std::get<2>(key), n);
+		out += "\n## probe calls during re-simulation ((fn, caller, 2nd arg) -> count)\n";
+		for (const auto& [key, n] : s_trace_resim_probes)
+			out += fmt::format("fn{} ra {:08X} a1 {:08X}  {}\n", std::get<0>(key), std::get<1>(key), std::get<2>(key), n);
 		out += fmt::format("\n## RNG trace first mismatch\n{}\n", s_trace_first_mismatch);
 		out += "\n## last frame's differing runs (addr len now/ref first bytes)\n";
 		for (const DiffRun& r : s_last_runs)
