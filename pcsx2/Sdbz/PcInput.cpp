@@ -15,6 +15,7 @@
 #include <creamybinder/creamybinder.hpp>
 #include <creamybinder/binder.hpp>
 #include <creamybinder/imgui_binder.hpp>
+#include "im_anim.h"
 
 #ifdef _WIN32
 #include "common/RedtapeWindows.h"
@@ -231,6 +232,9 @@ namespace PcInput
 		ImGui::SetNextWindowSize(ImVec2(w, io.DisplaySize.y - top), ImGuiCond_Always);
 		constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
 										   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings;
+		// creamybinder host contract: ImAnim's per-context tick once per ImGui frame, or every tween (the devices sliding
+		// between the lane and the seats) stays frozen at its first position
+		iam_update_begin_frame();
 		if (ImGui::Begin("##pcbinder", nullptr, flags))
 			cb::imgui::drawBinder(*s_binder, *s_session);
 		ImGui::End();
