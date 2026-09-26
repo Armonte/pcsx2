@@ -990,6 +990,12 @@ namespace GameRollback
 								  "passthrough %d mode %d resim %d",
 						cpuRegs.pc, cpuRegs.GPR.n.ra.UL[0], cpuRegs.GPR.n.sp.UL[0], s_driving, s_step, s_i, s_R, s_passthrough,
 						s_mode, RollbackDevice::IsResimulating());
+					if (RollbackDevice::TraceOn()) // what the EE called last (probe log), next to the manifest
+					{
+						const std::string out = Path::Combine(Path::GetDirectory(s_path), "watchdog_probe_log.txt");
+						RollbackDevice::ProbeLogDump(out);
+						Console.Error("GameRollback watchdog: probe log -> %s", out.c_str());
+					}
 				}
 			}
 		}
