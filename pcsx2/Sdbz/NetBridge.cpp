@@ -115,7 +115,8 @@ namespace NetBridge
 			char serial[20];
 		};
 		static constexpr u32 ANCHOR_MAGIC = 0x41425250; // "PRBA"
-		u32 s_resolving_checksum = 0;                   // raw hash of the save being answered (export_state runs inside)
+		std::map<s32, s32> s_save_frame;               // global save id -> netcode frame it saves
+		std::map<s32, u32> s_frame_checksum;           // netcode frame -> raw state hash of its latest answered save
 
 		uint32_t PCB_CALL CbExportState(void*, int32_t frame, uint8_t* dst, uint32_t cap)
 		{
@@ -126,7 +127,10 @@ namespace NetBridge
 			AnchorBlob b = {};
 			b.magic = ANCHOR_MAGIC;
 			b.frame = frame;
-			b.checksum = s_resolving_checksum;
+			const auto it = s_frame_checksum.find(frame);
+			if (it == s_frame_checksum.end())
+				return 0;
+			b.checksum = it->second;
 			std::strncpy(b.serial, s_cfg.game_id.c_str(), sizeof(b.serial) - 1);
 			std::memcpy(dst, &b, sizeof(b));
 			return sizeof(b);
@@ -221,6 +225,8 @@ namespace NetBridge
 		s_cfg = cfg;
 		s_host = std::move(host);
 		s_save_seq = 0;
+		s_save_frame.clear();
+		s_frame_checksum.clear();
 		s_jcompares = s_jmismatches = 0;
 		s_jfirst_mismatch = -1;
 		if (cfg.mode == Mode::JournalReplay)
@@ -373,6 +379,7 @@ namespace NetBridge
 			{
 				const s32 id = s_save_seq++;
 				s_save_to_bridge[id] = e.save_index;
+				s_save_frame[id] = e.frame;
 				if (plan->steps.empty())
 					plan->pre_saves.push_back(id);
 				else
@@ -402,7 +409,13 @@ namespace NetBridge
 	{
 		if (save_id < 0)
 			return;
-		s_resolving_checksum = checksum;
+		if (const auto f = s_save_frame.find(save_id); f != s_save_frame.end())
+		{
+			s_frame_checksum[f->second] = checksum; // a re-save (rollback) replaces it: last write wins, like the anchor
+			s_save_frame.erase(f);
+			while (s_frame_checksum.size() > 256)
+				s_frame_checksum.erase(s_frame_checksum.begin());
+		}
 		checksum = pcb_finalize_checksum(checksum);
 		if (s_journal)
 			std::fprintf(s_journal, "C %d %08x\n", save_id, checksum);
