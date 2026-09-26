@@ -967,6 +967,7 @@ namespace GameRollback
 		std::atomic<u64> s_heartbeat{0};
 		std::atomic<bool> s_watchdog_run{false};
 		std::thread s_watchdog;
+		std::string DumpEeThreads();
 		void WatchdogLoop()
 		{
 			u64 last = s_heartbeat.load();
@@ -990,6 +991,7 @@ namespace GameRollback
 								  "passthrough %d mode %d resim %d",
 						cpuRegs.pc, cpuRegs.GPR.n.ra.UL[0], cpuRegs.GPR.n.sp.UL[0], s_driving, s_step, s_i, s_R, s_passthrough,
 						s_mode, RollbackDevice::IsResimulating());
+					Console.Error("GameRollback watchdog: EE threads:%s", DumpEeThreads().c_str());
 					if (RollbackDevice::TraceOn()) // what the EE called last (probe log), next to the manifest
 					{
 						const std::string out = Path::Combine(Path::GetDirectory(s_path), "watchdog_probe_log.txt");
@@ -1004,6 +1006,40 @@ namespace GameRollback
 		bool s_watch = true;
 		s64 s_mtime = 0;
 		u32 s_watch_tick = 0;
+
+		// PCSX2 finds the kernel's EE thread table lazily at the first StartThread syscall after a BIOS boot; a session
+		// started from a savestate never sees one. Same pattern scan here (kernel memory is physical 0x0..0x5000).
+		void EnsureEeThreadList()
+		{
+			if (CurrentBiosInformation.eeThreadListAddr != 0)
+				return;
+			for (u32 off = 0; off < 0x5000; off += 4)
+			{
+				if (Rd(off) == ThreadListInstructions[0] && Rd(off + 4) == ThreadListInstructions[1] &&
+					Rd(off + 8) == ThreadListInstructions[2])
+				{
+					CurrentBiosInformation.eeThreadListAddr = 0x80010000 + static_cast<u16>(Rd(off + 24)) - 8;
+					Console.WriteLn("GameRollback: EE thread table at %08X", CurrentBiosInformation.eeThreadListAddr);
+					return;
+				}
+			}
+		}
+		std::string DumpEeThreads()
+		{
+			std::string out;
+			if (CurrentBiosInformation.eeThreadListAddr == 0 || CurrentBiosInformation.eeThreadListAddr == 0xFFFFFFFFu)
+				return "(no thread table)";
+			const u32 start = CurrentBiosInformation.eeThreadListAddr & 0x3fffff;
+			for (u32 tid = 0; tid < 256; tid++)
+			{
+				const EEInternalThread* t = static_cast<const EEInternalThread*>(PSM(start + tid * sizeof(EEInternalThread)));
+				if (!t || t->status == static_cast<int>(ThreadStatus::THS_BAD))
+					continue;
+				out += fmt::format("\n  tid {:3} status {:#04x} wait {} sema {} prio {} entry {:08X} pc {:08X} stack {:08X}+{:X}", tid,
+					t->status, t->waitType, t->semaId, t->currentPriority, t->entry, t->resumeAddr, t->stackMem, t->stackSize);
+			}
+			return out;
+		}
 
 		// ---------------------------------------------------------------------------------------------------------
 		// dynamic ranges (pointer walks), applied at the frame boundary when the objects moved
@@ -1082,7 +1118,9 @@ namespace GameRollback
 			}
 			// Every EE thread's stack (from the kernel's thread table): a thread's saved context lives in kernel memory,
 			// which is never rolled back, so its stack must not be either (else the thread resumes on a rewound stack).
-			if (s_man.exclude_thread_stacks && CurrentBiosInformation.eeThreadListAddr)
+			EnsureEeThreadList();
+			if (s_man.exclude_thread_stacks && CurrentBiosInformation.eeThreadListAddr &&
+				CurrentBiosInformation.eeThreadListAddr != 0xFFFFFFFFu)
 			{
 				const u32 start = CurrentBiosInformation.eeThreadListAddr & 0x3fffff;
 				for (u32 tid = 0; tid < 256; tid++)
