@@ -101,6 +101,17 @@ private:
 
 	std::vector<u32> m_page_index; // tracked EE page numbers (addr >> 12), sorted
 	std::vector<Range> m_excludes;
+	// Exclude ranges split into per-tracked-page segments, computed once (a load keeps their live bytes).
+	struct KeepSeg
+	{
+		u32 address; // EE physical
+		u32 length;
+		u32 index;   // tracked page index
+		u32 offset;  // into m_keep_buf
+	};
+	std::vector<KeepSeg> m_keep;
+	std::vector<u8> m_keep_buf;
+	std::vector<Snapshot> m_snap_pool; // recycled snapshot storage (keeps vector capacity)
 	std::vector<Snapshot> m_ring; // oldest first
 	std::vector<Page*> m_free;
 	u32 m_capacity;
