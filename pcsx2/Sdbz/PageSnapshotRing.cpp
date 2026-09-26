@@ -40,8 +40,12 @@ namespace
 struct PageSnapshotRing::Page
 {
 	alignas(64) u8 data[PAGE_SIZE];
-	u32 refs = 0;
 };
+
+__fi u8* PageSnapshotRing::Data(u32 id) const
+{
+	return m_store[id]->data;
+}
 
 PageSnapshotRing::PageSnapshotRing(std::vector<Range> regions, std::vector<Range> excludes, u32 capacity, DirtyMode mode)
 	: m_excludes(std::move(excludes))
@@ -123,42 +127,33 @@ PageSnapshotRing::~PageSnapshotRing()
 	if (m_mode == DirtyMode::WriteProtect)
 		vtlb_DirtyTrack_Disable();
 	Clear();
-	for (Page* p : m_free)
+	for (Page* p : m_store)
 		delete p;
 }
 
-PageSnapshotRing::Page* PageSnapshotRing::AllocPage()
+u32 PageSnapshotRing::AllocPage()
 {
-	Page* p;
+	u32 id;
 	if (!m_free.empty())
 	{
-		p = m_free.back();
+		id = m_free.back();
 		m_free.pop_back();
 	}
 	else
 	{
-		p = new Page();
+		id = static_cast<u32>(m_store.size());
+		m_store.push_back(new Page());
+		m_refs.push_back(0);
 		m_stats.pool_bytes += sizeof(Page);
 	}
-	p->refs = 1;
-	return p;
-}
-
-void PageSnapshotRing::Ref(Page* p)
-{
-	p->refs++;
-}
-
-void PageSnapshotRing::Unref(Page* p)
-{
-	if (--p->refs == 0)
-		m_free.push_back(p);
+	m_refs[id] = 1;
+	return id;
 }
 
 void PageSnapshotRing::DropSnapshot(Snapshot& s)
 {
-	for (Page* p : s.pages)
-		Unref(p);
+	for (const u32 id : s.pages)
+		Unref(id);
 	s.pages.clear(); // capacity kept: the storage is recycled through m_snap_pool
 }
 
@@ -171,41 +166,38 @@ void PageSnapshotRing::Clear()
 	m_stats.live_bytes = 0;
 }
 
-bool PageSnapshotRing::Pin(s32 frame, std::vector<const void*>& out)
+bool PageSnapshotRing::Pin(s32 frame, std::vector<u32>& out)
 {
 	out.clear();
 	auto it = std::find_if(m_ring.begin(), m_ring.end(), [frame](const Snapshot& s) { return s.frame == frame; });
 	if (it == m_ring.end())
 		return false;
-	out.reserve(it->pages.size());
-	for (Page* p : it->pages)
-	{
-		Ref(p);
-		out.push_back(p);
-	}
+	out = it->pages;
+	for (const u32 id : out)
+		Ref(id);
 	return true;
 }
 
-void PageSnapshotRing::Unpin(std::vector<const void*>& pages)
+void PageSnapshotRing::Unpin(std::vector<u32>& pages)
 {
-	for (const void* p : pages)
-		Unref(const_cast<Page*>(static_cast<const Page*>(p)));
+	for (const u32 id : pages)
+		Unref(id);
 	pages.clear();
 	UpdateLiveBytes();
 }
 
-bool PageSnapshotRing::NewestPages(s32 frame, std::vector<const void*>& out) const
+bool PageSnapshotRing::NewestPages(s32 frame, std::vector<u32>& out) const
 {
 	out.clear();
 	if (m_ring.empty() || m_ring.back().frame != frame)
 		return false;
-	out.assign(m_ring.back().pages.begin(), m_ring.back().pages.end());
+	out = m_ring.back().pages;
 	return true;
 }
 
-const u8* PageSnapshotRing::PageData(const void* page)
+const u8* PageSnapshotRing::PageData(u32 id) const
 {
-	return static_cast<const Page*>(page)->data;
+	return Data(id);
 }
 
 bool PageSnapshotRing::Has(s32 frame) const
@@ -231,7 +223,7 @@ void PageSnapshotRing::CollectDirty(std::vector<u64>& bits)
 	{
 		for (u32 i = 0; i < m_page_index.size(); i++)
 		{
-			if (std::memcmp(RamPage(m_page_index[i]), latest.pages[i]->data, PAGE_SIZE) != 0)
+			if (std::memcmp(RamPage(m_page_index[i]), Data(latest.pages[i]), PAGE_SIZE) != 0)
 				SetBit(bits, i);
 		}
 		return;
@@ -247,7 +239,7 @@ void PageSnapshotRing::CollectDirty(std::vector<u64>& bits)
 		const u32 page = m_page_index[i];
 		if (TestBit(m_hot, i))
 		{
-			if (std::memcmp(RamPage(page), latest.pages[i]->data, PAGE_SIZE) != 0)
+			if (std::memcmp(RamPage(page), Data(latest.pages[i]), PAGE_SIZE) != 0)
 				SetBit(bits, i);
 		}
 		else if ((ram_dirty[page >> 6] >> (page & 63)) & 1)
@@ -332,9 +324,9 @@ void PageSnapshotRing::Capture(s32 frame)
 			Ref(snap.pages[i]);
 			continue;
 		}
-		Page* p = AllocPage();
-		std::memcpy(p->data, RamPage(m_page_index[i]), PAGE_SIZE);
-		snap.pages[i] = p;
+		const u32 id = AllocPage();
+		std::memcpy(Data(id), RamPage(m_page_index[i]), PAGE_SIZE);
+		snap.pages[i] = id;
 		copied++;
 	}
 
@@ -450,7 +442,7 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 			restored++;
 			if (u8* dst = dest_for(page))
 			{
-				std::memcpy(dst, it->pages[i]->data, PAGE_SIZE);
+				std::memcpy(dst, Data(it->pages[i]), PAGE_SIZE);
 				continue;
 			}
 			if (run_len && page == run_first + run_len)
@@ -466,7 +458,7 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 	}
 	flush_run();
 	for (const u32 i : via_main)
-		std::memcpy(RamPage(m_page_index[i]), it->pages[i]->data, PAGE_SIZE);
+		std::memcpy(RamPage(m_page_index[i]), Data(it->pages[i]), PAGE_SIZE);
 
 	// Put the kept live bytes back (restored pages only). A page whose kept bytes differ from the target
 	// snapshot's must be captured again; one where they are equal is clean relative to the target.
@@ -476,7 +468,7 @@ bool PageSnapshotRing::Load(s32 frame, const std::vector<Range>& preserve)
 			return;
 		const u8* src = seg_buf(k);
 		const u32 a = k.address;
-		if (std::memcmp(src, it->pages[k.index]->data + (a & (PAGE_SIZE - 1)), k.length) == 0)
+		if (std::memcmp(src, Data(it->pages[k.index]) + (a & (PAGE_SIZE - 1)), k.length) == 0)
 			return; // live bytes == target bytes: the page as restored is already right
 		keep_dirty_pages.push_back(a >> PAGE_SHIFT);
 		if (u8* dst = dest_for(a >> PAGE_SHIFT))

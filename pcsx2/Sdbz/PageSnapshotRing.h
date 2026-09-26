@@ -79,10 +79,10 @@ public:
 	// Sync-test support: pin a snapshot's page buffers (no copy; they survive the snapshot being dropped), then
 	// compare against the newest snapshot page by page -- a page whose buffer is shared is identical by
 	// construction and needs no memcmp. Handles are opaque page buffers (PageData() = 4 KiB of bytes).
-	bool Pin(s32 frame, std::vector<const void*>& out);
-	void Unpin(std::vector<const void*>& pages);
-	bool NewestPages(s32 frame, std::vector<const void*>& out) const; // newest snapshot must be `frame`
-	static const u8* PageData(const void* page);
+	bool Pin(s32 frame, std::vector<u32>& out);
+	void Unpin(std::vector<u32>& pages);
+	bool NewestPages(s32 frame, std::vector<u32>& out) const; // newest snapshot must be `frame`
+	const u8* PageData(u32 id) const;
 	const std::vector<u32>& PageIndex() const { return m_page_index; }
 
 	DirtyMode Mode() const { return m_mode; }
@@ -94,13 +94,20 @@ private:
 	struct Snapshot
 	{
 		s32 frame = 0;
-		std::vector<Page*> pages;     // one per tracked page
+		std::vector<u32> pages;       // one page-buffer id per tracked page
 		std::vector<u64> dirty_bits;  // pages that differ from the previous snapshot
 	};
 
-	Page* AllocPage();
-	void Ref(Page* p);
-	void Unref(Page* p);
+	// Page buffers are addressed by compact ids; refcounts live in one contiguous array so the per-capture Ref and
+	// per-drop Unref loops (one per tracked page per snapshot) never touch the 4 KiB buffers themselves.
+	u32 AllocPage();
+	__fi void Ref(u32 id) { m_refs[id]++; }
+	__fi void Unref(u32 id)
+	{
+		if (--m_refs[id] == 0)
+			m_free.push_back(id);
+	}
+	__fi u8* Data(u32 id) const;
 	void DropSnapshot(Snapshot& s);
 	void CollectDirty(std::vector<u64>& bits);
 	void ArmWriteProtect();
@@ -122,7 +129,9 @@ private:
 	std::vector<u8> m_keep_buf;
 	std::vector<Snapshot> m_snap_pool; // recycled snapshot storage (keeps vector capacity)
 	std::vector<Snapshot> m_ring; // oldest first
-	std::vector<Page*> m_free;
+	std::vector<Page*> m_store; // id -> buffer
+	std::vector<u32> m_refs;    // id -> snapshots (and pins) referencing it
+	std::vector<u32> m_free;    // free ids
 	u32 m_capacity;
 	DirtyMode m_mode;
 	u32 m_words; // u64 words per dirty bitset

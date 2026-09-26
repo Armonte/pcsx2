@@ -237,8 +237,8 @@ namespace RollbackDevice
 			}
 		}
 
-		std::vector<const void*> s_ref_pages; // sync test: pinned page buffers of the pre-rollback snapshot
-		std::vector<const void*> s_new_pages;
+		std::vector<u32> s_ref_pages; // sync test: pinned page buffers (ids) of the pre-rollback snapshot
+		std::vector<u32> s_new_pages;
 
 		void CompareToReference()
 		{
@@ -255,7 +255,7 @@ namespace RollbackDevice
 					if (s_new_pages[i] == s_ref_pages[i])
 						continue;
 					const u32 pa = idx[i] << 12, pb = pa + 4096;
-					const u8* ref = PageSnapshotRing::PageData(s_ref_pages[i]);
+					const u8* ref = s_ring->PageData(s_ref_pages[i]);
 					while (ci < s_compare.size() && s_compare[ci].b <= pa)
 						ci++;
 					for (size_t k = ci; k < s_compare.size() && s_compare[k].a < pb; k++)
