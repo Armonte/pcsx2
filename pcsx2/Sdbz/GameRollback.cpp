@@ -10,11 +10,14 @@
 
 #include "common/Console.h"
 #include "common/FileSystem.h"
+#include "common/Path.h"
 #include "common/YAML.h"
 
 #include "fmt/format.h"
 
+#include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -27,6 +30,219 @@ namespace GameRollback
 	{
 		constexpr u32 RAM_MASK = 0x01FFFFFFu;
 		constexpr u32 NONE = 0xFFFFFFFFu;
+
+		u32 Rd(u32 a);
+		u32 Rd16(u32 a);
+		u32 Rd8(u32 a);
+
+		// A number, or an address expression evaluated on EE memory: u8/u16/u32[e], + - * & |, == != < <= > >=, && ||,
+		// unary -, parentheses, the loop index `i`, and one-parameter macros from the manifest (`macros: {ph: ...x...}`).
+		struct Val
+		{
+			bool is_expr = false;
+			u32 v = 0;
+			std::string e;
+		};
+		std::unordered_map<std::string, std::string> s_macros; // current manifest's macros (EE thread)
+
+		class ExprParser
+		{
+		public:
+			ExprParser(const std::string& text, s64 i, s64 x) : m_p(text.c_str()), m_i(i), m_x(x) {}
+			bool Parse(s64* out)
+			{
+				const s64 v = Or();
+				Skip();
+				if (*m_p != 0)
+					m_ok = false;
+				*out = v;
+				return m_ok;
+			}
+
+		private:
+			const char* m_p;
+			s64 m_i, m_x;
+			bool m_ok = true;
+			int m_depth = 0;
+
+			void Skip()
+			{
+				while (*m_p == ' ' || *m_p == '\t')
+					m_p++;
+			}
+			bool Eat(const char* tok)
+			{
+				Skip();
+				const size_t n = std::strlen(tok);
+				if (std::strncmp(m_p, tok, n) != 0)
+					return false;
+				m_p += n;
+				return true;
+			}
+			s64 Or()
+			{
+				s64 v = And();
+				while (Eat("||"))
+					v = (And() != 0) || (v != 0);
+				return v;
+			}
+			s64 And()
+			{
+				s64 v = Cmp();
+				while (Eat("&&"))
+					v = (Cmp() != 0) && (v != 0);
+				return v;
+			}
+			s64 Cmp()
+			{
+				s64 v = BitOr();
+				for (;;)
+				{
+					if (Eat("=="))
+						v = v == BitOr();
+					else if (Eat("!="))
+						v = v != BitOr();
+					else if (Eat("<="))
+						v = v <= BitOr();
+					else if (Eat(">="))
+						v = v >= BitOr();
+					else if (Eat("<"))
+						v = v < BitOr();
+					else if (Eat(">"))
+						v = v > BitOr();
+					else
+						return v;
+				}
+			}
+			s64 BitOr()
+			{
+				s64 v = BitAnd();
+				for (;;)
+				{
+					Skip();
+					if (m_p[0] == '|' && m_p[1] != '|')
+					{
+						m_p++;
+						v |= BitAnd();
+					}
+					else
+						return v;
+				}
+			}
+			s64 BitAnd()
+			{
+				s64 v = Add();
+				for (;;)
+				{
+					Skip();
+					if (m_p[0] == '&' && m_p[1] != '&')
+					{
+						m_p++;
+						v &= Add();
+					}
+					else
+						return v;
+				}
+			}
+			s64 Add()
+			{
+				s64 v = Mul();
+				for (;;)
+				{
+					if (Eat("+"))
+						v += Mul();
+					else if (Eat("-"))
+						v -= Mul();
+					else
+						return v;
+				}
+			}
+			s64 Mul()
+			{
+				s64 v = Unary();
+				while (Eat("*"))
+					v *= Unary();
+				return v;
+			}
+			s64 Unary()
+			{
+				if (Eat("-"))
+					return -Unary();
+				return Primary();
+			}
+			s64 Load(int bytes)
+			{
+				if (!Eat("["))
+				{
+					m_ok = false;
+					return 0;
+				}
+				const s64 a = Or();
+				if (!Eat("]") || a < 0 || a >= 0x02000000)
+				{
+					m_ok = false;
+					return 0;
+				}
+				const u32 ua = static_cast<u32>(a);
+				return bytes == 4 ? Rd(ua) : bytes == 2 ? Rd16(ua) : Rd8(ua);
+			}
+			s64 Primary()
+			{
+				Skip();
+				if (Eat("("))
+				{
+					const s64 v = Or();
+					if (!Eat(")"))
+						m_ok = false;
+					return v;
+				}
+				if (std::isdigit(static_cast<unsigned char>(*m_p)))
+				{
+					char* end = nullptr;
+					const s64 v = std::strtoll(m_p, &end, 0);
+					m_p = end;
+					return v;
+				}
+				std::string id;
+				while (std::isalnum(static_cast<unsigned char>(*m_p)) || *m_p == '_')
+					id += *m_p++;
+				if (id == "u32")
+					return Load(4);
+				if (id == "u16")
+					return Load(2);
+				if (id == "u8")
+					return Load(1);
+				if (id == "i")
+					return m_i;
+				if (id == "x")
+					return m_x;
+				const auto it = s_macros.find(id);
+				if (it != s_macros.end() && Eat("(") && m_depth < 8)
+				{
+					const s64 arg = Or();
+					if (!Eat(")"))
+						m_ok = false;
+					ExprParser sub(it->second, m_i, arg);
+					sub.m_depth = m_depth + 1;
+					s64 v = 0;
+					if (!sub.Parse(&v))
+						m_ok = false;
+					return v;
+				}
+				m_ok = false;
+				return 0;
+			}
+		};
+		bool Eval(const Val& val, s64 i, s64* out)
+		{
+			if (!val.is_expr)
+			{
+				*out = val.v;
+				return true;
+			}
+			ExprParser p(val.e, i, 0);
+			return p.Parse(out);
+		}
 
 		// ---------------------------------------------------------------------------------------------------------
 		// manifest
@@ -64,6 +280,16 @@ namespace GameRollback
 			std::vector<Range> fields; // offset + length inside each object (list: inside each entry)
 			std::vector<u32> lens;     // per table index: length of field 0 (overrides fields[0].len)
 			u32 len = 0;               // chain: length
+			std::optional<Val> expr;   // expression form: address of object i (i < count), length len_val
+			Val count{false, 1, {}};
+			Val len_val;
+		};
+		struct RegionSpec
+		{
+			u32 addr = 0;
+			Val len;
+			bool has_end = false;
+			Val end;
 		};
 		struct Item // static state item, fixed or via a pointer chain (resolved when rollback starts)
 		{
@@ -105,7 +331,11 @@ namespace GameRollback
 		struct Manifest
 		{
 			std::string serial, name;
-			std::vector<Range> regions;
+			std::vector<RegionSpec> regions;
+			std::unordered_map<std::string, std::string> macros;
+			std::optional<Val> gate_when;
+			std::unordered_map<u32, u32> gate_values; // resim gates that also set $v0
+			bool pad_record_replay = false;
 			std::vector<Item> excludes, ignores, watches;
 			std::vector<Range> gate_stable, resim_restore;
 			std::vector<Dynamic> dynamic;
@@ -127,6 +357,16 @@ namespace GameRollback
 			const ryml::csubstr v = n.val();
 			const std::string s(v.str, v.len);
 			return static_cast<u32>(std::strtoll(s.c_str(), nullptr, 0));
+		}
+		Val ParseVal(const ryml::ConstNodeRef& n)
+		{
+			const ryml::csubstr v = n.val();
+			const std::string s(v.str, v.len);
+			char* end = nullptr;
+			const long long num = std::strtoll(s.c_str(), &end, 0);
+			if (!s.empty() && end && *end == 0)
+				return {false, static_cast<u32>(num), {}};
+			return {true, 0, s};
 		}
 		u32 Get(const ryml::ConstNodeRef& n, const char* key, u32 def)
 		{
@@ -247,7 +487,63 @@ namespace GameRollback
 			{
 				const auto st = Child(root, "state");
 				if (Has(st, "regions"))
-					m->regions = ParseRanges(Child(st, "regions"));
+				{
+					for (const auto& c : Child(st, "regions").children())
+					{
+						RegionSpec r;
+						if (c.is_seq())
+						{
+							r.addr = ParseU32(c[0]);
+							r.len = ParseVal(c[1]);
+						}
+						else
+						{
+							r.addr = Get(c, "addr", 0);
+							if (Has(c, "len"))
+								r.len = ParseVal(Child(c, "len"));
+							if (Has(c, "end"))
+							{
+								r.has_end = true;
+								r.end = ParseVal(Child(c, "end"));
+							}
+						}
+						m->regions.push_back(r);
+					}
+				}
+				// generated lists kept next to the manifest: "ADDR_HEX LEN_HEX [anything]" per line, # comments
+				auto list_file = [&](const char* key, auto&& add) {
+					if (!Has(st, key))
+						return;
+					const std::string rel = GetStr(st, key);
+					const std::string file = Path::Combine(Path::GetDirectory(path), rel);
+					std::optional<std::string> text = FileSystem::ReadFileToString(file.c_str());
+					if (!text.has_value())
+					{
+						Console.Error("GameRollback: cannot read %s", file.c_str());
+						return;
+					}
+					size_t pos = 0;
+					while (pos < text->size())
+					{
+						size_t nl = text->find('\n', pos);
+						if (nl == std::string::npos)
+							nl = text->size();
+						const std::string line = text->substr(pos, nl - pos);
+						pos = nl + 1;
+						if (line.empty() || line[0] == '#')
+							continue;
+						char* e1 = nullptr;
+						const u32 a = static_cast<u32>(std::strtoul(line.c_str(), &e1, 16));
+						if (e1 == line.c_str())
+							continue;
+						const u32 l = static_cast<u32>(std::strtoul(e1, nullptr, 16));
+						if (l)
+							add(a, l);
+					}
+				};
+				list_file("exclude_file", [&](u32 a, u32 l) { m->excludes.push_back({{{a}}, l, {}}); });
+				list_file("ignore_file", [&](u32 a, u32 l) { m->ignores.push_back({{{a}}, l, {}}); });
+				list_file("resim_restore_file", [&](u32 a, u32 l) { m->resim_restore.push_back({a, l}); });
 				if (Has(st, "exclude"))
 					for (const auto& c : Child(st, "exclude").children())
 						m->excludes.push_back(ParseItem(c));
@@ -288,6 +584,14 @@ namespace GameRollback
 						}
 						if (Has(c, "chain"))
 							d.chain = ParseChain(Child(c, "chain"));
+						if (Has(c, "expr"))
+						{
+							d.expr = ParseVal(Child(c, "expr"));
+							if (Has(c, "count"))
+								d.count = ParseVal(Child(c, "count"));
+							if (Has(c, "len"))
+								d.len_val = ParseVal(Child(c, "len"));
+						}
 						if (Has(c, "fields"))
 							d.fields = ParseRanges(Child(c, "fields"));
 						if (Has(c, "lens"))
@@ -297,9 +601,14 @@ namespace GameRollback
 					}
 				}
 			}
+			if (Has(root, "macros"))
+				for (const auto& c : Child(root, "macros").children())
+					m->macros[std::string(c.key().str, c.key().len)] = std::string(c.val().str, c.val().len);
 			if (Has(root, "rollback"))
 			{
 				const auto rb = Child(root, "rollback");
+				if (Has(rb, "gate_when"))
+					m->gate_when = ParseVal(Child(rb, "gate_when"));
 				m->gate_counter = Get(rb, "gate_counter", 0);
 				if (Has(rb, "input_block"))
 					m->input_block = ParseRange(Child(rb, "input_block"));
@@ -345,7 +654,15 @@ namespace GameRollback
 			{
 				const auto h = Child(root, "hooks");
 				if (Has(h, "resim_gate"))
-					m->resim_gates = ParseList(Child(h, "resim_gate"));
+				{
+					for (const auto& c : Child(h, "resim_gate").children())
+					{
+						const u32 a = c.is_map() ? Get(c, "addr", 0) : ParseU32(c);
+						m->resim_gates.push_back(a);
+						if (c.is_map() && Has(c, "v0"))
+							m->gate_values[a] = Get(c, "v0", 0);
+					}
+				}
 				if (Has(h, "resim_skip_call"))
 					m->resim_skips = ParseList(Child(h, "resim_skip_call"));
 				if (Has(h, "skip_call"))
@@ -369,6 +686,7 @@ namespace GameRollback
 			{
 				m->pad_read_fn = Get(Child(root, "pad"), "read_fn", 0);
 				m->pad_site = Get(Child(root, "pad"), "site", 0);
+				m->pad_record_replay = GetStr(Child(root, "pad"), "record_replay") == "true";
 			}
 			if (Has(root, "rng"))
 			{
@@ -400,6 +718,13 @@ namespace GameRollback
 			std::memcpy(&v, &eeMem->Main[a & RAM_MASK & ~3u], 4);
 			return v;
 		}
+		u32 Rd16(u32 a)
+		{
+			u16 v;
+			std::memcpy(&v, &eeMem->Main[a & RAM_MASK & ~1u], 2);
+			return v;
+		}
+		u32 Rd8(u32 a) { return eeMem->Main[a & RAM_MASK]; }
 		void Wr(u32 a, u32 v) { std::memcpy(&eeMem->Main[a & RAM_MASK & ~3u], &v, 4); }
 		bool PtrOk(u32 p) { return p >= 0x00100000u && p < 0x02000000u; }
 		std::optional<u32> Resolve(const AddrSpec& s)
@@ -494,6 +819,17 @@ namespace GameRollback
 		// pad feed
 		bool s_pad_pending = false;
 		u32 s_pad_player = 0, s_pad_buf = 0;
+		// pad record/replay (games whose re-simulated frame reads the pad again): the raw report of every player on
+		// every real frame, replayed into the same read when that frame is re-simulated
+		constexpr u32 PAD_HIST = 64, PAD_PLAYERS = 8, PAD_REPORT = 32;
+		struct PadRec
+		{
+			s32 frame = -1;
+			u32 ret = 0;
+			u8 report[PAD_REPORT] = {};
+		};
+		PadRec s_pad_hist[PAD_HIST][PAD_PLAYERS];
+		s32 s_host_frame = -1; // frame index of the current real frame (advanced at every FRAME_BEGIN)
 
 		// dynamic ranges
 		u64 s_dyn_sig = 0;
@@ -548,6 +884,22 @@ namespace GameRollback
 								out.emplace_back(base + f.addr, f.len);
 						}
 						cur = Rd(cur + l.next_off);
+					}
+				}
+				else if (d.expr)
+				{
+					s64 n = 0;
+					if (Eval(d.count, 0, &n))
+					{
+						for (s64 i = 0; i < n && i < 4096; i++)
+						{
+							s64 a = 0, l = 0;
+							if (!Eval(*d.expr, i, &a) || !Eval(d.len_val, i, &l) || a <= 0 || l <= 0 || a >= 0x02000000)
+								continue;
+							mix(static_cast<u32>(a));
+							mix(static_cast<u32>(l));
+							out.emplace_back(static_cast<u32>(a), static_cast<u32>(l));
+						}
 					}
 				}
 				else if (d.chain)
@@ -650,6 +1002,12 @@ namespace GameRollback
 			if (s_mode == 0)
 				return EeHooks::Action::Continue;
 			RefreshDynamic(false);
+			if (s_man.gate_when)
+			{
+				s64 v = 0;
+				RollbackDevice::SetFrameGateCondition(Eval(*s_man.gate_when, 0, &v) && v != 0);
+			}
+			s_host_frame++;
 			const u32 R = static_cast<u32>(RollbackDevice::HandleSyscall(RollbackDevice::CMD_FRAME_BEGIN, 0, 0, 0));
 			if (R == 0)
 			{
@@ -686,11 +1044,31 @@ namespace GameRollback
 		}
 		EeHooks::Action OnPadReadReturn(u32)
 		{
-			if (s_pad_pending)
+			if (!s_pad_pending)
+				return EeHooks::Action::Continue;
+			s_pad_pending = false;
+			const u32 player = s_pad_player % PAD_PLAYERS;
+			u8* buf = &eeMem->Main[s_pad_buf & RAM_MASK];
+			if (s_man.pad_record_replay && s_driving)
 			{
-				s_pad_pending = false;
-				cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(RollbackDevice::HandleSyscall(
-					RollbackDevice::CMD_PAD_FEED, s_pad_player, s_pad_buf, cpuRegs.GPR.n.v0.UL[0]));
+				// re-simulated frame: the report this player's read returned when the frame ran for real
+				const s32 f = s_host_frame - static_cast<s32>(s_R) + static_cast<s32>(s_i);
+				const PadRec& r = s_pad_hist[static_cast<u32>(f) % PAD_HIST][player];
+				if (f >= 0 && r.frame == f)
+				{
+					std::memcpy(buf, r.report, PAD_REPORT);
+					cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(r.ret);
+				}
+				return EeHooks::Action::Continue;
+			}
+			cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(RollbackDevice::HandleSyscall(
+				RollbackDevice::CMD_PAD_FEED, s_pad_player, s_pad_buf, cpuRegs.GPR.n.v0.UL[0]));
+			if (s_man.pad_record_replay && s_mode != 0 && s_host_frame >= 0)
+			{
+				PadRec& r = s_pad_hist[static_cast<u32>(s_host_frame) % PAD_HIST][player];
+				r.frame = s_host_frame;
+				r.ret = cpuRegs.GPR.n.v0.UL[0];
+				std::memcpy(r.report, buf, PAD_REPORT);
 			}
 			return EeHooks::Action::Continue;
 		}
@@ -756,7 +1134,13 @@ namespace GameRollback
 					return EeHooks::Action::Continue;
 				}, EeHooks::OWNER_GAME);
 			for (const u32 a : s_man.resim_gates)
-				EeHooks::AddResimGate(a, EeHooks::OWNER_GAME);
+			{
+				const auto v = s_man.gate_values.find(a);
+				if (v != s_man.gate_values.end())
+					EeHooks::AddResimGateRet(a, v->second, EeHooks::OWNER_GAME);
+				else
+					EeHooks::AddResimGate(a, EeHooks::OWNER_GAME);
+			}
 			for (const u32 a : s_man.resim_skips)
 				EeHooks::AddSkipCall(a, false, EeHooks::OWNER_GAME);
 			for (const u32 a : s_man.always_skips)
@@ -823,8 +1207,22 @@ namespace GameRollback
 		{
 			using namespace RollbackDevice;
 			ClearConfig();
-			for (const Range& r : s_man.regions)
-				AddRegion(r.addr, r.len);
+			for (const RegionSpec& r : s_man.regions)
+			{
+				s64 len = 0;
+				if (r.has_end)
+				{
+					s64 end = 0;
+					if (Eval(r.end, 0, &end) && end > r.addr)
+						len = end - r.addr;
+				}
+				else
+					Eval(r.len, 0, &len);
+				if (len > 0)
+					AddRegion(r.addr, static_cast<u32>(len));
+				else
+					Console.Error("GameRollback: region %08X has no valid length/end", r.addr);
+			}
 			for (const Item& it : s_man.excludes)
 				if (const std::optional<u32> a = Resolve(it.where))
 					AddExclude(*a, it.len);
@@ -881,6 +1279,10 @@ namespace GameRollback
 			InstallRollbackHooks();
 			InstallTraceHooks();
 			RollbackDevice::Start(static_cast<RollbackDevice::Mode>(mode), frames, true);
+			s_host_frame = -1;
+			for (auto& row : s_pad_hist)
+				for (PadRec& r : row)
+					r.frame = -1;
 			s_mode = mode;
 			s_frames = frames;
 		}
@@ -907,6 +1309,7 @@ namespace GameRollback
 			if (s_attached)
 				DoDetach();
 			s_man = std::move(m);
+			s_macros = s_man.macros;
 			s_path = path;
 			s_mtime = MTime(path);
 			InstallAttachHooks();

@@ -27,6 +27,7 @@ namespace EeHooks
 	{
 		None,
 		ResimGate,
+		ResimGateRet, // ResimGate that also sets $v0 (callers use the result)
 		Call,
 		SkipCallResim,
 		SkipCallAlways,
@@ -47,6 +48,8 @@ namespace EeHooks
 		OWNER_GAME = 1,
 	};
 	void AddResimGate(u32 pc, Owner owner = OWNER_SCRIPT);
+	void AddResimGateRet(u32 pc, u32 v0, Owner owner = OWNER_SCRIPT);
+	u32 GateReturnValue(u32 pc);
 	void AddSkipCall(u32 site, bool always, Owner owner = OWNER_SCRIPT);
 	void AddCall(u32 pc, Handler handler, Owner owner = OWNER_SCRIPT);
 	// Same, but the handler only runs when $ra is one of ra_filter (callers' return addresses): the comparisons are

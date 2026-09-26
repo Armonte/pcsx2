@@ -64,6 +64,7 @@ namespace RollbackDevice
 		std::vector<Range> s_resim_restore_active; // the ranges saved at this rollback's start (restored at its end)
 		std::vector<u8> s_resim_restore_buf;
 		bool s_dyn_dirty = false;                  // rebuild the ring at the next FRAME_BEGIN
+		std::atomic<bool> s_gate_condition{true};   // host-side gate condition for the next frame (SetFrameGateCondition)
 		std::atomic<bool> s_resimulating{false};   // between a rollback and CUR_PRE (read by other threads)
 		std::atomic<bool> s_lever_host_vsync{true}, s_lever_park{true}, s_lever_iop{true};
 		s32 s_confirmed = -1;                      // resim captures below this frame are skipped (-1 = none)
@@ -429,6 +430,7 @@ namespace RollbackDevice
 	{
 		std::lock_guard lk(s_mtx);
 		s_cfg_gate = 0;
+		s_gate_condition.store(true, std::memory_order_relaxed);
 		s_cfg_rng = {};
 		s_cfg_stable.clear();
 		s_cfg_regions.clear();
@@ -655,6 +657,8 @@ namespace RollbackDevice
 			TraceCallLocked(id, ra, a0, a1, a2, a3);
 	}
 
+	void SetFrameGateCondition(bool ok) { s_gate_condition.store(ok, std::memory_order_relaxed); }
+
 	const u8* ResimulatingFlag()
 	{
 		static_assert(sizeof(std::atomic<bool>) == 1, "EeHooks tests the flag as a byte");
@@ -801,8 +805,8 @@ namespace RollbackDevice
 				s_ring->Capture(s_frame);
 				RbProfiler::SetPhase(RbProfiler::PH_FRAME_BEGIN);
 
-				// Gate: did the live-simulation counter advance into this frame?
-				bool ok = true;
+				// Gate: did the live-simulation counter advance into this frame (and the host's condition hold)?
+				bool ok = s_gate_condition.load(std::memory_order_relaxed);
 				if (s_gate)
 				{
 					const u32 g = *reinterpret_cast<const u32*>(Ram(s_gate));
