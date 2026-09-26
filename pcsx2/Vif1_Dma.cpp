@@ -8,6 +8,7 @@
 #include "VUmicro.h"
 #include "Vif_Dma.h"
 #include "Vif_Dynarec.h"
+#include "Sdbz/RollbackDevice.h"
 
 u32 g_vif1Cycles = 0;
 
@@ -481,6 +482,17 @@ void dmaVIF1()
 	g_vif1Cycles = 0;
 	vif1.inprogress = 0;
 	CPU_SET_DMASTALL(DMAC_VIF1, false);
+
+	if (RollbackDevice::SinkResimDma())
+	{
+		// re-simulated frame: the transfer "completes" at once and nothing reaches VU1 / the GS
+		vif1ch.qwc = 0;
+		vif1.done = true;
+		vif1Regs.stat.FQC = 0;
+		vif1ch.chcr.STR = false;
+		hwDmacIrq(DMAC_VIF1);
+		return;
+	}
 
 	if (vif1ch.qwc > 0) // Normal Mode
 	{
