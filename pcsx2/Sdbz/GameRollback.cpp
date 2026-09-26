@@ -2253,7 +2253,8 @@ namespace GameRollback
 		s_req.net_stop = true;
 		s_req_pending = true;
 	}
-	// Launcher contract (PovertyCaster PS2 host): environment variables read once, at the first presented frame
+	// Launcher contract (PovertyCaster PS2 host): environment variables read once, at the first state load (the
+	// launcher boots with -statefile) or else the first presented frame
 	//   PS2RB_MANIFEST  manifest path (attached automatically)
 	//   PS2RB_NET       synctest | p2p        (netplay starts at the next frame boundary)
 	//   PS2RB_LOCAL     local player 0/1       PS2RB_REMOTE  ip:port   PS2RB_PORT  local UDP port   PS2RB_DELAY  frames
@@ -2297,6 +2298,9 @@ namespace GameRollback
 	{
 		// a savestate never lands inside a re-simulation, but the driver must not carry one over either
 		s_driving = s_passthrough = s_pad_pending = s_replay_pending = false;
+		// launcher boot (-statefile): start at the first frame boundary after the load, the same frame a harness
+		// load_setup starts at, so a session's start state is the savestate itself (replays anchor on it)
+		PollAutoStart();
 	}
 	std::string Status() { return s_status + fmt::format(" | mode {}", s_mode); }
 	void SetFileWatch(bool on) { s_watch = on; }
