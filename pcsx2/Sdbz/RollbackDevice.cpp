@@ -7,6 +7,7 @@
 #include "Sdbz/PadFeed.h"
 
 #include "Memory.h"
+#include "R5900.h"
 #include "Counters.h"
 
 #include "common/Console.h"
@@ -113,6 +114,18 @@ namespace RollbackDevice
 		std::map<u32, u32> s_trace_alias;             // stub ra -> original call-site ra
 		std::map<std::tuple<u32, u32, u32>, u64> s_trace_render_sites; // (fn, task pass, ra) -> count, render section
 		std::map<std::tuple<u32, u32, u32>, u64> s_trace_resim_probes; // (probe fn, ra, 2nd arg) -> count, during resim
+		// Every probe call in order (trace on): which sound / voice requests happened on which frame in which pass, to
+		// diff a rollback run against a forward-only run. a0 is read from $at and a2 from 0($sp) (the trampoline keeps
+		// them there across the syscall), a3 from its register.
+		struct ProbeEvent
+		{
+			s32 frame;
+			u32 gate_value; // e.g. the battle round frame
+			u8 phase, fn;
+			u32 ra, a0, a1, a2, a3;
+		};
+		std::vector<ProbeEvent> s_probe_log;
+		constexpr size_t PROBE_LOG_MAX = 500000;
 		u32 s_trace_pass = 0;                         // last task pass reported by the pass marker (trace id 15)
 
 		std::vector<Range> s_stable;
@@ -513,6 +526,7 @@ namespace RollbackDevice
 		s_trace_other_sites.clear();
 		s_trace_render_sites.clear();
 		s_trace_resim_probes.clear();
+		s_probe_log.clear();
 		s_trace_pass = 0;
 		s_stable_hash.assign(INPUT_HISTORY, 0);
 		s_io_gated_frames = 0;
@@ -590,6 +604,21 @@ namespace RollbackDevice
 				std::fprintf(f, k ? " %08X" : "%08X", s_log_data[i + k]);
 			std::fprintf(f, "\n");
 		}
+		std::fclose(f);
+		return true;
+	}
+
+	bool ProbeLogDump(const std::string& path)
+	{
+		std::lock_guard lk(s_mtx);
+		std::FILE* f = std::fopen(path.c_str(), "w");
+		if (!f)
+			return false;
+		static constexpr const char* phase_names[] = {"other", "sim", "RESIM", "render"};
+		std::fprintf(f, "# frame gate phase fn ra a0 a1 a2 a3\n");
+		for (const ProbeEvent& e : s_probe_log)
+			std::fprintf(f, "%d %u %s %u %08X %08X %08X %08X %08X\n", e.frame, e.gate_value, phase_names[e.phase & 3], e.fn, e.ra,
+				e.a0, e.a1, e.a2, e.a3);
 		std::fclose(f);
 		return true;
 	}
@@ -933,6 +962,15 @@ namespace RollbackDevice
 					{
 						s_trace_pass = arg2; // Task_RunList(list, pass): attributes the following calls to a task pass
 						return 0;
+					}
+					if (cmd - CMD_RNG_TRACE >= TRACE_PROBE_FIRST && s_probe_log.size() < PROBE_LOG_MAX)
+					{
+						const u32 sp = cpuRegs.GPR.n.sp.UL[0];
+						u32 a2 = 0;
+						std::memcpy(&a2, Ram(sp & RAM_MASK), 4);
+						s_probe_log.push_back({s_frame, s_cfg_gate ? *reinterpret_cast<const u32*>(Ram(s_cfg_gate)) : 0u,
+							static_cast<u8>(s_phase), static_cast<u8>(cmd - CMD_RNG_TRACE), arg, cpuRegs.GPR.n.at.UL[0], arg2, a2,
+							cpuRegs.GPR.n.a3.UL[0]});
 					}
 					const auto al = s_trace_alias.find(arg);
 					const u32 ra = (al != s_trace_alias.end()) ? al->second : arg;
