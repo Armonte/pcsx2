@@ -59,6 +59,8 @@ namespace RollbackDevice
 		std::vector<Range> s_cfg_regions, s_cfg_excludes, s_cfg_ignore;
 		std::vector<Range> s_dyn_excludes;         // replaceable exclude set (per-object fields in pools that move)
 		std::vector<Range> s_cfg_resim_restore;    // saved at rollback start, restored at resim end
+		std::vector<Range> s_dyn_resim_restore;    // replaceable resim-restore set (per-object audio fields in pools)
+		std::vector<Range> s_resim_restore_active; // the ranges saved at this rollback's start (restored at its end)
 		std::vector<u8> s_resim_restore_buf;
 		bool s_dyn_dirty = false;                  // rebuild the ring at the next FRAME_BEGIN
 		std::atomic<bool> s_resimulating{false};   // between a rollback and CUR_PRE (read by other threads)
@@ -419,6 +421,7 @@ namespace RollbackDevice
 		s_cfg_excludes.clear();
 		s_dyn_excludes.clear();
 		s_cfg_resim_restore.clear();
+		s_dyn_resim_restore.clear();
 		s_cfg_ignore.clear();
 		s_cfg_watches.clear();
 		s_cfg_input = {};
@@ -434,6 +437,14 @@ namespace RollbackDevice
 	{
 		std::lock_guard lk(s_mtx);
 		s_cfg_resim_restore.push_back({addr & RAM_MASK, (addr & RAM_MASK) + len});
+	}
+
+	void SetDynamicResimRestore(const std::vector<std::pair<u32, u32>>& ranges)
+	{
+		std::lock_guard lk(s_mtx);
+		s_dyn_resim_restore.clear();
+		for (const auto& [addr, len] : ranges)
+			s_dyn_resim_restore.push_back({addr & RAM_MASK, (addr & RAM_MASK) + len});
 	}
 
 	void AddExclude(u32 addr, u32 len)
@@ -774,12 +785,14 @@ namespace RollbackDevice
 				WriteResimFlag(1);
 				{
 					// resim-invisible state (audio): remember it as it is now, put it back when resim ends
+					s_resim_restore_active = s_cfg_resim_restore;
+					s_resim_restore_active.insert(s_resim_restore_active.end(), s_dyn_resim_restore.begin(), s_dyn_resim_restore.end());
 					size_t total = 0;
-					for (const Range& r : s_cfg_resim_restore)
+					for (const Range& r : s_resim_restore_active)
 						total += r.b - r.a;
 					s_resim_restore_buf.resize(total);
 					size_t off = 0;
-					for (const Range& r : s_cfg_resim_restore)
+					for (const Range& r : s_resim_restore_active)
 					{
 						std::memcpy(&s_resim_restore_buf[off], Ram(r.a), r.b - r.a);
 						off += r.b - r.a;
@@ -891,7 +904,7 @@ namespace RollbackDevice
 					WriteResimFlag(0);
 					{
 						size_t off = 0;
-						for (const Range& r : s_cfg_resim_restore)
+						for (const Range& r : s_resim_restore_active)
 						{
 							if (off + (r.b - r.a) > s_resim_restore_buf.size())
 								break;
