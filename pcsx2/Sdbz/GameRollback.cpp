@@ -17,7 +17,10 @@
 
 #include "fmt/format.h"
 
+#include <algorithm>
 #include <cctype>
+#include <functional>
+#include <map>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -330,6 +333,28 @@ namespace GameRollback
 			bool ret = true;
 			std::vector<Op> ops;
 		};
+		struct VsLen
+		{
+			u32 frames = 0, loop_start = 0, loop_end = 0;
+			bool loops = false;
+		};
+		struct VsHook
+		{
+			std::string kind; // tick request kill pause resume fade query post
+			u32 at = 0;
+			std::vector<u32> ra;
+			int ch_reg = 4, idx_reg = 5, prio_reg = 7, paused_reg = 8, dur_reg = 5, target_reg = 112;
+			u32 ch_mask = 0xFFFFFFFFu;
+			bool need_ready = false;
+			std::string value;
+			s64 not_ready = 0;
+		};
+		struct VirtualStreams
+		{
+			u32 state = 0, channels = 4, k_prep = 13, ready_addr = 0;
+			std::unordered_map<u64, VsLen> lengths; // (partition << 32 | index)
+			std::vector<VsHook> hooks;
+		};
 		struct Manifest
 		{
 			std::string serial, name;
@@ -338,6 +363,7 @@ namespace GameRollback
 			std::optional<Val> gate_when;
 			std::unordered_map<u32, u32> gate_values; // resim gates that also set $v0
 			bool exclude_thread_stacks = true;
+			VirtualStreams vs;
 			bool pad_record_replay = false;
 			std::vector<Item> excludes, ignores, watches;
 			std::vector<Range> gate_stable, resim_restore;
@@ -684,6 +710,99 @@ namespace GameRollback
 							for (const auto& o : Child(c, "ops").children())
 								a.ops.push_back(ParseOp(o));
 						m->entry_actions.push_back(std::move(a));
+					}
+				}
+			}
+			if (Has(root, "virtual_streams"))
+			{
+				const auto v = Child(root, "virtual_streams");
+				VirtualStreams& vs = m->vs;
+				vs.state = Get(v, "state", 0);
+				vs.channels = std::min<u32>(Get(v, "channels", 4), 8);
+				vs.k_prep = Get(v, "k_prep", 13);
+				vs.ready_addr = Get(v, "ready", 0);
+				auto reg = [](const std::string& n) -> int {
+					static const char* names[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4",
+						"t5", "t6", "t7", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp",
+						"ra"};
+					for (int k = 0; k < 32; k++)
+						if (n == names[k])
+							return k;
+					if (n.size() > 1 && n[0] == 'f')
+						return 100 + std::atoi(n.c_str() + 1);
+					return 4;
+				};
+				if (Has(v, "lengths_file"))
+				{
+					const std::string file = Path::Combine(Path::GetDirectory(path), GetStr(v, "lengths_file"));
+					std::optional<std::string> text = FileSystem::ReadFileToString(file.c_str());
+					if (!text.has_value())
+						Console.Error("GameRollback: cannot read %s", file.c_str());
+					else
+					{
+						size_t pos = text->find('\n') + 1; // header
+						while (pos > 0 && pos < text->size())
+						{
+							size_t nl = text->find('\n', pos);
+							if (nl == std::string::npos)
+								nl = text->size();
+							std::vector<std::string> col;
+							std::string cur;
+							for (size_t k = pos; k < nl; k++)
+							{
+								if (text->at(k) == ',')
+								{
+									col.push_back(cur);
+									cur.clear();
+								}
+								else if (text->at(k) != '\r')
+									cur += text->at(k);
+							}
+							col.push_back(cur);
+							pos = nl + 1;
+							if (col.size() < 15)
+								continue;
+							VsLen l;
+							l.frames = static_cast<u32>(std::strtoul(col[8].c_str(), nullptr, 10));
+							l.loops = col[10] == "1";
+							l.loop_start = static_cast<u32>(std::strtoul(col[13].c_str(), nullptr, 10));
+							l.loop_end = static_cast<u32>(std::strtoul(col[14].c_str(), nullptr, 10));
+							const u64 key = (static_cast<u64>(std::strtoul(col[0].c_str(), nullptr, 10)) << 32) |
+											std::strtoul(col[1].c_str(), nullptr, 10);
+							vs.lengths[key] = l;
+						}
+					}
+				}
+				if (Has(v, "hooks"))
+				{
+					for (const auto& c : Child(v, "hooks").children())
+					{
+						VsHook h;
+						h.kind = GetStr(c, "kind");
+						h.at = Get(c, "at", 0);
+						if (Has(c, "ra"))
+							for (const auto& r : Child(c, "ra").children())
+							{
+								const std::string t(r.val().str, r.val().len);
+								h.ra.push_back(t == "return" ? m->return_addr : ParseU32(r));
+							}
+						if (Has(c, "ch"))
+							h.ch_reg = reg(GetStr(c, "ch"));
+						if (Has(c, "idx"))
+							h.idx_reg = reg(GetStr(c, "idx"));
+						if (Has(c, "prio"))
+							h.prio_reg = reg(GetStr(c, "prio"));
+						if (Has(c, "paused"))
+							h.paused_reg = reg(GetStr(c, "paused"));
+						if (Has(c, "dur"))
+							h.dur_reg = reg(GetStr(c, "dur"));
+						if (Has(c, "target"))
+							h.target_reg = reg(GetStr(c, "target"));
+						h.ch_mask = Get(c, "ch_mask", 0xFFFFFFFFu);
+						h.need_ready = GetStr(c, "ready") == "true";
+						h.value = GetStr(c, "value");
+						h.not_ready = static_cast<s32>(Get(c, "not_ready", 0));
+						vs.hooks.push_back(std::move(h));
 					}
 				}
 			}
@@ -1155,33 +1274,214 @@ namespace GameRollback
 				EeHooks::AddCall(s_man.pad_site + 8, OnPadReadReturn, EeHooks::OWNER_GAME);
 			}
 		}
-		void InstallRollbackHooks()
+		// ---------------------------------------------------------------------------------------------------------
+		// virtual stream clock (manifest `virtual_streams`): the simulation's view of stream/voice playback answered
+		// from a deterministic model in rolled-back EE memory instead of the real audio (FUC notes/M4_AUDIO_CLOCK_DESIGN.md)
+		// ---------------------------------------------------------------------------------------------------------
+		constexpr u32 VS_MAGIC = 0x31435356u; // 'VSC1'
+		constexpr u32 VS_STARTED = 1, VS_STOPPED = 2, VS_PAUSED = 4, VS_FADEOUT = 8, VS_LOOPS = 0x10;
+		enum VsField : u32
 		{
+			VS_ID = 0x00, VS_PRIO = 0x04, VS_FLAGS = 0x08, VS_REQ = 0x0C, VS_LEN = 0x10, VS_LSTART = 0x14, VS_LEND = 0x18,
+			VS_PBEGIN = 0x1C, VS_PACC = 0x20, VS_FADE_END = 0x24, VS_PART = 0x28,
+		};
+		u32 VsCh(u32 ch, u32 field) { return s_man.vs.state + 0x10 + ch * 0x30 + field; }
+		u32 VsNow() { return Rd(s_man.vs.state + 4); }
+		bool VsEnabled() { return s_man.vs.state && Rd(s_man.vs.state) == VS_MAGIC && Rd(s_man.vs.state + 12) != 0; }
+		bool VsReady() { return !s_man.vs.ready_addr || Rd(s_man.vs.ready_addr) != 0; }
+		s64 VsP0(u32 ch) { return static_cast<s64>(Rd(VsCh(ch, VS_REQ))) + Rd(s_man.vs.state + 8); }
+		s64 VsPlay(u32 ch, s64 n)
+		{
+			const s64 p0 = VsP0(ch);
+			const u32 fl = Rd(VsCh(ch, VS_FLAGS));
+			s64 play = std::max<s64>(0, n - p0) - Rd(VsCh(ch, VS_PACC));
+			if (fl & VS_PAUSED)
+				play -= std::max<s64>(0, n - std::max<s64>(Rd(VsCh(ch, VS_PBEGIN)), p0));
+			return play;
+		}
+		u32 VsStat(u32 ch)
+		{
+			if (ch >= s_man.vs.channels)
+				return 0;
+			const s64 n = VsNow();
+			const u32 fl = Rd(VsCh(ch, VS_FLAGS));
+			if (!(fl & VS_STARTED) || (fl & VS_STOPPED))
+				return 0;
+			if ((fl & VS_FADEOUT) && n >= static_cast<s64>(Rd(VsCh(ch, VS_FADE_END))))
+				return 0;
+			if (n < VsP0(ch))
+				return 1;
+			if (!(fl & VS_LOOPS) && VsPlay(ch, n) >= static_cast<s64>(Rd(VsCh(ch, VS_LEN))))
+				return 5;
+			return 3;
+		}
+		bool VsActive(u32 ch)
+		{
+			const u32 s = VsStat(ch);
+			return s >= 1 && s <= 4;
+		}
+		s64 VsValue(const std::string& what, u32 ch)
+		{
+			if (what == "stat")
+				return VsStat(ch);
+			if (what == "busy")
+				return VsActive(ch) ? 1 : 0;
+			if (what == "id")
+				return VsActive(ch) ? static_cast<s32>(Rd(VsCh(ch, VS_ID))) : -1;
+			if (what == "timeframes")
+			{
+				const u32 s = VsStat(ch);
+				return s == 3 ? VsPlay(ch, VsNow()) : s == 5 ? Rd(VsCh(ch, VS_LEN)) : 0;
+			}
+			if (what == "lpcnt")
+			{
+				const u32 fl = Rd(VsCh(ch, VS_FLAGS));
+				const s64 play = VsPlay(ch, VsNow()), ls = Rd(VsCh(ch, VS_LSTART)), le = Rd(VsCh(ch, VS_LEND));
+				return ((fl & VS_LOOPS) && play >= le && le > ls) ? 1 + (play - le) / (le - ls) : 0;
+			}
+			return 0;
+		}
+		void VsRequest(u32 ch, u32 idx, s32 prio, bool paused)
+		{
+			if (ch >= s_man.vs.channels)
+				return;
+			const u32 part = ch != 0 ? 1 : 0;
+			const auto it = s_man.vs.lengths.find((static_cast<u64>(part) << 32) | idx);
+			if (it == s_man.vs.lengths.end())
+				return; // the game's start path would find no such stream either
+			const bool active = VsActive(ch);
+			const bool faded = active && (Rd(VsCh(ch, VS_FLAGS)) & VS_FADEOUT);
+			const s32 eff_prio = active ? static_cast<s32>(Rd(VsCh(ch, VS_PRIO))) : 99;
+			if (active && eff_prio < prio && !faded)
+				return; // the game drops a lower-priority request on a busy channel
+			const u32 now = VsNow();
+			Wr(VsCh(ch, VS_ID), idx);
+			Wr(VsCh(ch, VS_PRIO), static_cast<u32>(prio));
+			Wr(VsCh(ch, VS_FLAGS), VS_STARTED | (paused ? VS_PAUSED : 0) | (it->second.loops ? VS_LOOPS : 0));
+			Wr(VsCh(ch, VS_REQ), now);
+			Wr(VsCh(ch, VS_LEN), it->second.frames);
+			Wr(VsCh(ch, VS_LSTART), it->second.loop_start);
+			Wr(VsCh(ch, VS_LEND), it->second.loop_end);
+			Wr(VsCh(ch, VS_PBEGIN), now);
+			Wr(VsCh(ch, VS_PACC), 0);
+			Wr(VsCh(ch, VS_FADE_END), 0);
+			Wr(VsCh(ch, VS_PART), part);
+		}
+		void VsKill(u32 ch)
+		{
+			if (ch < s_man.vs.channels)
+				Wr(VsCh(ch, VS_FLAGS), (Rd(VsCh(ch, VS_FLAGS)) | VS_STOPPED) & ~(VS_PAUSED | VS_FADEOUT));
+		}
+		void VsPause(u32 ch)
+		{
+			if (ch < s_man.vs.channels && VsActive(ch) && !(Rd(VsCh(ch, VS_FLAGS)) & VS_PAUSED))
+			{
+				Wr(VsCh(ch, VS_FLAGS), Rd(VsCh(ch, VS_FLAGS)) | VS_PAUSED);
+				Wr(VsCh(ch, VS_PBEGIN), VsNow());
+			}
+		}
+		void VsResume(u32 ch)
+		{
+			if (ch >= s_man.vs.channels || !(Rd(VsCh(ch, VS_FLAGS)) & VS_PAUSED))
+				return;
+			const s64 add = std::max<s64>(0, static_cast<s64>(VsNow()) - std::max<s64>(Rd(VsCh(ch, VS_PBEGIN)), VsP0(ch)));
+			Wr(VsCh(ch, VS_PACC), Rd(VsCh(ch, VS_PACC)) + static_cast<u32>(add));
+			Wr(VsCh(ch, VS_FLAGS), Rd(VsCh(ch, VS_FLAGS)) & ~VS_PAUSED);
+		}
+		void VsFade(u32 ch, s32 dur, float target)
+		{
+			if (ch >= s_man.vs.channels || !VsActive(ch))
+				return;
+			if (target < 1e-4f)
+			{
+				Wr(VsCh(ch, VS_FLAGS), Rd(VsCh(ch, VS_FLAGS)) | VS_FADEOUT);
+				Wr(VsCh(ch, VS_FADE_END), VsNow() + static_cast<u32>(std::max(dur, 1)));
+			}
+			else
+				Wr(VsCh(ch, VS_FLAGS), Rd(VsCh(ch, VS_FLAGS)) & ~VS_FADEOUT);
+		}
+		void VsInit()
+		{
+			const VirtualStreams& v = s_man.vs;
+			if (!v.state)
+				return;
+			for (u32 a = 0; a < 0x10 + v.channels * 0x30; a += 4)
+				Wr(v.state + a, 0);
+			Wr(v.state, VS_MAGIC);
+			Wr(v.state + 8, v.k_prep);
+			Wr(v.state + 12, 1);
+			for (u32 ch = 0; ch < v.channels; ch++)
+			{
+				Wr(VsCh(ch, VS_ID), 0xFFFFFFFFu);
+				Wr(VsCh(ch, VS_PRIO), 99);
+			}
+		}
+		u64 RegRead(int r) { return r >= 100 ? fpuRegs.fpr[r - 100].UL : cpuRegs.GPR.r[r].UD[0]; }
+
+		// ---------------------------------------------------------------------------------------------------------
+		// hook chains: several behaviours at one address run in order (the first that returns / jumps wins), then an
+		// optional resim gate. A lone gate / lone filtered call is emitted natively.
+		// ---------------------------------------------------------------------------------------------------------
+		struct ChainAction
+		{
+			std::vector<u32> ra; // empty = any caller
+			std::function<EeHooks::Action()> fn;
+		};
+		struct Chain
+		{
+			std::vector<ChainAction> actions;
+			int gate = 0; // 1 gate, 2 gate that sets v0
+			u32 gate_v0 = 0;
+		};
+		std::map<u32, Chain> s_chains;
+		std::vector<u32> s_installed; // every address the rollback hooks own (removed on stop)
+
+		void ChainAdd(u32 pc, std::vector<u32> ra, std::function<EeHooks::Action()> fn)
+		{
+			s_chains[pc].actions.push_back({std::move(ra), std::move(fn)});
+		}
+		EeHooks::Action RunChain(u32 pc)
+		{
+			const auto it = s_chains.find(pc);
+			if (it == s_chains.end())
+				return EeHooks::Action::Continue;
+			const u32 ra = cpuRegs.GPR.n.ra.UL[0];
+			for (const ChainAction& a : it->second.actions)
+			{
+				bool hit = a.ra.empty();
+				for (const u32 r : a.ra)
+					hit |= (r == ra);
+				if (!hit)
+					continue;
+				const EeHooks::Action act = a.fn();
+				if (act != EeHooks::Action::Continue)
+					return act;
+			}
+			if (it->second.gate && RollbackDevice::IsResimulating())
+			{
+				if (it->second.gate == 2)
+					cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(it->second.gate_v0);
+				return EeHooks::Action::Return;
+			}
+			return EeHooks::Action::Continue;
+		}
+
+		void BuildChains()
+		{
+			s_chains.clear();
 			if (s_man.render_begin_site)
-				EeHooks::AddCall(s_man.render_begin_site, [](u32) {
+				ChainAdd(s_man.render_begin_site, {}, [] {
 					RollbackDevice::HandleSyscall(RollbackDevice::CMD_RENDER_BEGIN, 0, 0, 0);
 					return EeHooks::Action::Continue;
-				}, EeHooks::OWNER_GAME);
+				});
 			if (s_man.render_end_site)
-				EeHooks::AddCall(s_man.render_end_site, [](u32) {
+				ChainAdd(s_man.render_end_site, {}, [] {
 					RollbackDevice::HandleSyscall(RollbackDevice::CMD_RENDER_END, 0, 0, 0);
 					return EeHooks::Action::Continue;
-				}, EeHooks::OWNER_GAME);
-			for (const u32 a : s_man.resim_gates)
-			{
-				const auto v = s_man.gate_values.find(a);
-				if (v != s_man.gate_values.end())
-					EeHooks::AddResimGateRet(a, v->second, EeHooks::OWNER_GAME);
-				else
-					EeHooks::AddResimGate(a, EeHooks::OWNER_GAME);
-			}
-			for (const u32 a : s_man.resim_skips)
-				EeHooks::AddSkipCall(a, false, EeHooks::OWNER_GAME);
-			for (const u32 a : s_man.always_skips)
-				EeHooks::AddSkipCall(a, true, EeHooks::OWNER_GAME);
+				});
 			for (size_t k = 0; k < s_man.entry_actions.size(); k++)
 			{
-				EeHooks::AddCall(s_man.entry_actions[k].at, [k](u32) {
+				ChainAdd(s_man.entry_actions[k].at, {}, [k] {
 					const EntryAction& a = s_man.entry_actions[k];
 					if (a.resim_only && !RollbackDevice::IsResimulating())
 						return EeHooks::Action::Continue;
@@ -1191,56 +1491,136 @@ namespace GameRollback
 						return EeHooks::Action::Continue;
 					cpuRegs.GPR.n.v0.UD[0] = 0;
 					return EeHooks::Action::Return;
-				}, EeHooks::OWNER_GAME);
+				});
 			}
-			// sound-only draws: only those callers reach the handler (native $ra filter), unless call tracing wants all
+			// sound-only draws: the host sound stream (only those callers); trace sees every other call
 			std::vector<u32> callers;
 			for (const u32 site : s_man.sound_sites)
 				callers.push_back(site + 8);
 			for (const u32 fn : {s_man.rng_float, s_man.rng_int})
+				if (fn && !callers.empty())
+					ChainAdd(fn, callers, [fn] { return OnRng(fn); });
+			if (RollbackDevice::TraceOn())
+				for (const auto& [fn, id] : s_man.trace_ids)
+					if (fn != s_man.pad_read_fn && fn != s_man.sim_tick_site && fn != s_man.return_addr)
+						ChainAdd(fn, {}, [fn] { return OnTrace(fn); });
+			// virtual stream clock
+			const VirtualStreams& v = s_man.vs;
+			if (v.state)
 			{
-				if (!fn)
-					continue;
-				if (RollbackDevice::TraceOn())
-					EeHooks::AddCall(fn, OnRng, EeHooks::OWNER_GAME);
-				else
-					EeHooks::AddCallFiltered(fn, OnRng, callers, EeHooks::OWNER_GAME);
+				for (const VsHook& h : v.hooks)
+				{
+					const VsHook hk = h;
+					ChainAdd(h.at, h.ra, [hk] {
+						if (!VsEnabled())
+							return EeHooks::Action::Continue;
+						const u32 ch = static_cast<u32>(RegRead(hk.ch_reg) & (hk.kind == "request" ? hk.ch_mask : 0xFFFFFFFFu));
+						if (hk.kind == "tick")
+							Wr(s_man.vs.state + 4, VsNow() + 1);
+						else if (hk.kind == "request")
+						{
+							if (VsReady())
+								VsRequest(ch, static_cast<u32>(RegRead(hk.idx_reg)), static_cast<s16>(RegRead(hk.prio_reg)),
+									static_cast<s16>(RegRead(hk.paused_reg)) != 0);
+						}
+						else if (hk.kind == "kill")
+						{
+							if (!hk.need_ready || VsReady())
+								VsKill(ch);
+						}
+						else if (hk.kind == "pause")
+						{
+							if (!hk.need_ready || VsReady())
+								VsPause(ch);
+						}
+						else if (hk.kind == "resume")
+						{
+							if (!hk.need_ready || VsReady())
+								VsResume(ch);
+						}
+						else if (hk.kind == "fade")
+						{
+							if (VsReady())
+							{
+								const u32 bits = static_cast<u32>(RegRead(hk.target_reg));
+								float target;
+								std::memcpy(&target, &bits, 4);
+								VsFade(ch, static_cast<s32>(RegRead(hk.dur_reg)), target);
+							}
+						}
+						else if (hk.kind == "query" || hk.kind == "post")
+						{
+							const s64 v = (hk.kind == "query" && hk.need_ready && !VsReady()) ? hk.not_ready : VsValue(hk.value, ch);
+							cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(v);
+							if (hk.kind == "query")
+								return EeHooks::Action::Return;
+						}
+						return EeHooks::Action::Continue;
+					});
+				}
+			}
+			for (const u32 a : s_man.resim_gates)
+			{
+				Chain& c = s_chains[a];
+				const auto v = s_man.gate_values.find(a);
+				c.gate = v != s_man.gate_values.end() ? 2 : 1;
+				c.gate_v0 = v != s_man.gate_values.end() ? v->second : 0;
 			}
 		}
-		void InstallTraceHooks()
+
+		void InstallRollbackHooks()
 		{
-			for (const auto& [fn, id] : s_man.trace_ids)
-				if (fn != s_man.rng_float && fn != s_man.rng_int && fn != s_man.pad_read_fn)
-					EeHooks::AddCall(fn, OnTrace, EeHooks::OWNER_GAME);
+			BuildChains();
+			s_installed.clear();
+			for (const auto& [pc, c] : s_chains)
+			{
+				if (c.actions.empty())
+				{
+					if (c.gate == 2)
+						EeHooks::AddResimGateRet(pc, c.gate_v0, EeHooks::OWNER_GAME);
+					else
+						EeHooks::AddResimGate(pc, EeHooks::OWNER_GAME);
+				}
+				else if (c.actions.size() == 1 && !c.gate && !c.actions[0].ra.empty())
+				{
+					const auto fn = c.actions[0].fn;
+					EeHooks::AddCallFiltered(pc, [fn](u32) { return fn(); }, c.actions[0].ra, EeHooks::OWNER_GAME);
+				}
+				else
+					EeHooks::AddCall(pc, RunChain, EeHooks::OWNER_GAME);
+				s_installed.push_back(pc);
+			}
+			for (const u32 a : s_man.resim_skips)
+			{
+				if (s_chains.count(a))
+					Console.Error("GameRollback: %08X is both a call-site skip and a hook: skip ignored", a);
+				else
+				{
+					EeHooks::AddSkipCall(a, false, EeHooks::OWNER_GAME);
+					s_installed.push_back(a);
+				}
+			}
+			for (const u32 a : s_man.always_skips)
+			{
+				EeHooks::AddSkipCall(a, true, EeHooks::OWNER_GAME);
+				s_installed.push_back(a);
+			}
 		}
+		void InstallTraceHooks() {} // part of the chains (BuildChains)
 		void RemoveRollbackHooks()
 		{
-			// everything except the attach hooks
-			if (s_man.render_begin_site)
-				EeHooks::Remove(s_man.render_begin_site);
-			if (s_man.render_end_site)
-				EeHooks::Remove(s_man.render_end_site);
-			for (const u32 a : s_man.resim_gates)
+			for (const u32 a : s_installed)
 				EeHooks::Remove(a);
-			for (const u32 a : s_man.resim_skips)
-				EeHooks::Remove(a);
-			for (const u32 a : s_man.always_skips)
-				EeHooks::Remove(a);
-			for (const EntryAction& a : s_man.entry_actions)
-				EeHooks::Remove(a.at);
-			if (s_man.rng_float)
-				EeHooks::Remove(s_man.rng_float);
-			if (s_man.rng_int)
-				EeHooks::Remove(s_man.rng_int);
-			for (const auto& [fn, id] : s_man.trace_ids)
-				if (fn != s_man.pad_read_fn && fn != s_man.sim_tick_site && fn != s_man.return_addr)
-					EeHooks::Remove(fn);
+			s_installed.clear();
+			s_chains.clear();
 		}
 
 		void ConfigureDevice()
 		{
 			using namespace RollbackDevice;
 			ClearConfig();
+			if (s_man.vs.state) // the virtual stream clock is simulation state: rolled back and compared
+				AddRegion(s_man.vs.state, 0x10 + s_man.vs.channels * 0x30);
 			for (const RegionSpec& r : s_man.regions)
 			{
 				s64 len = 0;
@@ -1310,6 +1690,7 @@ namespace GameRollback
 			if (s_mode != 0)
 				DoStop();
 			ConfigureDevice();
+			VsInit(); // both peers start the clock from the same (empty) state at the rollback start
 			InstallRollbackHooks();
 			InstallTraceHooks();
 			RollbackDevice::Start(static_cast<RollbackDevice::Mode>(mode), frames, true);
