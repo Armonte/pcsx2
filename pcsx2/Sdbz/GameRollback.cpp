@@ -1402,7 +1402,8 @@ namespace GameRollback
 
 		EeHooks::Action OnPadRead(u32)
 		{
-			if (cpuRegs.GPR.n.ra.UL[0] == s_man.pad_site + 8 && s_man.pad_record_replay && !s_man.replay_fn && s_driving)
+			// netplay always replays at the feed point: resim frames need the corrected raw reports the netcode wrote
+			if (cpuRegs.GPR.n.ra.UL[0] == s_man.pad_site + 8 && (s_net || (s_man.pad_record_replay && !s_man.replay_fn)) && s_driving)
 			{
 				// re-simulated frame: answer the read from the recorded report without running the pad library
 				// (its IOP-side state is live hardware; the report is all the game gets from it)
@@ -1431,7 +1432,7 @@ namespace GameRollback
 			s_pad_pending = false;
 			const u32 player = s_pad_player % PAD_PLAYERS;
 			u8* buf = &eeMem->Main[s_pad_buf & RAM_MASK];
-			if (s_man.pad_record_replay && !s_man.replay_fn && s_driving)
+			if ((s_net || (s_man.pad_record_replay && !s_man.replay_fn)) && s_driving)
 			{
 				// re-simulated frame: the report this player's read returned when the frame ran for real
 				const s32 f = s_host_frame - static_cast<s32>(s_R) + static_cast<s32>(s_i);
@@ -1480,7 +1481,7 @@ namespace GameRollback
 		}
 		EeHooks::Action OnReplayEntry(u32)
 		{
-			if (cpuRegs.GPR.n.ra.UL[0] != s_man.replay_site + 8)
+			if (s_net || cpuRegs.GPR.n.ra.UL[0] != s_man.replay_site + 8)
 				return EeHooks::Action::Continue;
 			const u32 player = ReplayPlayer();
 			const u32 buf = cpuRegs.GPR.r[s_man.replay_buf_reg].UL[0];
