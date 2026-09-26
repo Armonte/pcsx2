@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
+#include "Counters.h"
+#include "Sdbz/RollbackDevice.h"
 #include "Common.h"
 
 #include "common/Path.h"
@@ -369,6 +371,11 @@ static bool cpuIntsEnabled(int Interrupt)
 // and the recompiler.  (moved here to help alleviate redundant code)
 __fi void _cpuEventTest_Shared()
 {
+	// Safety net: sync counters parked for a rollback re-simulation that was aborted (device stopped / state
+	// loaded mid-resim) would never fire again -> unpark as soon as nothing is re-simulating.
+	if (rcntRollbackParked() && !RollbackDevice::IsResimulating()) [[unlikely]]
+		rcntRollbackUnpark();
+
 	eeEventTestIsActive = true;
 	cpuRegs.nextEventCycle = cpuRegs.cycle + eeWaitCycles;
 	cpuRegs.lastEventCycle = cpuRegs.cycle;

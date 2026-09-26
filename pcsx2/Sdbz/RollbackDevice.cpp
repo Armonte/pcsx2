@@ -7,6 +7,7 @@
 #include "Sdbz/PadFeed.h"
 
 #include "Memory.h"
+#include "Counters.h"
 
 #include "common/Console.h"
 #include "common/Timer.h"
@@ -56,6 +57,7 @@ namespace RollbackDevice
 		std::vector<Range> s_cfg_regions, s_cfg_excludes, s_cfg_ignore;
 		std::vector<Range> s_dyn_excludes;         // replaceable exclude set (per-object fields in pools that move)
 		bool s_dyn_dirty = false;                  // rebuild the ring at the next FRAME_BEGIN
+		std::atomic<bool> s_resimulating{false};   // between a rollback and CUR_PRE (read by other threads)
 		u32 s_dyn_rebuilds = 0;
 		std::vector<Watch> s_cfg_watches;
 		Range s_cfg_input;
@@ -302,6 +304,7 @@ namespace RollbackDevice
 		void ResetRuntime()
 		{
 			s_ring.reset();
+			s_resimulating.store(false, std::memory_order_relaxed);
 			s_frame = -1;
 			s_dyn_rebuilds = 0;
 			s_resim_active = false;
@@ -470,12 +473,12 @@ namespace RollbackDevice
 	{
 		std::lock_guard lk(s_mtx);
 		s_mode = Mode::Off;
+		s_resimulating.store(false, std::memory_order_relaxed); // EE unparks the sync counters at its next event test
 		s_ring.reset();
 	}
 
 	namespace
 	{
-		std::atomic<bool> s_resimulating{false};
 		u32 s_bench_every = 10;
 	}
 	void SetBenchEvery(u32 frames) { s_bench_every = std::max(frames, 1u); }
@@ -642,6 +645,7 @@ namespace RollbackDevice
 				s_resim_base = target;
 				s_resim_active = true;
 				s_resimulating.store(true, std::memory_order_relaxed);
+				rcntRollbackPark(); // re-simulation takes no display time
 				s_rollbacks++;
 				return s_rollback;
 			}
@@ -741,6 +745,7 @@ namespace RollbackDevice
 					InjectInput(s_frame);
 					s_resim_active = false;
 					s_resimulating.store(false, std::memory_order_relaxed);
+					rcntRollbackUnpark();
 					s_last_rollback_us = static_cast<u64>(s_rollback_timer.GetTimeNanoseconds() / 1000.0);
 					s_max_rollback_us = std::max(s_max_rollback_us, s_last_rollback_us);
 					s_sum_rollback_us += s_last_rollback_us;

@@ -174,6 +174,39 @@ struct vSyncTimingInfo
 
 static vSyncTimingInfo vSyncInfo;
 
+// Rollback re-simulation takes no DISPLAY time: the game re-runs past frames inside one real frame, and the EE
+// cycles those sim ticks consume must not push the game past its next vsync (it would miss its flip and every
+// missed vsync costs a full 16.7 ms of wall time). While the device re-simulates, hsync/vsync deadlines are parked
+// far in the future; afterwards they are restored shifted by exactly the cycles the re-simulation used, so the
+// frame reaches its vsync as if the rollback had been instantaneous. EE timers, DMA and the IOP keep running.
+static constexpr u64 ROLLBACK_PARK_CYCLES = 0x10000000; // ~0.9 s of EE time; a re-simulation never takes that long
+static bool s_rb_parked = false;
+static u64 s_rb_park_cycle = 0;
+
+void rcntRollbackPark()
+{
+	if (s_rb_parked)
+		return;
+	s_rb_parked = true;
+	s_rb_park_cycle = cpuRegs.cycle;
+	hsyncCounter.startCycle += ROLLBACK_PARK_CYCLES;
+	vsyncCounter.startCycle += ROLLBACK_PARK_CYCLES;
+	cpuRcntSet();
+}
+
+bool rcntRollbackParked() { return s_rb_parked; }
+
+void rcntRollbackUnpark()
+{
+	if (!s_rb_parked)
+		return;
+	s_rb_parked = false;
+	const u64 used = cpuRegs.cycle - s_rb_park_cycle;
+	hsyncCounter.startCycle = hsyncCounter.startCycle - ROLLBACK_PARK_CYCLES + used;
+	vsyncCounter.startCycle = vsyncCounter.startCycle - ROLLBACK_PARK_CYCLES + used;
+	cpuRcntSet();
+}
+
 void rcntInit()
 {
 	int i;
