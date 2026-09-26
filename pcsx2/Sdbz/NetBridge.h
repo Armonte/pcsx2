@@ -41,6 +41,7 @@ namespace NetBridge
 		std::function<void(int player, u8* out)> poll_local_input; // INPUT_SIZE bytes
 		std::function<bool()> in_game;                             // rollback phase (else lockstep)
 		std::function<void(int frame, u32 local, u32 remote, int kind)> on_desync;
+		std::function<u32()> state_checksum; // the watched-state hash (replay anchor identity)
 	};
 	struct Step
 	{
@@ -55,6 +56,7 @@ namespace NetBridge
 		s32 load_frame = -1;
 		u32 rollback_advances = 0;
 		std::vector<Step> steps; // ADVANCE events in order, each with its SAVE index
+		std::vector<s32> pre_saves; // SAVEs before any ADVANCE (the session's frame-0 save): answer with the current state
 	};
 
 	bool Start(const Config& cfg, Host host, std::string* error);
