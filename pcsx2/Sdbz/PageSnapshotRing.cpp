@@ -62,15 +62,26 @@ namespace
 			return pool;
 		}
 
-		void Run(const std::vector<Job>& jobs, u32 bytes_each)
+		void Run(const std::vector<Job>& jobs, u32 bytes_each) { Dispatch(jobs, bytes_each, nullptr); }
+
+		// Parallel memcmp: differs[i] = (jobs[i].dst != jobs[i].src) over bytes_each.
+		void Compare(const std::vector<Job>& jobs, std::vector<u8>& differs, u32 bytes_each)
+		{
+			differs.assign(jobs.size(), 0);
+			Dispatch(jobs, bytes_each, differs.data());
+		}
+
+	private:
+		void Dispatch(const std::vector<Job>& jobs, u32 bytes_each, u8* differs)
 		{
 			const u32 n = static_cast<u32>(jobs.size());
 			if (n < MIN_PARALLEL || m_workers.empty())
 			{
-				for (const Job& j : jobs)
-					std::memcpy(j.dst, j.src, bytes_each);
+				for (u32 i = 0; i < n; i++)
+					Do(jobs[i], i, bytes_each, differs);
 				return;
 			}
+			m_differs = differs;
 			m_jobs = jobs.data();
 			m_count = n;
 			m_bytes = bytes_each;
@@ -86,7 +97,14 @@ namespace
 				std::this_thread::yield();
 		}
 
-	private:
+		static __fi void Do(const Job& j, u32 i, u32 bytes, u8* differs)
+		{
+			if (differs)
+				differs[i] = std::memcmp(j.dst, j.src, bytes) != 0;
+			else
+				std::memcpy(j.dst, j.src, bytes);
+		}
+
 		static constexpr u32 MIN_PARALLEL = 48;  // pages
 		static constexpr u32 CHUNK = 16;         // pages per grab
 		static constexpr u32 WORKERS = 3;
@@ -117,7 +135,7 @@ namespace
 					return;
 				const u32 last = std::min(first + CHUNK, m_count);
 				for (u32 i = first; i < last; i++)
-					std::memcpy(m_jobs[i].dst, m_jobs[i].src, m_bytes);
+					Do(m_jobs[i], i, m_bytes, m_differs);
 				m_done.fetch_add(last - first, std::memory_order_release);
 			}
 		}
@@ -149,6 +167,7 @@ namespace
 		std::atomic<u64> m_gen{0};
 		std::atomic<u32> m_next{0}, m_done{0};
 		const Job* m_jobs = nullptr;
+		u8* m_differs = nullptr;
 		u32 m_count = 0, m_bytes = 0;
 		std::atomic<bool> m_quit{false};
 	};
@@ -366,18 +385,31 @@ void PageSnapshotRing::CollectDirty(std::vector<u64>& bits)
 	std::vector<u64> ram_dirty;
 	const std::vector<u64> hot_ram = HotRamBits();
 	vtlb_DirtyTrack_Rearm(&ram_dirty, &hot_ram);
+	static std::vector<CopyPool::Job> hot_jobs;
+	static std::vector<u32> hot_idx;
+	static std::vector<u8> differs;
+	hot_jobs.clear();
+	hot_idx.clear();
+	for (u32 w = 0; w < m_words; w++)
+	{
+		u64 b = m_hot[w];
+		while (b)
+		{
+			const u32 i = w * 64 + static_cast<u32>(std::countr_zero(b));
+			b &= b - 1;
+			hot_idx.push_back(i);
+			hot_jobs.push_back({RamPage(m_page_index[i]), Data(latest.pages[i])});
+		}
+	}
+	CopyPool::Get().Compare(hot_jobs, differs, PAGE_SIZE); // hot pages don't fault: compare with the last copy
+	for (size_t k = 0; k < hot_idx.size(); k++)
+		if (differs[k])
+			SetBit(bits, hot_idx[k]);
 	for (u32 i = 0; i < m_page_index.size(); i++)
 	{
 		const u32 page = m_page_index[i];
-		if (TestBit(m_hot, i))
-		{
-			if (std::memcmp(RamPage(page), Data(latest.pages[i]), PAGE_SIZE) != 0)
-				SetBit(bits, i);
-		}
-		else if ((ram_dirty[page >> 6] >> (page & 63)) & 1)
-		{
+		if (!TestBit(m_hot, i) && ((ram_dirty[page >> 6] >> (page & 63)) & 1))
 			SetBit(bits, i);
-		}
 	}
 }
 
