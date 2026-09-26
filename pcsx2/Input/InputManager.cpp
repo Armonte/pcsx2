@@ -5,6 +5,7 @@
 #include "ImGui/ImGuiManager.h"
 #include "FireWire/FireWire.h"
 #include "Input/InputManager.h"
+#include "Sdbz/PcInput.h"
 #include "Input/InputSource.h"
 #ifdef _WIN32
 #include "Input/RawInputSource.h"
@@ -2153,6 +2154,14 @@ InputManager::GenericInputBindingMapping InputManager::GetGenericBindingMapping(
 
 bool InputManager::IsInputSourceEnabled(SettingsInterface& si, InputSourceType type)
 {
+	// A PovertyCaster session: creamybinder owns the devices (Sdbz/PcInput), PCSX2's device sources stay closed so
+	// exactly one owner opens and pumps them. The user's settings are not changed.
+	if (PcInput::OwnsDevices() && (type == InputSourceType::SDL
+#ifdef _WIN32
+			|| type == InputSourceType::DInput || type == InputSourceType::XInput
+#endif
+		))
+		return false;
 	return si.GetBoolValue("InputSources", InputManager::InputSourceToString(type), InputManager::GetInputSourceDefaultEnabled(type));
 }
 

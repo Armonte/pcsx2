@@ -4,6 +4,7 @@
 #include "Sdbz/GameRollback.h"
 #include "Sdbz/EeHooks.h"
 #include "Sdbz/NetBridge.h"
+#include "Sdbz/PcInput.h"
 #include "Sdbz/RollbackDevice.h"
 
 #include "DebugTools/BiosDebugData.h"
@@ -1495,6 +1496,7 @@ namespace GameRollback
 				s_passthrough = false;
 				return EeHooks::Action::Continue;
 			}
+			PcInput::Poll(); // creamybinder: this frame's local input, before netcode and the game read it
 			ApplyRequests();
 			if (s_mode == 0)
 				return EeHooks::Action::Continue;
@@ -1668,6 +1670,14 @@ namespace GameRollback
 			}
 			cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(RollbackDevice::HandleSyscall(
 				RollbackDevice::CMD_PAD_FEED, s_pad_player, s_pad_buf, cpuRegs.GPR.n.v0.UL[0]));
+			if (PcInput::Active() && !s_net && player < 2)
+			{
+				// offline PovertyCaster session: both seats are local creamybinder players
+				const u16 b = PcInput::Buttons(static_cast<int>(player));
+				const u8 in[6] = {static_cast<u8>(b >> 8), static_cast<u8>(b), 0x80, 0x80, 0x80, 0x80};
+				BuildReport(in, buf);
+				cpuRegs.GPR.n.v0.SD[0] = 1;
+			}
 			if (s_net)
 			{
 				// this peer's live input (real pad or feed) goes to the netcode; the game gets the session's input
@@ -2341,7 +2351,13 @@ namespace GameRollback
 				NetBridge::Host host;
 				host.poll_local_input = [](int player, u8* out) {
 					static constexpr u8 NEUTRAL[NetBridge::INPUT_SIZE] = {0, 0, 0x80, 0x80, 0x80, 0x80};
-					if (player >= 0 && player < static_cast<int>(PAD_PLAYERS) && s_live_valid[player])
+					if (PcInput::Active() && player >= 0 && player < 2)
+					{
+						const u16 b = PcInput::Buttons(player);
+						const u8 in[NetBridge::INPUT_SIZE] = {static_cast<u8>(b >> 8), static_cast<u8>(b), 0x80, 0x80, 0x80, 0x80};
+						std::memcpy(out, in, sizeof(in));
+					}
+					else if (player >= 0 && player < static_cast<int>(PAD_PLAYERS) && s_live_valid[player])
 						ReportToInput(s_live_report[player], out);
 					else
 						std::memcpy(out, NEUTRAL, sizeof(NEUTRAL));
@@ -2502,6 +2518,21 @@ namespace GameRollback
 			return;
 		}
 		const char* net = std::getenv("PS2RB_NET");
+		{
+			// a PovertyCaster session: creamybinder owns local input in every mode (menus, offline, netplay), with the
+			// per-game binding profile named after the manifest (fuc.yaml -> creamybinder-fuc.ini)
+			PcInput::Params ip;
+			std::string stem(Path::GetFileTitle(man));
+			for (char& c : stem)
+				c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			ip.profile = stem;
+			if (const char* d = std::getenv("PS2RB_CB_DIR"); d && *d)
+				ip.config_dir = d;
+			if (net && std::string(net) == "p2p")
+				if (const char* lp = std::getenv("PS2RB_LOCAL"); lp && *lp)
+					ip.online_seat = std::atoi(lp);
+			PcInput::Start(ip);
+		}
 		if (!net || !*net)
 			return;
 		auto env = [](const char* k, const char* def) {

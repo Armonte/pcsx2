@@ -5,6 +5,7 @@
 #include "ImGui/ScriptBridge.h"
 #include "Sdbz/GameRollback.h"
 #include "Sdbz/EeHooks.h"
+#include "Sdbz/PcInput.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
 #include "GS/GS.h"
 #include "R5900.h"
@@ -232,6 +233,15 @@ namespace
 		});
 		rd.set_function("net_stop", []() { GameRollback::NetStop(); });
 		rd.set_function("session_locks", [](bool on) { GameRollback::SessionLocks(on); });
+		// PovertyCaster input (creamybinder owns the devices): pcinput_start(profile[, online_seat]) / stop / status
+		rd.set_function("pcinput_start", [](const std::string& profile, sol::optional<int> seat) {
+			PcInput::Params p;
+			p.profile = profile;
+			p.online_seat = seat.value_or(-1);
+			PcInput::Start(p);
+		});
+		rd.set_function("pcinput_stop", []() { PcInput::Stop(); });
+		rd.set_function("pcinput_status", []() { return PcInput::Status(); });
 		rd.set_function("net_status", []() { return GameRollback::NetStatus(); });
 		rd.set_function("manifest_detach", []() { GameRollback::Detach(); });
 		rd.set_function("manifest_status", []() { return GameRollback::Status(); });
