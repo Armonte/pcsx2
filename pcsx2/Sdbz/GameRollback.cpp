@@ -5,8 +5,10 @@
 #include "Sdbz/EeHooks.h"
 #include "Sdbz/RollbackDevice.h"
 
+#include "DebugTools/BiosDebugData.h"
 #include "Memory.h"
 #include "R5900.h"
+#include "ps2/BiosTools.h"
 
 #include "common/Console.h"
 #include "common/FileSystem.h"
@@ -335,6 +337,7 @@ namespace GameRollback
 			std::unordered_map<std::string, std::string> macros;
 			std::optional<Val> gate_when;
 			std::unordered_map<u32, u32> gate_values; // resim gates that also set $v0
+			bool exclude_thread_stacks = true;
 			bool pad_record_replay = false;
 			std::vector<Item> excludes, ignores, watches;
 			std::vector<Range> gate_stable, resim_restore;
@@ -553,6 +556,8 @@ namespace GameRollback
 				if (Has(st, "watch"))
 					for (const auto& c : Child(st, "watch").children())
 						m->watches.push_back(ParseItem(c));
+				if (Has(st, "exclude_thread_stacks"))
+					m->exclude_thread_stacks = GetStr(st, "exclude_thread_stacks") != "false";
 				if (Has(st, "gate_stable"))
 					m->gate_stable = ParseRanges(Child(st, "gate_stable"));
 				if (Has(st, "resim_restore"))
@@ -913,6 +918,21 @@ namespace GameRollback
 				ex.insert(ex.end(), out.begin(), out.end());
 				if (d.kind == DynKind::ExcludeResimRestore)
 					rr.insert(rr.end(), out.begin(), out.end());
+			}
+			// Every EE thread's stack (from the kernel's thread table): a thread's saved context lives in kernel memory,
+			// which is never rolled back, so its stack must not be either (else the thread resumes on a rewound stack).
+			if (s_man.exclude_thread_stacks && CurrentBiosInformation.eeThreadListAddr)
+			{
+				const u32 start = CurrentBiosInformation.eeThreadListAddr & 0x3fffff;
+				for (u32 tid = 0; tid < 256; tid++)
+				{
+					const EEInternalThread* t = static_cast<const EEInternalThread*>(PSM(start + tid * sizeof(EEInternalThread)));
+					if (!t || t->status == static_cast<int>(ThreadStatus::THS_BAD) || !t->stackMem || t->stackSize <= 0)
+						continue;
+					mix(t->stackMem);
+					mix(static_cast<u32>(t->stackSize));
+					ex.emplace_back(t->stackMem & RAM_MASK, static_cast<u32>(t->stackSize));
+				}
 			}
 			if (!force && sig == s_dyn_sig)
 				return;
