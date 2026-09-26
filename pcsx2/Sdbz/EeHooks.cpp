@@ -22,6 +22,7 @@ namespace EeHooks
 		{
 			Kind kind = Kind::None;
 			Handler handler;
+			Owner owner = OWNER_SCRIPT;
 		};
 		std::mutex s_mtx;
 		std::unordered_map<u32, Hook> s_hooks;
@@ -50,8 +51,12 @@ namespace EeHooks
 		}
 	} // namespace
 
-	void AddResimGate(u32 pc) { Set(pc, {Kind::ResimGate, {}}); }
-	void AddCall(u32 pc, Handler handler) { Set(pc, {Kind::Call, std::move(handler)}); }
+	void AddResimGate(u32 pc, Owner owner) { Set(pc, {Kind::ResimGate, {}, owner}); }
+	void AddCall(u32 pc, Handler handler, Owner owner) { Set(pc, {Kind::Call, std::move(handler), owner}); }
+	void AddSkipCall(u32 site, bool always, Owner owner)
+	{
+		Set(site, {always ? Kind::SkipCallAlways : Kind::SkipCallResim, {}, owner});
+	}
 
 	void Remove(u32 pc)
 	{
@@ -65,16 +70,22 @@ namespace EeHooks
 		Invalidate(pc);
 	}
 
-	void Clear()
+	void Clear(Owner owner)
 	{
 		std::vector<u32> pcs;
 		{
 			std::lock_guard lk(s_mtx);
-			for (const auto& [k, h] : s_hooks)
-				pcs.push_back(k);
-			s_hooks.clear();
-			for (auto& c : s_page_count)
-				c.store(0, std::memory_order_relaxed);
+			for (auto it = s_hooks.begin(); it != s_hooks.end();)
+			{
+				if (it->second.owner != owner)
+				{
+					++it;
+					continue;
+				}
+				pcs.push_back(it->first);
+				s_page_count[it->first >> 12].fetch_sub(1, std::memory_order_relaxed);
+				it = s_hooks.erase(it);
+			}
 		}
 		for (const u32 pc : pcs)
 			Invalidate(pc);

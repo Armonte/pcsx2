@@ -929,6 +929,7 @@ set(pcsx2ImGuiSources
 	ImGui/ScriptOverlay.cpp
 	ImGui/ScriptHost.cpp
 	Sdbz/EeHooks.cpp
+	Sdbz/GameRollback.cpp
 	Sdbz/PadFeed.cpp
 	Sdbz/PageSnapshotRing.cpp
 	Sdbz/RbProfiler.cpp
@@ -950,6 +951,7 @@ set(pcsx2ImGuiHeaders
 	ImGui/ScriptHost.h
 	Sdbz/CpuTimer.h
 	Sdbz/EeHooks.h
+	Sdbz/GameRollback.h
 	Sdbz/PadFeed.h
 	Sdbz/PageSnapshotRing.h
 	Sdbz/RbProfiler.h

@@ -36,6 +36,7 @@
 #endif
 
 #ifdef TRACE_BLOCKS
+#include <optional>
 #include <zlib.h>
 #endif
 
@@ -1556,10 +1557,16 @@ void dynarecCheckBreakpoint()
 // cpuRegs: a hook may read and change it, and "return from the guest function" is pc = $ra + the normal block exit.
 static u32 recEeHookCall(u32 pc)
 {
-	if (EeHooks::RunCall(pc) != EeHooks::Action::Return)
-		return 0;
-	cpuRegs.pc = cpuRegs.GPR.n.ra.UL[0];
-	return 1;
+	switch (EeHooks::RunCall(pc))
+	{
+		case EeHooks::Action::Return:
+			cpuRegs.pc = cpuRegs.GPR.n.ra.UL[0];
+			return 1;
+		case EeHooks::Action::Jump:
+			return 1;
+		default:
+			return 0;
+	}
 }
 
 static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
@@ -1574,6 +1581,20 @@ static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
 		xMOV(ptr32[&cpuRegs.pc], eax);
 		iBranchTest();
 		run.SetTarget();
+	}
+	else if (kind == EeHooks::Kind::SkipCallResim || kind == EeHooks::Kind::SkipCallAlways)
+	{
+		// continue at the delay slot (compiled as its own block start), which then runs on to site + 8
+		std::optional<xForwardJZ32> run;
+		if (kind == EeHooks::Kind::SkipCallResim)
+		{
+			xCMP(ptr8[EeHooks::ResimFlag()], 0);
+			run.emplace();
+		}
+		xMOV(ptr32[&cpuRegs.pc], startpc + 4);
+		iBranchTest();
+		if (run)
+			run->SetTarget();
 	}
 	else if (kind == EeHooks::Kind::Call)
 	{

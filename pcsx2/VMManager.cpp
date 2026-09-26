@@ -45,6 +45,7 @@
 #include "Vif_Dynarec.h"
 #include "VMManager.h"
 #include "Sdbz/SnapshotBench.h"
+#include "Sdbz/GameRollback.h"
 #include "Sdbz/RollbackDevice.h"
 #include "ImGui/ScriptBridge.h"
 #include "ps2/BiosTools.h"
@@ -2350,6 +2351,7 @@ bool VMManager::DoLoadState(const char* filename, Error* error)
 	// EE memory was replaced: reconcile script code patches, and drop rollback snapshots of the old memory.
 	ScriptBridge::OnStateLoaded();
 	RollbackDevice::OnStateLoaded();
+	GameRollback::OnStateLoaded();
 
 	Host::OnSaveStateLoaded(filename, true);
 	if (g_InputRecording.isActive())

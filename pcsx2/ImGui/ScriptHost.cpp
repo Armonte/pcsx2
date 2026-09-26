@@ -3,6 +3,7 @@
 
 #include "ImGui/ScriptHost.h"
 #include "ImGui/ScriptBridge.h"
+#include "Sdbz/GameRollback.h"
 #include "Sdbz/EeHooks.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
 #include "Sdbz/SnapshotBench.h" // snap.* Lua table (incremental page-snapshot ring)
@@ -204,6 +205,21 @@ namespace
 		rd.set_function("prof_stop", []() { RbProfiler::Stop(); });
 		rd.set_function("set_bench_every", [](uint32_t k) { RollbackDevice::SetBenchEvery(k); });
 		rd.set_function("probe_log_dump", [](const std::string& path) { return RollbackDevice::ProbeLogDump(path); });
+		// Manifest-driven rollback (Sdbz/GameRollback.h): manifest_attach(path) -> ok, err | manifest_start(mode, frames)
+		// | manifest_stop() | manifest_detach() | manifest_status()
+		rd.set_function("manifest_attach", [](const std::string& path) {
+			std::string err;
+			const bool ok = GameRollback::Attach(path, &err);
+			return std::make_tuple(ok, err);
+		});
+		rd.set_function("manifest_start", [](int mode, uint32_t frames) {
+			std::string err;
+			const bool ok = GameRollback::Start(mode, frames, &err);
+			return std::make_tuple(ok, err);
+		});
+		rd.set_function("manifest_stop", []() { GameRollback::Stop(); });
+		rd.set_function("manifest_detach", []() { GameRollback::Detach(); });
+		rd.set_function("manifest_status", []() { return GameRollback::Status(); });
 		rd.set_function("add_resim_restore", [](uint32_t a, uint32_t n) { RollbackDevice::AddResimRestore(a, n); });
 		rd.set_function("set_resim_flag", [](uint32_t a) { RollbackDevice::SetResimFlagAddr(a); });
 		rd.set_function("set_levers", [](bool host_vsync, bool park, bool iop) { RollbackDevice::SetLevers(host_vsync, park, iop); });
