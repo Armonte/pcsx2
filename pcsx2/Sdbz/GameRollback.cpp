@@ -379,6 +379,11 @@ namespace GameRollback
 			std::vector<u32> resim_gates, resim_skips, always_skips;
 			std::vector<EntryAction> entry_actions;
 			u32 pad_read_fn = 0, pad_site = 0;
+			// optional separate record/replay point (a higher-level read whose output is replayed in resim, e.g. the
+			// game's port-state read that wraps the pad library): player = sum of player_regs, output at buf_reg
+			u32 replay_fn = 0, replay_site = 0, replay_len = 32;
+			std::vector<int> replay_player_regs;
+			int replay_buf_reg = 5;
 			u32 rng_float = 0, rng_int = 0;
 			u32 sound_seed = 0; // EE word holding the sound-only RNG stream (rolled back; same start on every peer)
 			std::unordered_set<u32> sound_sites;
@@ -815,6 +820,25 @@ namespace GameRollback
 				m->pad_read_fn = Get(Child(root, "pad"), "read_fn", 0);
 				m->pad_site = Get(Child(root, "pad"), "site", 0);
 				m->pad_record_replay = GetStr(Child(root, "pad"), "record_replay") == "true";
+				if (Has(Child(root, "pad"), "replay"))
+				{
+					const auto rp = Child(Child(root, "pad"), "replay");
+					auto reg = [](const std::string& n) -> int {
+						static const char* names[8] = {"a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3"};
+						for (int k = 0; k < 8; k++)
+							if (n == names[k])
+								return 4 + k;
+						return 4;
+					};
+					m->replay_fn = Get(rp, "fn", 0);
+					m->replay_site = Get(rp, "site", 0);
+					m->replay_len = std::min<u32>(Get(rp, "len", 32), 32);
+					m->replay_buf_reg = reg(GetStr(rp, "buf"));
+					if (Has(rp, "player"))
+						for (const auto& c : Child(rp, "player").children())
+							m->replay_player_regs.push_back(reg(std::string(c.val().str, c.val().len)));
+					m->pad_record_replay = true;
+				}
 			}
 			if (Has(root, "rng"))
 			{
@@ -1255,7 +1279,7 @@ namespace GameRollback
 
 		EeHooks::Action OnPadRead(u32)
 		{
-			if (cpuRegs.GPR.n.ra.UL[0] == s_man.pad_site + 8 && s_man.pad_record_replay && s_driving)
+			if (cpuRegs.GPR.n.ra.UL[0] == s_man.pad_site + 8 && s_man.pad_record_replay && !s_man.replay_fn && s_driving)
 			{
 				// re-simulated frame: answer the read from the recorded report without running the pad library
 				// (its IOP-side state is live hardware; the report is all the game gets from it)
@@ -1284,7 +1308,7 @@ namespace GameRollback
 			s_pad_pending = false;
 			const u32 player = s_pad_player % PAD_PLAYERS;
 			u8* buf = &eeMem->Main[s_pad_buf & RAM_MASK];
-			if (s_man.pad_record_replay && s_driving)
+			if (s_man.pad_record_replay && !s_man.replay_fn && s_driving)
 			{
 				// re-simulated frame: the report this player's read returned when the frame ran for real
 				const s32 f = s_host_frame - static_cast<s32>(s_R) + static_cast<s32>(s_i);
@@ -1298,12 +1322,60 @@ namespace GameRollback
 			}
 			cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(RollbackDevice::HandleSyscall(
 				RollbackDevice::CMD_PAD_FEED, s_pad_player, s_pad_buf, cpuRegs.GPR.n.v0.UL[0]));
-			if (s_man.pad_record_replay && s_mode != 0 && s_host_frame >= 0)
+			if (s_man.pad_record_replay && !s_man.replay_fn && s_mode != 0 && s_host_frame >= 0)
 			{
 				PadRec& r = s_pad_hist[static_cast<u32>(s_host_frame) % PAD_HIST][player];
 				r.frame = s_host_frame;
 				r.ret = cpuRegs.GPR.n.v0.UL[0];
 				std::memcpy(r.report, buf, PAD_REPORT);
+			}
+			return EeHooks::Action::Continue;
+		}
+
+		// Separate replay point (pad.replay): resim frames get the recorded output without running the wrapped read
+		bool s_replay_pending = false;
+		u32 s_replay_player = 0, s_replay_buf = 0;
+		u32 ReplayPlayer()
+		{
+			u32 p = 0;
+			for (const int r : s_man.replay_player_regs)
+				p += cpuRegs.GPR.r[r].UL[0];
+			return p % PAD_PLAYERS;
+		}
+		EeHooks::Action OnReplayEntry(u32)
+		{
+			if (cpuRegs.GPR.n.ra.UL[0] != s_man.replay_site + 8)
+				return EeHooks::Action::Continue;
+			const u32 player = ReplayPlayer();
+			const u32 buf = cpuRegs.GPR.r[s_man.replay_buf_reg].UL[0];
+			if (s_driving)
+			{
+				const s32 f = s_host_frame - static_cast<s32>(s_R) + static_cast<s32>(s_i);
+				const PadRec& r = s_pad_hist[static_cast<u32>(f) % PAD_HIST][player];
+				if (f >= 0 && r.frame == f)
+				{
+					std::memcpy(&eeMem->Main[buf & RAM_MASK], r.report, s_man.replay_len);
+					cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(r.ret);
+					return EeHooks::Action::Return;
+				}
+				return EeHooks::Action::Continue;
+			}
+			s_replay_player = player;
+			s_replay_buf = buf;
+			s_replay_pending = true;
+			return EeHooks::Action::Continue;
+		}
+		EeHooks::Action OnReplayReturn(u32)
+		{
+			if (!s_replay_pending)
+				return EeHooks::Action::Continue;
+			s_replay_pending = false;
+			if (s_mode != 0 && s_host_frame >= 0)
+			{
+				PadRec& r = s_pad_hist[static_cast<u32>(s_host_frame) % PAD_HIST][s_replay_player];
+				r.frame = s_host_frame;
+				r.ret = cpuRegs.GPR.n.v0.UL[0];
+				std::memcpy(r.report, &eeMem->Main[s_replay_buf & RAM_MASK], s_man.replay_len);
 			}
 			return EeHooks::Action::Continue;
 		}
@@ -1376,6 +1448,11 @@ namespace GameRollback
 			{
 				EeHooks::AddCall(s_man.pad_read_fn, OnPadRead, EeHooks::OWNER_GAME);
 				EeHooks::AddCall(s_man.pad_site + 8, OnPadReadReturn, EeHooks::OWNER_GAME);
+			}
+			if (s_man.replay_fn && s_man.replay_site)
+			{
+				EeHooks::AddCall(s_man.replay_fn, OnReplayEntry, EeHooks::OWNER_GAME);
+				EeHooks::AddCall(s_man.replay_site + 8, OnReplayReturn, EeHooks::OWNER_GAME);
 			}
 		}
 		// ---------------------------------------------------------------------------------------------------------
@@ -1931,7 +2008,7 @@ namespace GameRollback
 	void OnStateLoaded()
 	{
 		// a savestate never lands inside a re-simulation, but the driver must not carry one over either
-		s_driving = s_passthrough = s_pad_pending = false;
+		s_driving = s_passthrough = s_pad_pending = s_replay_pending = false;
 	}
 	std::string Status() { return s_status + fmt::format(" | mode {}", s_mode); }
 	void SetFileWatch(bool on) { s_watch = on; }
