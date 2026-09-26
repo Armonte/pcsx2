@@ -55,6 +55,8 @@ public:
 		u32 hot_pages = 0;           // write-protect mode: pages kept writable and compared instead
 		u64 pool_bytes = 0; // all page buffers currently allocated (live + free list)
 		u64 live_bytes = 0; // unique page buffers referenced by snapshots
+		// capture sub-step totals (ns) and count, for optimization
+		u64 cap_n = 0, cap_collect_ns = 0, cap_table_ns = 0, cap_copy_ns = 0, cap_evict_ns = 0, cap_hot_ns = 0;
 	};
 
 	// regions: EE ranges to snapshot (rounded out to 4 KiB pages). excludes: byte ranges inside
