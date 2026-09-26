@@ -366,6 +366,20 @@ namespace GameRollback
 			std::vector<RegionSpec> regions;
 			std::unordered_map<std::string, std::string> macros;
 			std::optional<Val> gate_when;
+			// session lock-down (netplay sessions only): forced branches and state-conditioned input masks
+			struct ForcedBranch
+			{
+				u32 at = 0, to = 0;
+				std::vector<std::pair<int, u32>> regs; // delay-slot effects of the taken branch (reg, value)
+			};
+			struct InputMask
+			{
+				u32 player = 0;
+				Val when;
+				u16 buttons = 0; // PadFeed layout ((b2 << 8) | b3, active-high)
+			};
+			std::vector<ForcedBranch> session_branches;
+			std::vector<InputMask> session_masks;
 			std::unordered_map<u32, u32> gate_values; // resim gates that also set $v0
 			bool exclude_thread_stacks = true;
 			VirtualStreams vs;
@@ -725,6 +739,38 @@ namespace GameRollback
 					}
 				}
 			}
+			if (Has(root, "session"))
+			{
+				static const char* rn[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5", "t6",
+					"t7", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
+				const auto se = Child(root, "session");
+				if (Has(se, "branches"))
+					for (const auto& c : Child(se, "branches").children())
+					{
+						Manifest::ForcedBranch fb;
+						fb.at = Get(c, "at", 0);
+						fb.to = Get(c, "to", 0);
+						if (Has(c, "set"))
+							for (const auto& r : Child(c, "set").children())
+							{
+								const std::string k(r.key().str, r.key().len);
+								for (int i = 1; i < 32; i++)
+									if (k == rn[i])
+										fb.regs.emplace_back(i, static_cast<u32>(std::strtoul(std::string(r.val().str, r.val().len).c_str(), nullptr, 0)));
+							}
+						if (fb.at && fb.to)
+							m->session_branches.push_back(std::move(fb));
+					}
+				if (Has(se, "input_masks"))
+					for (const auto& c : Child(se, "input_masks").children())
+					{
+						Manifest::InputMask im;
+						im.player = Get(c, "player", 0);
+						im.when = ParseVal(Child(c, "when"));
+						im.buttons = static_cast<u16>(Get(c, "buttons", 0));
+						m->session_masks.push_back(std::move(im));
+					}
+			}
 			if (Has(root, "virtual_streams"))
 			{
 				const auto v = Child(root, "virtual_streams");
@@ -991,6 +1037,7 @@ namespace GameRollback
 
 		// netplay (NetBridge): every player's report is rebuilt from the 6-byte wire input, identically on every peer
 		bool s_net = false;
+		void RemoveSessionLocks();
 		NetBridge::Plan s_net_plan;
 		std::vector<s32> s_net_resim_saves; // save index per re-simulated step
 		s32 s_net_fwd_save = -1;
@@ -1352,6 +1399,7 @@ namespace GameRollback
 				Console.Error("GameRollback: netcode stopped (%s)", NetBridge::Status().c_str());
 				NetBridge::Stop();
 				s_net = false;
+				RemoveSessionLocks();
 				return false;
 			}
 			for (const s32 id : s_net_plan.pre_saves) // the session's frame-0 save: the state right now
@@ -1471,6 +1519,56 @@ namespace GameRollback
 			}
 			return EeHooks::Action::Continue;
 		}
+		// Session lock-down (manifest `session`, netplay only): a forced branch is taken exactly like the original branch
+		// would be (target + its delay-slot register effects); installed identically on every peer.
+		std::vector<u32> s_session_hooks;
+		void InstallSessionLocks()
+		{
+			for (const auto& fb : s_man.session_branches)
+			{
+				const u32 to = fb.to;
+				const auto regs = fb.regs;
+				EeHooks::AddCall(fb.at, [to, regs](u32) {
+					for (const auto& [r, v] : regs)
+						cpuRegs.GPR.r[r].UD[0] = static_cast<u64>(static_cast<s64>(static_cast<s32>(v)));
+					cpuRegs.pc = to;
+					return EeHooks::Action::Jump;
+				}, EeHooks::OWNER_GAME);
+				s_session_hooks.push_back(fb.at);
+			}
+			if (!s_man.session_branches.empty() || !s_man.session_masks.empty())
+				Console.WriteLn("GameRollback: session locks on (%zu branches, %zu input masks)", s_man.session_branches.size(),
+					s_man.session_masks.size());
+		}
+		void RemoveSessionLocks()
+		{
+			for (const u32 a : s_session_hooks)
+				EeHooks::Remove(a);
+			s_session_hooks.clear();
+		}
+		// Input masks are evaluated on the state the read happens in (forward and re-simulated alike), so they are part of
+		// the deterministic simulation: the released bits are forced in the report the game gets.
+		void ApplySessionMasks(u32 player, u8* buf)
+		{
+			for (const auto& im : s_man.session_masks)
+			{
+				if (im.player != player)
+					continue;
+				s64 v = 0;
+				if (!Eval(im.when, 0, &v) || v == 0)
+					continue;
+				buf[2] |= static_cast<u8>(im.buttons >> 8); // active-low: set = released
+				buf[3] |= static_cast<u8>(im.buttons & 0xFF);
+				if ((buf[1] & 0x0F) >= 9)
+				{
+					static constexpr u16 PRESS_BITS[12] = {0x2000, 0x8000, 0x1000, 0x4000, 0x10, 0x20, 0x40, 0x80, 0x4, 0x8, 0x1, 0x2};
+					for (u32 i = 0; i < 12; i++)
+						if (im.buttons & PRESS_BITS[i])
+							buf[8 + i] = 0;
+				}
+			}
+		}
+
 		EeHooks::Action OnPadReadReturn(u32)
 		{
 			if (!s_pad_pending)
@@ -1488,6 +1586,8 @@ namespace GameRollback
 					std::memcpy(buf, r.report, PAD_REPORT);
 					cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(r.ret);
 				}
+				if (s_net)
+					ApplySessionMasks(player, buf);
 				return EeHooks::Action::Continue;
 			}
 			cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(RollbackDevice::HandleSyscall(
@@ -1503,6 +1603,7 @@ namespace GameRollback
 					std::memcpy(buf, r.report, PAD_REPORT);
 					cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(r.ret);
 				}
+				ApplySessionMasks(player, buf);
 				return EeHooks::Action::Continue;
 			}
 			if (s_man.pad_record_replay && !s_man.replay_fn && s_mode != 0 && s_host_frame >= 0)
@@ -2150,6 +2251,7 @@ namespace GameRollback
 			{
 				NetBridge::Stop();
 				s_net = false;
+				RemoveSessionLocks();
 				DoStop();
 			}
 			if (r.net_start && s_attached)
@@ -2183,6 +2285,7 @@ namespace GameRollback
 				{
 					DoStart(static_cast<int>(RollbackDevice::Mode::Netplay), 8); // rollback depth fixed at 8
 					s_net = true;
+					InstallSessionLocks();
 					s_net_fwd_save = -1;
 					s_net_base_set = false;
 					s_net_frame_base = 0;
