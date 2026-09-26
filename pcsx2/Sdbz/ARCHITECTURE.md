@@ -239,6 +239,14 @@ Every new mechanism is A/B-tested against the previous one (interleaved pairs, m
     - EeHooks invalidation was queued via `RunOnCPUThread`, so after a stop/start the next frame ran stale blocks without the new hooks. It is now synchronous on the EE thread, like the recompiler's own self-modifying-code clears.
   - **P2P pacing.** Each frame sleeps `(pace_factor - 1) * 16.7 ms`, clamped at 1.5.
   - **Harness note.** Stop the mashers before `load_setup`. The EE runs part of a frame before `on_state_load`'s commands take effect, so a masher read there changes the start state.
-  - **Open:**
-    - a real two-machine run (only localhost so far);
-    - launcher integration (PovertyCaster PS2 host game family, env contract `PS2RB_*` including `PS2RB_NET=replay|journal` and `PS2RB_JOURNAL`).
+  - **Launcher integration done.** `povertycaster.exe` has a PS2 host game family (`--game-id fuc|sdbz`, branch `ps2-bridge` d90778eb). It pairs and handshakes, then boots `pcsx2-qt.exe -statefile <p2s> <iso>` with the `PS2RB_*` environment. `FUC/tools/launcher_loopback_test.sh fuc|sdbz` runs the real `--host`/`--join` pair on loopback. It then plays both of the launcher's `.pcrep` files through the same boot path (`PS2RB_NET=replay`, `tools/launcher_replay_test.sh`).
+
+    | Game | Live session | Launcher recordings played back |
+    |---|---|---|
+    | FUC | 0 desync, 2531 compares | 79/79 checks ok, both peers |
+    | SDBZ | 0 desync, 2609 compares | 82/82 checks ok, both peers |
+
+    Two fixes came out of this:
+    - Attaching an already-attached manifest is a no-op, and there is no reload or re-attach during netplay. Before, a Lua attach re-applied the manifest mid-match on one peer and caused a desync.
+    - Auto-start runs at the first state load, so the session starts at the savestate's first frame boundary.
+  - **Open:** a real two-machine run (only loopback so far).
