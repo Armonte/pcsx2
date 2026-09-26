@@ -4,6 +4,7 @@
 #include "Sdbz/PcInput.h"
 
 #include "Host.h"
+#include "ImGui/ImGuiManager.h"
 #include "VMManager.h"
 #include "common/Console.h"
 #include "common/FileSystem.h"
@@ -19,6 +20,9 @@
 #include "common/RedtapeWindows.h"
 #endif
 
+#include "imgui.h"
+
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -213,8 +217,21 @@ namespace PcInput
 		if (!s_binder_open.load())
 			return;
 		std::lock_guard slk(s_session_mtx);
-		if (s_session && s_binder)
+		if (!s_session || !s_binder)
+			return;
+		// the pchost F4 host window: a centred, title-less 640x480 pane (x overlay scale) clamped to the display
+		// (main viewport origin), so the skin (which draws into the current window) sits in the middle
+		const ImGuiIO& io = ImGui::GetIO();
+		const float sc = ImGuiManager::GetGlobalScale();
+		const float w = std::min(io.DisplaySize.x, 640.0f * sc), h = std::min(io.DisplaySize.y, 480.0f * sc);
+		const ImVec2 o = ImGui::GetMainViewport()->Pos;
+		ImGui::SetNextWindowPos(ImVec2(o.x + (io.DisplaySize.x - w) * 0.5f, o.y + (io.DisplaySize.y - h) * 0.5f), ImGuiCond_Always);
+		ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
+		constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+										   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings;
+		if (ImGui::Begin("##pcbinder", nullptr, flags))
 			cb::imgui::drawBinder(*s_binder, *s_session);
+		ImGui::End();
 	}
 	std::string Status() { return s_status; }
 } // namespace PcInput
