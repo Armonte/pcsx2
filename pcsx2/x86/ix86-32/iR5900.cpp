@@ -1580,6 +1580,7 @@ static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
 		// if (resimulating) { pc = ra; exit block } -- one byte compare on the fast path
 		xCMP(ptr8[EeHooks::ResimFlag()], 0);
 		xForwardJZ32 run;
+		xADD(ptr64[EeHooks::GateReturnCounter()], 1);
 		xMOV(eax, ptr32[&cpuRegs.GPR.n.ra.UL[0]]);
 		xMOV(ptr32[&cpuRegs.pc], eax);
 		iBranchTest();
