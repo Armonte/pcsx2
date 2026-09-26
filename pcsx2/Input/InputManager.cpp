@@ -1905,6 +1905,9 @@ void InputManager::ReloadBindings(SettingsInterface& si, SettingsInterface& bind
 	}
 	else
 	{
+		// nav_si is always the base config, so per-game profiles can't affect UI navigation.
+		const LayeredSettingsInterface& lsi = static_cast<LayeredSettingsInterface&>(si);
+		SettingsInterface* base_si = lsi.GetLayer(LayeredSettingsInterface::LAYER_BASE);
 		for (u32 pad = 0; pad < Pad::NUM_CONTROLLER_PORTS; pad++)
 			AddPadBindings(binding_si, pad, is_binding_profile, base_si);
 	}
