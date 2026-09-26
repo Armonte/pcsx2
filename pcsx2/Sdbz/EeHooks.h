@@ -6,6 +6,7 @@
 #include "common/Pcsx2Defs.h"
 
 #include <functional>
+#include <vector>
 
 // Emulator-level EE code hooks: game instrumentation without patching game memory (no code caves, nothing in
 // savestates, no per-game assembly). A hooked address always starts its own recompiled block; the recompiler emits
@@ -48,12 +49,16 @@ namespace EeHooks
 	void AddResimGate(u32 pc, Owner owner = OWNER_SCRIPT);
 	void AddSkipCall(u32 site, bool always, Owner owner = OWNER_SCRIPT);
 	void AddCall(u32 pc, Handler handler, Owner owner = OWNER_SCRIPT);
+	// Same, but the handler only runs when $ra is one of ra_filter (callers' return addresses): the comparisons are
+	// emitted natively, so other callers of a hot function pay a few compares, not a C++ call.
+	void AddCallFiltered(u32 pc, Handler handler, std::vector<u32> ra_filter, Owner owner = OWNER_SCRIPT);
 	void Remove(u32 pc);
 	void Clear(Owner owner = OWNER_SCRIPT);
 
 	// recompiler / interpreter side (EE thread)
 	Kind Lookup(u32 pc);          // cheap: page bitmap first
-	Action RunCall(u32 pc);       // Kind::Call
+	Action RunCall(u32 pc);       // Kind::Call (applies the $ra filter)
+	std::vector<u32> CallFilter(u32 pc); // empty = no filter
 	const u8* ResimFlag();        // byte the ResimGate tests (nonzero while re-simulating)
 	u64* GateReturnCounter();     // incremented natively each time a ResimGate returns early
 	u64 GateReturns();

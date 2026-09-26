@@ -775,10 +775,19 @@ namespace GameRollback
 					return EeHooks::Action::Return;
 				}, EeHooks::OWNER_GAME);
 			}
-			if (s_man.rng_float)
-				EeHooks::AddCall(s_man.rng_float, OnRng, EeHooks::OWNER_GAME);
-			if (s_man.rng_int)
-				EeHooks::AddCall(s_man.rng_int, OnRng, EeHooks::OWNER_GAME);
+			// sound-only draws: only those callers reach the handler (native $ra filter), unless call tracing wants all
+			std::vector<u32> callers;
+			for (const u32 site : s_man.sound_sites)
+				callers.push_back(site + 8);
+			for (const u32 fn : {s_man.rng_float, s_man.rng_int})
+			{
+				if (!fn)
+					continue;
+				if (RollbackDevice::TraceOn())
+					EeHooks::AddCall(fn, OnRng, EeHooks::OWNER_GAME);
+				else
+					EeHooks::AddCallFiltered(fn, OnRng, callers, EeHooks::OWNER_GAME);
+			}
 		}
 		void InstallTraceHooks()
 		{

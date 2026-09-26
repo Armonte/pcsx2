@@ -36,6 +36,7 @@
 #endif
 
 #ifdef TRACE_BLOCKS
+#include <deque>
 #include <optional>
 #include <zlib.h>
 #endif
@@ -1598,12 +1599,30 @@ static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
 	}
 	else if (kind == EeHooks::Kind::Call)
 	{
+		// optional native $ra filter: only listed callers reach the C++ handler
+		const std::vector<u32> filter = EeHooks::CallFilter(startpc);
+		std::deque<xForwardJE32> hits;
+		std::optional<xForwardJump32> miss;
+		if (!filter.empty())
+		{
+			xMOV(eax, ptr32[&cpuRegs.GPR.n.ra.UL[0]]);
+			for (const u32 r : filter)
+			{
+				xCMP(eax, r);
+				hits.emplace_back();
+			}
+			miss.emplace();
+			for (xForwardJE32& h : hits)
+				h.SetTarget();
+		}
 		xMOV(ptr32[&cpuRegs.pc], startpc);
 		xFastCall((void*)recEeHookCall, startpc);
 		xTEST(eax, eax);
 		xForwardJZ32 run;
 		iBranchTest();
 		run.SetTarget();
+		if (miss)
+			miss->SetTarget();
 	}
 }
 

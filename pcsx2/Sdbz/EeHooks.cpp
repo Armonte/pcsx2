@@ -23,6 +23,7 @@ namespace EeHooks
 			Kind kind = Kind::None;
 			Handler handler;
 			Owner owner = OWNER_SCRIPT;
+			std::vector<u32> ra_filter;
 		};
 		std::mutex s_mtx;
 		std::unordered_map<u32, Hook> s_hooks;
@@ -53,6 +54,10 @@ namespace EeHooks
 
 	void AddResimGate(u32 pc, Owner owner) { Set(pc, {Kind::ResimGate, {}, owner}); }
 	void AddCall(u32 pc, Handler handler, Owner owner) { Set(pc, {Kind::Call, std::move(handler), owner}); }
+	void AddCallFiltered(u32 pc, Handler handler, std::vector<u32> ra_filter, Owner owner)
+	{
+		Set(pc, {Kind::Call, std::move(handler), owner, std::move(ra_filter)});
+	}
 	void AddSkipCall(u32 site, bool always, Owner owner)
 	{
 		Set(site, {always ? Kind::SkipCallAlways : Kind::SkipCallResim, {}, owner});
@@ -109,9 +114,25 @@ namespace EeHooks
 			const auto it = s_hooks.find(Key(pc));
 			if (it == s_hooks.end() || it->second.kind != Kind::Call)
 				return Action::Continue;
+			if (!it->second.ra_filter.empty())
+			{
+				const u32 ra = cpuRegs.GPR.n.ra.UL[0];
+				bool hit = false;
+				for (const u32 r : it->second.ra_filter)
+					hit |= (r == ra);
+				if (!hit)
+					return Action::Continue;
+			}
 			h = it->second.handler;
 		}
 		return h ? h(pc) : Action::Continue;
+	}
+
+	std::vector<u32> CallFilter(u32 pc)
+	{
+		std::lock_guard lk(s_mtx);
+		const auto it = s_hooks.find(Key(pc));
+		return it == s_hooks.end() ? std::vector<u32>{} : it->second.ra_filter;
 	}
 
 	const u8* ResimFlag() { return RollbackDevice::ResimulatingFlag(); }
