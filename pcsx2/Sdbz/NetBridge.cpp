@@ -239,8 +239,6 @@ namespace NetBridge
 			if (s_journal)
 				std::fprintf(s_journal, "# ps2rb host schedule journal: P plan, S step (frame rb saveid 12 input bytes), C checksum\n");
 		}
-		s_cfg = cfg;
-		s_host = std::move(host);
 		s_remote = cfg.remote;
 		s_replay = cfg.replay_path;
 		s_game = cfg.game_id;
