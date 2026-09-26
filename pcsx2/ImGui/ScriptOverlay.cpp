@@ -668,6 +668,27 @@ namespace ScriptBridge
 			WritePatchWord(addr, word);
 		}, false);
 	}
+	void PatchMany(const std::vector<std::pair<uint32_t, uint32_t>>& words, bool persistent) {
+		Host::RunOnCPUThread([words, persistent]() {
+			for (const auto& [addr, word] : words) {
+				auto [it, inserted] = s_lua_patches.try_emplace(addr, LuaPatch{memRead32(addr), word, persistent});
+				it->second.patched = word;
+				it->second.persistent = it->second.persistent || persistent;
+				WritePatchWord(addr, word);
+			}
+		}, false);
+	}
+	void UnpatchMany(const std::vector<uint32_t>& addrs) {
+		Host::RunOnCPUThread([addrs]() {
+			for (const uint32_t addr : addrs) {
+				auto it = s_lua_patches.find(addr);
+				if (it == s_lua_patches.end())
+					continue;
+				WritePatchWord(addr, it->second.orig);
+				s_lua_patches.erase(it);
+			}
+		}, false);
+	}
 	void UnpatchCode(uint32_t addr) {
 		Host::RunOnCPUThread([addr]() {
 			auto it = s_lua_patches.find(addr);
