@@ -22,6 +22,8 @@ namespace NetBridge
 		SyncTest = 0, // GekkoNet stress session: 8-deep rollback every frame, checksum compare
 		Local = 1,
 		P2P = 2,
+		Replay = 3,        // play a .pcrep (replay_path): recorded confirmed inputs + CHECK compares
+		JournalReplay = 4, // play a host schedule journal (journal_path) offline: same plans, checksum compare
 	};
 	struct Config
 	{
@@ -30,7 +32,8 @@ namespace NetBridge
 		std::string remote;   // "ip:port"
 		u16 port = 7000;
 		u8 input_delay = 0;
-		std::string replay_path; // .pcrep to record (empty = none)
+		std::string replay_path; // .pcrep to record (P2P/SyncTest/Local) or to play (Replay)
+		std::string journal_path; // host schedule journal: record (sessions) or play (JournalReplay)
 		std::string game_id;
 	};
 	struct Host
@@ -61,4 +64,5 @@ namespace NetBridge
 	int Frame(Plan* plan);
 	void ResolveSave(s32 save_index, u32 checksum);
 	std::string Status();
+	float PaceFactor(); // P2P: suggested frame-time multiplier (1.0 nominal)
 } // namespace NetBridge

@@ -218,12 +218,13 @@ namespace
 			return std::make_tuple(ok, err);
 		});
 		rd.set_function("manifest_stop", []() { GameRollback::Stop(); });
-		// netplay via PovertyCaster: net_start(mode, local_player, remote, port, delay[, replay]) mode 0 synctest / 1 local / 2 p2p
+		// netplay via PovertyCaster: net_start(mode, local_player, remote, port, delay[, replay[, journal]])
+		//   mode 0 synctest / 1 local / 2 p2p / 3 play .pcrep (replay) / 4 offline journal replay (journal)
 		rd.set_function("net_start", [](int mode, int local_player, const std::string& remote, uint32_t port, uint32_t delay,
-										 sol::optional<std::string> replay) {
+										 sol::optional<std::string> replay, sol::optional<std::string> journal) {
 			std::string err;
 			const bool ok = GameRollback::NetStart(mode, local_player, remote, static_cast<u16>(port), static_cast<u8>(delay),
-				replay.value_or(""), &err);
+				replay.value_or(""), journal.value_or(""), &err);
 			return std::make_tuple(ok, err);
 		});
 		rd.set_function("net_stop", []() { GameRollback::NetStop(); });
