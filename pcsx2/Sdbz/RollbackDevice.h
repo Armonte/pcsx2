@@ -70,6 +70,7 @@ namespace RollbackDevice
 	// True while the game re-simulates rolled-back frames (between a rollback and CUR_PRE). Emulated time keeps
 	// running, but host-only per-vsync work (frame pacing, presenting, input polling, overlay capture) is skipped.
 	bool IsResimulating();
+	void OnPresentVSync(); // CPU thread, at each presented vsync (after frame limiting): pacing stats
 	// EE memory was replaced by a savestate load (CPU thread): every snapshot describes the old memory. Keeps the
 	// mode and configuration; the ring is rebuilt from the loaded state at the next frame.
 	void OnStateLoaded();

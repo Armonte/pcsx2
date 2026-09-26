@@ -481,6 +481,30 @@ namespace RollbackDevice
 	void SetBenchEvery(u32 frames) { s_bench_every = std::max(frames, 1u); }
 	bool IsResimulating() { return s_resimulating.load(std::memory_order_relaxed); }
 
+	// Presentation pacing: host time between consecutive presented vsyncs (after the frame limiter) -- what the
+	// player sees. Counted only while the device runs.
+	void OnPresentVSync()
+	{
+		std::lock_guard lk(s_mtx);
+		if (s_mode == Mode::Off)
+		{
+			s_pace_started = false;
+			return;
+		}
+		if (s_pace_started)
+		{
+			const u64 us = static_cast<u64>(s_pace_timer.GetTimeNanoseconds() / 1000.0);
+			s_pace_hist[std::min<u64>(us / 1000, 100)]++;
+			s_pace_frames++;
+			s_pace_sum_us += us;
+			s_pace_max_us = std::max(s_pace_max_us, us);
+			s_pace_over += (us > 18000) ? 1 : 0;  // a 60 Hz present late by more than ~1.3 ms (visible hitch)
+			s_pace_over2 += (us > 34000) ? 1 : 0; // a whole frame dropped
+		}
+		s_pace_timer.Reset();
+		s_pace_started = true;
+	}
+
 	void OnStateLoaded()
 	{
 		Mode mode;
@@ -550,18 +574,6 @@ namespace RollbackDevice
 				}
 				EndNormalSimTrace(); // (normal sim without a render section this frame)
 				RbProfiler::SetPhase(RbProfiler::PH_FRAME_BEGIN);
-				if (s_pace_started)
-				{
-					const u64 us = static_cast<u64>(s_pace_timer.GetTimeNanoseconds() / 1000.0);
-					s_pace_hist[std::min<u64>(us / 1000, 100)]++;
-					s_pace_frames++;
-					s_pace_sum_us += us;
-					s_pace_max_us = std::max(s_pace_max_us, us);
-					s_pace_over += (us > 16700) ? 1 : 0;   // missed a 60 Hz frame
-					s_pace_over2 += (us > 33400) ? 1 : 0;  // missed two
-				}
-				s_pace_timer.Reset();
-				s_pace_started = true;
 				s_frame++;
 				s_frames++;
 				RecordInput(s_frame);
@@ -803,7 +815,7 @@ namespace RollbackDevice
 				acc += s_pace_hist[b];
 				if (acc * 100 >= s_pace_frames * 99) { p99 = b; break; }
 			}
-			s += fmt::format(" | frame pacing: avg {:.2f} ms, p99 {} ms, max {:.1f} ms, >16.7 ms {} ({:.1f}%), >33.4 ms {}",
+			s += fmt::format(" | present pacing: avg {:.2f} ms, p99 {} ms, max {:.1f} ms, late >18 ms {} ({:.1f}%), dropped >34 ms {}",
 				s_pace_sum_us / 1000.0 / s_pace_frames, p99, s_pace_max_us / 1000.0, s_pace_over,
 				100.0 * s_pace_over / s_pace_frames, s_pace_over2);
 		}
