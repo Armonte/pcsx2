@@ -23,7 +23,10 @@
 #include <map>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <chrono>
 #include <mutex>
+#include <thread>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -960,6 +963,37 @@ namespace GameRollback
 		// dynamic ranges
 		u64 s_dyn_sig = 0;
 
+		// watchdog: a thread that reports where the EE is when frame boundaries stop arriving while rollback is on
+		std::atomic<u64> s_heartbeat{0};
+		std::atomic<bool> s_watchdog_run{false};
+		std::thread s_watchdog;
+		void WatchdogLoop()
+		{
+			u64 last = s_heartbeat.load();
+			int stale = 0;
+			bool reported = false;
+			while (s_watchdog_run.load())
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(500));
+				const u64 hb = s_heartbeat.load();
+				if (hb != last || !s_attached)
+				{
+					last = hb;
+					stale = 0;
+					reported = false;
+					continue;
+				}
+				if (++stale >= 6 && !reported) // 3 s without a frame boundary
+				{
+					reported = true;
+					Console.Error("GameRollback watchdog: no frame boundary for 3 s: EE pc %08X ra %08X sp %08X | driving %d step %zu i %u/%u "
+								  "passthrough %d mode %d resim %d",
+						cpuRegs.pc, cpuRegs.GPR.n.ra.UL[0], cpuRegs.GPR.n.sp.UL[0], s_driving, s_step, s_i, s_R, s_passthrough,
+						s_mode, RollbackDevice::IsResimulating());
+				}
+			}
+		}
+
 		// hot reload
 		bool s_watch = true;
 		s64 s_mtime = 0;
@@ -1134,6 +1168,7 @@ namespace GameRollback
 
 		EeHooks::Action OnSimTickSite(u32)
 		{
+			s_heartbeat.fetch_add(1, std::memory_order_relaxed);
 			if (s_passthrough)
 			{
 				s_passthrough = false;
@@ -1164,6 +1199,7 @@ namespace GameRollback
 
 		EeHooks::Action OnReturnAddr(u32)
 		{
+			s_heartbeat.fetch_add(1, std::memory_order_relaxed);
 			if (!s_driving)
 			{
 				Console.Error("GameRollback: return address reached outside re-simulation (pc %08X ra %08X)", cpuRegs.pc,
@@ -1757,6 +1793,8 @@ namespace GameRollback
 			s_mtime = MTime(path);
 			InstallAttachHooks();
 			s_attached = true;
+			if (!s_watchdog_run.exchange(true))
+				s_watchdog = std::thread(WatchdogLoop), s_watchdog.detach();
 			s_status = fmt::format("gamerb: {} ({})", s_man.name, path);
 			Console.WriteLn("GameRollback: loaded %s (%zu steps, %zu gates, %zu skips)", path.c_str(), s_man.steps.size(),
 				s_man.resim_gates.size(), s_man.resim_skips.size());
