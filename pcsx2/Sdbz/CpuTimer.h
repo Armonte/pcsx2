@@ -51,9 +51,9 @@ private:
 			Common::Timer t;
 			ULONG64 c0 = 0, c1 = 0;
 			QueryThreadCycleTime(GetCurrentThread(), &c0);
-			while (t.GetTimeMicroseconds() < 20000.0) {}
+			while (t.GetTimeNanoseconds() < 20000000.0) {}
 			QueryThreadCycleTime(GetCurrentThread(), &c1);
-			return static_cast<double>(c1 - c0) / t.GetTimeMicroseconds();
+			return static_cast<double>(c1 - c0) / (t.GetTimeNanoseconds() / 1000.0);
 		}();
 		return cpu;
 	}
