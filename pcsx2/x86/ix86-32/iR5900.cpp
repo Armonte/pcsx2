@@ -4,6 +4,7 @@
 #include "Common.h"
 #include "CDVD/CDVD.h"
 #include "DebugTools/Breakpoints.h"
+#include "Sdbz/EeHooks.h"
 #include "Elfheader.h"
 #include "GS.h"
 #include "Host.h"
@@ -1562,6 +1563,39 @@ void dynarecCheckBreakpoint()
 	recExitExecution();
 }
 
+// EE hook at a block entry (Sdbz/EeHooks.h). Nothing is cached in host registers here, so the guest state is all in
+// cpuRegs: a hook may read and change it, and "return from the guest function" is pc = $ra + the normal block exit.
+static u32 recEeHookCall(u32 pc)
+{
+	if (EeHooks::RunCall(pc) != EeHooks::Action::Return)
+		return 0;
+	cpuRegs.pc = cpuRegs.GPR.n.ra.UL[0];
+	return 1;
+}
+
+static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
+{
+	if (kind == EeHooks::Kind::ResimGate)
+	{
+		// if (resimulating) { pc = ra; exit block } -- one byte compare on the fast path
+		xCMP(ptr8[EeHooks::ResimFlag()], 0);
+		xForwardJZ32 run;
+		xMOV(eax, ptr32[&cpuRegs.GPR.n.ra.UL[0]]);
+		xMOV(ptr32[&cpuRegs.pc], eax);
+		iBranchTest();
+		run.SetTarget();
+	}
+	else if (kind == EeHooks::Kind::Call)
+	{
+		xMOV(ptr32[&cpuRegs.pc], startpc);
+		xFastCall((void*)recEeHookCall, startpc);
+		xTEST(eax, eax);
+		xForwardJZ32 run;
+		iBranchTest();
+		run.SetTarget();
+	}
+}
+
 void dynarecMemcheck(size_t i)
 {
 	if (CBreakPoints::CheckSkipFirst(BREAKPOINT_EE, pc) != 0)
@@ -2333,6 +2367,13 @@ static void recRecompile(const u32 startpc)
 			break;
 		}
 
+		// an EE hook address always starts its own block (the hook is emitted at the block entry)
+		if (i != startpc && EeHooks::Lookup(i) != EeHooks::Kind::None)
+		{
+			s_nEndBlock = i;
+			break;
+		}
+
 		if (i != startpc) // Block size truncation checks.
 		{
 			if ((i & 0xffc) == 0x0) // breaks blocks at 4k page boundaries
@@ -2617,6 +2658,8 @@ StartRecomp:
 	{
 		// Finally: Generate x86 recompiled code!
 		g_pCurInstInfo = s_pInstCache;
+		if (const EeHooks::Kind hook = EeHooks::Lookup(startpc); hook != EeHooks::Kind::None)
+			recEmitEeHook(startpc, hook);
 		while (!g_branch && pc < s_nEndBlock)
 		{
 #ifdef DUMP_BLOCKS
