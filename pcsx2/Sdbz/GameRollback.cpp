@@ -2206,6 +2206,42 @@ namespace GameRollback
 		s_req.net_stop = true;
 		s_req_pending = true;
 	}
+	// Launcher contract (PovertyCaster PS2 host): environment variables read once, at the first presented frame
+	//   PS2RB_MANIFEST  manifest path (attached automatically)
+	//   PS2RB_NET       synctest | p2p        (netplay starts at the next frame boundary)
+	//   PS2RB_LOCAL     local player 0/1       PS2RB_REMOTE  ip:port   PS2RB_PORT  local UDP port   PS2RB_DELAY  frames
+	//   PS2RB_REPLAY    .pcrep to record
+	void PollAutoStart()
+	{
+		static bool done = false;
+		if (done)
+			return;
+		done = true;
+		const char* man = std::getenv("PS2RB_MANIFEST");
+		if (!man || !*man)
+			return;
+		std::string err;
+		if (!Attach(man, &err))
+		{
+			Console.Error("GameRollback: PS2RB_MANIFEST %s: %s", man, err.c_str());
+			return;
+		}
+		const char* net = std::getenv("PS2RB_NET");
+		if (!net || !*net)
+			return;
+		auto env = [](const char* k, const char* def) {
+			const char* v = std::getenv(k);
+			return std::string(v && *v ? v : def);
+		};
+		const int mode = std::string(net) == "p2p" ? 2 : std::string(net) == "local" ? 1 : 0;
+		if (!NetStart(mode, std::atoi(env("PS2RB_LOCAL", "0").c_str()), env("PS2RB_REMOTE", ""),
+				static_cast<u16>(std::atoi(env("PS2RB_PORT", "7000").c_str())),
+				static_cast<u8>(std::atoi(env("PS2RB_DELAY", "2").c_str())), env("PS2RB_REPLAY", ""), &err))
+			Console.Error("GameRollback: PS2RB_NET %s: %s", net, err.c_str());
+		else
+			Console.WriteLn("GameRollback: netplay %s requested from the environment", net);
+	}
+
 	std::string NetStatus() { return NetBridge::Status() + fmt::format(" | refused rollbacks {}", s_net_refused); }
 	void OnStateLoaded()
 	{

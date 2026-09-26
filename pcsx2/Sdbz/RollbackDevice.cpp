@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "Sdbz/RollbackDevice.h"
+#include "Sdbz/GameRollback.h"
 #include "Sdbz/PageSnapshotRing.h"
 #include "Sdbz/RbProfiler.h"
 #include "Sdbz/PadFeed.h"
@@ -720,6 +721,7 @@ namespace RollbackDevice
 	// player sees. Counted only while the device runs.
 	void OnPresentVSync()
 	{
+		GameRollback::PollAutoStart();
 		std::lock_guard lk(s_mtx);
 		if (s_mode == Mode::Off)
 		{

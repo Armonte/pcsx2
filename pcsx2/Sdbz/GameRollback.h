@@ -39,6 +39,7 @@ namespace GameRollback
 		std::string* error = nullptr);
 	void NetStop();
 	std::string NetStatus();
+	void PollAutoStart(); // CPU thread, each presented frame: launcher environment (PS2RB_*), once
 
 	std::string Status();
 	void SetFileWatch(bool on);
