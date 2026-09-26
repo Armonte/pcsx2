@@ -11,6 +11,7 @@
 #include <array>
 #include <atomic>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -32,10 +33,19 @@ namespace EeHooks
 
 		u32 Key(u32 pc) { return pc & 0x01FFFFFCu; }
 
-		// Drop the recompiled code containing pc so the next execution recompiles with the current hook set.
+		std::atomic<std::thread::id> s_ee_thread{}; // the thread hooks are compiled and dispatched on
+
+		// Drop the recompiled code containing pc so the next execution recompiles with the current hook set. On the EE
+		// thread (hook handlers install/remove hooks, e.g. a rollback start) the drop is immediate, like the
+		// recompiler's own self-modifying-code clears: a queued clear would let the next frame run stale blocks
+		// without the new hooks (a session started twice in one boot diverged on exactly that frame).
 		void Invalidate(u32 pc)
 		{
-			if (VMManager::HasValidVM())
+			if (!VMManager::HasValidVM())
+				return;
+			if (std::this_thread::get_id() == s_ee_thread.load(std::memory_order_relaxed))
+				Cpu->Clear(pc & ~3u, 1);
+			else
 				Host::RunOnCPUThread([pc]() { Cpu->Clear(pc & ~3u, 1); });
 		}
 
@@ -106,6 +116,7 @@ namespace EeHooks
 
 	Kind Lookup(u32 pc)
 	{
+		s_ee_thread.store(std::this_thread::get_id(), std::memory_order_relaxed); // Lookup runs at EE block compile
 		const u32 k = Key(pc);
 		if (s_page_count[k >> 12].load(std::memory_order_relaxed) == 0)
 			return Kind::None;
