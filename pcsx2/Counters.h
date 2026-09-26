@@ -114,6 +114,11 @@ struct SyncCounter
 extern const char* ReportVideoMode();
 extern const char* ReportInterlaceMode();
 extern Counter counters[4];
+
+// Rollback re-simulation: park hsync/vsync while re-simulating, unpark shifted by the cycles used.
+extern void rcntRollbackPark();
+extern void rcntRollbackUnpark();
+extern bool rcntRollbackParked();
 extern SyncCounter hsyncCounter;
 extern SyncCounter vsyncCounter;
 
