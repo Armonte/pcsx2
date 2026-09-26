@@ -190,6 +190,7 @@ namespace
 		// in-process sampling profiler of the EE thread, tagged by rollback phase (Windows)
 		rd.set_function("prof_start", [](sol::optional<uint32_t> hz) { RbProfiler::Start(hz.value_or(2000)); });
 		rd.set_function("prof_stop", []() { RbProfiler::Stop(); });
+		rd.set_function("set_bench_every", [](uint32_t k) { RollbackDevice::SetBenchEvery(k); });
 		// Deterministic controller feed (player 1-based; buttons = game layout, see PadFeed.h):
 		//   pad_off(p) | pad_const(p, buttons[, lx, ly, rx, ry]) | pad_seq(p, {{buttons, frames[, lx, ly, rx, ry]}, ...}[, loop])
 		//   pad_mash(p, seed, mask, min_hold, max_hold) | pad_status()

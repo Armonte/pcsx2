@@ -467,7 +467,9 @@ namespace RollbackDevice
 	namespace
 	{
 		std::atomic<bool> s_resimulating{false};
+		u32 s_bench_every = 10;
 	}
+	void SetBenchEvery(u32 frames) { s_bench_every = std::max(frames, 1u); }
 	bool IsResimulating() { return s_resimulating.load(std::memory_order_relaxed); }
 
 	void OnStateLoaded()
@@ -566,7 +568,9 @@ namespace RollbackDevice
 					s_stable_hash[static_cast<u32>(s_frame) % INPUT_HISTORY] = h;
 				}
 
-				if (s_mode != Mode::SyncTest || s_frame - s_first_frame < static_cast<s32>(s_rollback))
+				if ((s_mode != Mode::SyncTest && s_mode != Mode::Bench) || s_frame - s_first_frame < static_cast<s32>(s_rollback))
+					return 0;
+				if (s_mode == Mode::Bench && (s_frame % static_cast<s32>(s_bench_every)) != 0)
 					return 0;
 				for (s32 f = s_frame - static_cast<s32>(s_rollback) + 1; f <= s_frame; f++)
 				{
@@ -593,7 +597,8 @@ namespace RollbackDevice
 				s_rollback_timer.Reset();
 				Common::Timer t;
 				RbProfiler::SetPhase(RbProfiler::PH_SYNCTEST);
-				TakeReference();
+				if (s_mode == Mode::SyncTest)
+					TakeReference();
 				s_sum_ref_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
 				const s32 target = s_frame - static_cast<s32>(s_rollback);
 				t.Reset();
@@ -757,7 +762,7 @@ namespace RollbackDevice
 		const u64 avg = s_rollbacks ? s_sum_rollback_us / s_rollbacks : 0;
 		std::string s = fmt::format("rbdev: {} R={} frame {} | rollbacks {} (last {} us, avg {} us, max {} us) | "
 									"SIM DESYNC frames {} (first {}) | other-memory diff frames {} (last {} B in {} runs)",
-			s_mode == Mode::SyncTest ? "synctest" : "capture", s_rollback, s_frame, s_rollbacks, s_last_rollback_us, avg,
+			s_mode == Mode::SyncTest ? "synctest" : s_mode == Mode::Bench ? "bench" : "capture", s_rollback, s_frame, s_rollbacks, s_last_rollback_us, avg,
 			s_max_rollback_us, s_sim_desync_frames, s_first_sim_desync_frame, s_desync_frames, s_last_diff_bytes,
 			s_last_runs.size());
 		if (s_rollbacks)
