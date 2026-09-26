@@ -231,6 +231,7 @@ namespace
 			return std::make_tuple(ok, err);
 		});
 		rd.set_function("net_stop", []() { GameRollback::NetStop(); });
+		rd.set_function("session_locks", [](bool on) { GameRollback::SessionLocks(on); });
 		rd.set_function("net_status", []() { return GameRollback::NetStatus(); });
 		rd.set_function("manifest_detach", []() { GameRollback::Detach(); });
 		rd.set_function("manifest_status", []() { return GameRollback::Status(); });

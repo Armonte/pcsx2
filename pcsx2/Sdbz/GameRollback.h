@@ -39,6 +39,7 @@ namespace GameRollback
 		const std::string& journal,
 		std::string* error = nullptr);
 	void NetStop();
+	void SessionLocks(bool on); // manifest session lock-down outside netplay (harness tests)
 	std::string NetStatus();
 	void PollAutoStart(); // CPU thread, each presented frame: launcher environment (PS2RB_*), once
 

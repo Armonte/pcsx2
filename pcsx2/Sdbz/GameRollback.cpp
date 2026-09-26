@@ -380,6 +380,21 @@ namespace GameRollback
 			};
 			std::vector<ForcedBranch> session_branches;
 			std::vector<InputMask> session_masks;
+			// load-time data patches of game scripts: at `hook` (a loader entry), file = GPR[file_reg]; a group applies only
+			// when every `expect` matches, so a patch can never land on a different script or version
+			struct ScriptPatch
+			{
+				u32 off = 0;
+				std::vector<u8> expect, write;
+			};
+			struct ScriptPatchGroup
+			{
+				std::string name;
+				std::vector<ScriptPatch> patches;
+			};
+			u32 script_hook = 0;
+			int script_file_reg = 5; // a1
+			std::vector<ScriptPatchGroup> script_patches;
 			std::unordered_map<u32, u32> gate_values; // resim gates that also set $v0
 			bool exclude_thread_stacks = true;
 			VirtualStreams vs;
@@ -761,6 +776,37 @@ namespace GameRollback
 						if (fb.at && fb.to)
 							m->session_branches.push_back(std::move(fb));
 					}
+				if (Has(se, "script_patches"))
+				{
+					const auto sp = Child(se, "script_patches");
+					m->script_hook = Get(sp, "hook", 0);
+					const std::string fr = GetStr(sp, "file_reg");
+					for (int i = 1; i < 32; i++)
+						if (fr == rn[i])
+							m->script_file_reg = i;
+					auto hex = [](const std::string& h) {
+						std::vector<u8> v;
+						for (size_t i = 0; i + 1 < h.size(); i += 2)
+							v.push_back(static_cast<u8>(std::strtoul(h.substr(i, 2).c_str(), nullptr, 16)));
+						return v;
+					};
+					if (Has(sp, "groups"))
+						for (const auto& g : Child(sp, "groups").children())
+						{
+							Manifest::ScriptPatchGroup grp;
+							grp.name = GetStr(g, "name");
+							for (const auto& c : Child(g, "patches").children())
+							{
+								Manifest::ScriptPatch pt;
+								pt.off = Get(c, "off", 0);
+								pt.expect = hex(GetStr(c, "expect"));
+								pt.write = hex(GetStr(c, "write"));
+								if (pt.expect.size() == pt.write.size() && !pt.write.empty())
+									grp.patches.push_back(std::move(pt));
+							}
+							m->script_patches.push_back(std::move(grp));
+						}
+				}
 				if (Has(se, "input_masks"))
 					for (const auto& c : Child(se, "input_masks").children())
 					{
@@ -997,7 +1043,7 @@ namespace GameRollback
 		std::mutex s_req_mtx; // guards the pending request fields (any thread -> EE thread)
 		struct Request
 		{
-			bool attach = false, detach = false, start = false, stop = false, net_start = false, net_stop = false;
+			bool attach = false, detach = false, start = false, stop = false, net_start = false, net_stop = false, locks_set = false, locks_on = false;
 			NetBridge::Config net;
 			std::string path;
 			int mode = 0;
@@ -1522,6 +1568,8 @@ namespace GameRollback
 		// Session lock-down (manifest `session`, netplay only): a forced branch is taken exactly like the original branch
 		// would be (target + its delay-slot register effects); installed identically on every peer.
 		std::vector<u32> s_session_hooks;
+		std::map<std::string, u32> s_script_patch_count;
+		bool ScriptPatchLogSuppressed(const std::string& name) { return s_script_patch_count[name]++ >= 4; } // log the first few
 		void InstallSessionLocks()
 		{
 			for (const auto& fb : s_man.session_branches)
@@ -1535,6 +1583,34 @@ namespace GameRollback
 					return EeHooks::Action::Jump;
 				}, EeHooks::OWNER_GAME);
 				s_session_hooks.push_back(fb.at);
+			}
+			if (s_man.script_hook && !s_man.script_patches.empty())
+			{
+				EeHooks::AddCall(s_man.script_hook, [](u32) {
+					const u32 file = cpuRegs.GPR.r[s_man.script_file_reg].UL[0];
+					for (const auto& grp : s_man.script_patches)
+					{
+						bool all = !grp.patches.empty();
+						for (const auto& pt : grp.patches)
+						{
+							const u32 a = file + pt.off;
+							if ((a & RAM_MASK) + pt.expect.size() > Ps2MemSize::MainRam ||
+								std::memcmp(&eeMem->Main[a & RAM_MASK], pt.expect.data(), pt.expect.size()) != 0)
+							{
+								all = false;
+								break;
+							}
+						}
+						if (!all)
+							continue;
+						for (const auto& pt : grp.patches)
+							std::memcpy(&eeMem->Main[(file + pt.off) & RAM_MASK], pt.write.data(), pt.write.size());
+						if (!ScriptPatchLogSuppressed(grp.name))
+							Console.WriteLn("GameRollback: script patch '%s' applied at %08X", grp.name.c_str(), file);
+					}
+					return EeHooks::Action::Continue;
+				}, EeHooks::OWNER_GAME);
+				s_session_hooks.push_back(s_man.script_hook);
 			}
 			if (!s_man.session_branches.empty() || !s_man.session_masks.empty())
 				Console.WriteLn("GameRollback: session locks on (%zu branches, %zu input masks)", s_man.session_branches.size(),
@@ -2247,6 +2323,12 @@ namespace GameRollback
 				DoStop();
 			if (r.start && s_attached)
 				DoStart(r.mode, r.frames);
+			if (r.locks_set)
+			{
+				RemoveSessionLocks();
+				if (r.locks_on)
+					InstallSessionLocks();
+			}
 			if (r.net_stop && s_net)
 			{
 				NetBridge::Stop();
@@ -2382,6 +2464,14 @@ namespace GameRollback
 		s_req.net.game_id = s_man.serial;
 		s_req_pending = true;
 		return true;
+	}
+	// the manifest's session lock-down outside a netplay session (harness tests): applied at the next frame boundary
+	void SessionLocks(bool on)
+	{
+		std::lock_guard lk(s_req_mtx);
+		s_req.locks_set = true;
+		s_req.locks_on = on;
+		s_req_pending = true;
 	}
 	void NetStop()
 	{
