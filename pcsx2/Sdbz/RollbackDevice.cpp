@@ -14,6 +14,7 @@
 #include "fmt/format.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <map>
 #include <tuple>
@@ -117,6 +118,11 @@ namespace RollbackDevice
 		Common::Timer s_sim_timer;                 // normal frame: CUR_PRE -> RENDER_BEGIN (sim tick + event pass)
 		bool s_sim_timing = false;
 		u64 s_sum_sim_us = 0, s_sim_frames = 0;
+		// Frame pacing: host time between consecutive FRAME_BEGINs (what the player feels). Histogram in 1 ms bins.
+		Common::Timer s_pace_timer;
+		bool s_pace_started = false;
+		std::array<u32, 101> s_pace_hist{}; // [0..99] ms, [100] = 100 ms+
+		u64 s_pace_frames = 0, s_pace_sum_us = 0, s_pace_max_us = 0, s_pace_over = 0, s_pace_over2 = 0;
 		u64 s_last_diff_bytes = 0;
 		s32 s_first_desync_frame = -1;
 		std::map<u32, u64> s_page_hits;             // page -> frames it differed in
@@ -307,6 +313,9 @@ namespace RollbackDevice
 			s_sum_ref_us = s_sum_load_us = s_sum_cap_us = s_sum_cmp_us = 0;
 			s_sum_sim_us = s_sim_frames = 0;
 			s_sim_timing = false;
+			s_pace_started = false;
+			s_pace_hist.fill(0);
+			s_pace_frames = s_pace_sum_us = s_pace_max_us = s_pace_over = s_pace_over2 = 0;
 			s_last_diff_bytes = 0;
 			s_first_desync_frame = -1;
 			s_page_hits.clear();
@@ -541,6 +550,18 @@ namespace RollbackDevice
 				}
 				EndNormalSimTrace(); // (normal sim without a render section this frame)
 				RbProfiler::SetPhase(RbProfiler::PH_FRAME_BEGIN);
+				if (s_pace_started)
+				{
+					const u64 us = static_cast<u64>(s_pace_timer.GetTimeNanoseconds() / 1000.0);
+					s_pace_hist[std::min<u64>(us / 1000, 100)]++;
+					s_pace_frames++;
+					s_pace_sum_us += us;
+					s_pace_max_us = std::max(s_pace_max_us, us);
+					s_pace_over += (us > 16700) ? 1 : 0;   // missed a 60 Hz frame
+					s_pace_over2 += (us > 33400) ? 1 : 0;  // missed two
+				}
+				s_pace_timer.Reset();
+				s_pace_started = true;
 				s_frame++;
 				s_frames++;
 				RecordInput(s_frame);
@@ -773,6 +794,18 @@ namespace RollbackDevice
 				s_sum_load_us / n, (s_sum_rollback_us > other ? s_sum_rollback_us - other : 0) / n, s_sum_cap_us / n,
 				(s_sum_rollback_us > s_sum_ref_us + s_sum_cmp_us ? s_sum_rollback_us - s_sum_ref_us - s_sum_cmp_us : 0) / n,
 				s_sum_ref_us / n, s_sum_cmp_us / n);
+		}
+		if (s_pace_frames)
+		{
+			u64 acc = 0, p99 = 0;
+			for (u32 b = 0; b <= 100; b++)
+			{
+				acc += s_pace_hist[b];
+				if (acc * 100 >= s_pace_frames * 99) { p99 = b; break; }
+			}
+			s += fmt::format(" | frame pacing: avg {:.2f} ms, p99 {} ms, max {:.1f} ms, >16.7 ms {} ({:.1f}%), >33.4 ms {}",
+				s_pace_sum_us / 1000.0 / s_pace_frames, p99, s_pace_max_us / 1000.0, s_pace_over,
+				100.0 * s_pace_over / s_pace_frames, s_pace_over2);
 		}
 		s += fmt::format(" | gated (no rollback) frames {} (+{} for I/O) | ring rebuilds {} ({} dynamic excludes)", s_gated_frames,
 			s_io_gated_frames, s_dyn_rebuilds, s_dyn_excludes.size());
