@@ -390,7 +390,10 @@ __fi void _cpuEventTest_Shared()
 	//   cpuEventTest, the IOP generally starts to run way ahead of the EE.
 
 	// It's also important to sync up the IOP before updating the timers, since gates will depend on starting/stopping in the right place!
-	EEsCycle += cpuRegs.cycle - EEoCycle;
+	// Rollback re-simulation: the IOP (sound driver, SPU2) never experiences re-simulated time. Audio is never
+	// rolled back, so crediting it would only mix (and play) extra audio for frames the player already heard.
+	if (!RollbackDevice::IsResimulating()) [[likely]]
+		EEsCycle += cpuRegs.cycle - EEoCycle;
 	EEoCycle = cpuRegs.cycle;
 
 	if (EEsCycle > 0)
