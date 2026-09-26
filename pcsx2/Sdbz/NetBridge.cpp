@@ -13,6 +13,7 @@
 
 #include "fmt/format.h"
 
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -111,12 +112,24 @@ namespace NetBridge
 		{
 			u32 magic;
 			s32 frame;
-			u32 checksum;
+			u32 checksum;       // raw state hash after the anchor frame ran (what GekkoNet's frame-N save holds)
+			u32 start_checksum; // raw state hash the session started from (its pre-advance save: the savestate)
+			u8 inputs[2][INPUT_SIZE]; // the anchor frame's confirmed inputs (playback from the start state runs it first)
 			char serial[20];
 		};
 		static constexpr u32 ANCHOR_MAGIC = 0x41425250; // "PRBA"
 		std::map<s32, s32> s_save_frame;               // global save id -> netcode frame it saves
 		std::map<s32, u32> s_frame_checksum;           // netcode frame -> raw state hash of its latest answered save
+		std::map<s32, std::array<u8, 2 * INPUT_SIZE>> s_frame_inputs; // netcode frame -> latest planned inputs
+		std::map<s32, bool> s_pre_save_ids;            // pre-advance save ids (the session's start state)
+		u32 s_start_checksum = 0;
+		bool s_start_known = false;
+		// playback from the session's start state: frame `anchor` runs first as a prelude, the recording's first plan
+		// is held for the next call
+		bool s_prelude_pending = false;
+		Plan s_held_plan;
+		std::map<s32, s32> s_held_to_bridge;
+		int s_held_n = 0;
 
 		uint32_t PCB_CALL CbExportState(void*, int32_t frame, uint8_t* dst, uint32_t cap)
 		{
@@ -131,6 +144,11 @@ namespace NetBridge
 			if (it == s_frame_checksum.end())
 				return 0;
 			b.checksum = it->second;
+			const auto in = s_frame_inputs.find(frame);
+			if (!s_start_known || in == s_frame_inputs.end())
+				return 0;
+			b.start_checksum = s_start_checksum;
+			std::memcpy(b.inputs, in->second.data(), sizeof(b.inputs));
 			std::strncpy(b.serial, s_cfg.game_id.c_str(), sizeof(b.serial) - 1);
 			std::memcpy(dst, &b, sizeof(b));
 			return sizeof(b);
@@ -142,6 +160,19 @@ namespace NetBridge
 				return 0;
 			std::memcpy(&b, src, sizeof(b));
 			const u32 now = s_host.state_checksum ? s_host.state_checksum() : 0;
+			if (b.magic == ANCHOR_MAGIC && b.start_checksum == now && b.checksum != now)
+			{
+				Console.WriteLn("NetBridge: replay starts at the session's start state %08X: frame %d runs first from the anchor's "
+								"inputs",
+					now, frame);
+				s_prelude_pending = true;
+				s_held_plan = {};
+				Step st;
+				st.frame = frame;
+				std::memcpy(st.inputs, b.inputs, sizeof(st.inputs));
+				s_held_plan.steps.push_back(st); // prelude (the recording's plan replaces it once taken)
+				return 1;
+			}
 			if (b.magic != ANCHOR_MAGIC || b.checksum != now)
 			{
 				Console.Error("NetBridge: replay anchor (frame %d, %s, state %08X) is not the current state %08X: start playback "
@@ -227,6 +258,11 @@ namespace NetBridge
 		s_save_seq = 0;
 		s_save_frame.clear();
 		s_frame_checksum.clear();
+		s_frame_inputs.clear();
+		s_pre_save_ids.clear();
+		s_start_known = false;
+		s_prelude_pending = false;
+		s_held_n = 0;
 		s_jcompares = s_jmismatches = 0;
 		s_jfirst_mismatch = -1;
 		if (cfg.mode == Mode::JournalReplay)
@@ -345,6 +381,14 @@ namespace NetBridge
 			*plan = s_jplans[s_jnext++].plan;
 			return static_cast<int>(plan->steps.size());
 		}
+		if (s_held_n > 0)
+		{
+			*plan = s_held_plan;
+			s_save_to_bridge = s_held_to_bridge;
+			const int n = s_held_n;
+			s_held_n = 0;
+			return n;
+		}
 		const pcb_plan* p = nullptr;
 		int32_t n;
 		if (s_replay_h)
@@ -372,6 +416,7 @@ namespace NetBridge
 				s.rolling_back = e.rolling_back != 0;
 				std::memcpy(s.inputs, e.inputs, sizeof(s.inputs));
 				plan->steps.push_back(s);
+				std::memcpy(s_frame_inputs[e.frame].data(), e.inputs, 2 * INPUT_SIZE);
 				if (s.rolling_back)
 					plan->rollback_advances++;
 			}
@@ -381,13 +426,30 @@ namespace NetBridge
 				s_save_to_bridge[id] = e.save_index;
 				s_save_frame[id] = e.frame;
 				if (plan->steps.empty())
+				{
 					plan->pre_saves.push_back(id);
+					s_pre_save_ids[id] = true;
+				}
 				else
 					plan->steps.back().save_index = id;
 			}
 		}
 		if (s_replay_h)
 			n = static_cast<int32_t>(plan->steps.size());
+		if (s_prelude_pending)
+		{
+			// this tick runs the anchor frame; the recording's first plan (minus its anchor LOAD) runs next tick
+			s_prelude_pending = false;
+			Plan prelude = s_held_plan;
+			s_held_plan = *plan;
+			s_held_plan.has_load = false;
+			s_held_plan.load_frame = -1;
+			s_held_to_bridge = s_save_to_bridge;
+			s_held_n = n;
+			*plan = prelude;
+			s_save_to_bridge.clear();
+			n = 1;
+		}
 		if (s_journal)
 		{
 			std::fprintf(s_journal, "P %zu %d %d %u\n", plan->steps.size(), plan->has_load ? 1 : 0, plan->load_frame,
@@ -409,13 +471,24 @@ namespace NetBridge
 	{
 		if (save_id < 0)
 			return;
-		if (const auto f = s_save_frame.find(save_id); f != s_save_frame.end())
+		if (const auto pre = s_pre_save_ids.find(save_id); pre != s_pre_save_ids.end())
+		{
+			if (!s_start_known)
+			{
+				s_start_checksum = checksum;
+				s_start_known = true;
+			}
+			s_pre_save_ids.erase(pre);
+		}
+		else if (const auto f = s_save_frame.find(save_id); f != s_save_frame.end())
 		{
 			s_frame_checksum[f->second] = checksum; // a re-save (rollback) replaces it: last write wins, like the anchor
-			s_save_frame.erase(f);
 			while (s_frame_checksum.size() > 256)
 				s_frame_checksum.erase(s_frame_checksum.begin());
 		}
+		s_save_frame.erase(save_id);
+		while (s_frame_inputs.size() > 256)
+			s_frame_inputs.erase(s_frame_inputs.begin());
 		checksum = pcb_finalize_checksum(checksum);
 		if (s_journal)
 			std::fprintf(s_journal, "C %d %08x\n", save_id, checksum);
