@@ -434,7 +434,10 @@ void PageSnapshotRing::Capture(s32 frame)
 	Common::Timer timer;
 
 	std::vector<u64> dirty;
+	Common::Timer st;
 	CollectDirty(dirty);
+	m_stats.cap_collect_ns += static_cast<u64>(st.GetTimeNanoseconds());
+	st.Reset();
 
 	Snapshot snap;
 	if (!m_snap_pool.empty())
@@ -482,8 +485,12 @@ void PageSnapshotRing::Capture(s32 frame)
 		for (u32 i = 0; i < n; i++)
 			take(i);
 	}
+	m_stats.cap_table_ns += static_cast<u64>(st.GetTimeNanoseconds());
+	st.Reset();
 	CopyPool::Get().Run(jobs, PAGE_SIZE);
 	const u32 copied = static_cast<u32>(jobs.size());
+	m_stats.cap_copy_ns += static_cast<u64>(st.GetTimeNanoseconds());
+	st.Reset();
 
 	// Remove an older entry for the same frame, then evict the oldest if over capacity.
 	for (auto it = m_ring.begin(); it != m_ring.end(); ++it)
@@ -504,7 +511,11 @@ void PageSnapshotRing::Capture(s32 frame)
 		m_ring.erase(m_ring.begin());
 	}
 
+	m_stats.cap_evict_ns += static_cast<u64>(st.GetTimeNanoseconds());
+	st.Reset();
 	UpdateHotPages(dirty);
+	m_stats.cap_hot_ns += static_cast<u64>(st.GetTimeNanoseconds());
+	m_stats.cap_n++;
 	m_stats.snapshots = static_cast<u32>(m_ring.size());
 	m_stats.last_dirty_pages = copied;
 	m_stats.last_capture_us = static_cast<u64>(timer.GetTimeNanoseconds() / 1000.0);
@@ -679,5 +690,9 @@ std::string PageSnapshotRing::Describe() const
 					   "live {} KiB, pool {} KiB | hot {} | {}",
 		m_stats.snapshots, m_stats.tracked_pages * 4, m_stats.last_dirty_pages, m_stats.last_dirty_pages * 4,
 		m_stats.last_capture_us, m_stats.last_restored_pages, m_stats.last_load_us, m_stats.live_bytes / 1024,
-		m_stats.pool_bytes / 1024, m_stats.hot_pages, m_mode == DirtyMode::Compare ? "compare" : "write-protect");
+		m_stats.pool_bytes / 1024, m_stats.hot_pages, m_mode == DirtyMode::Compare ? "compare" : "write-protect") +
+		(m_stats.cap_n ? fmt::format(" | capture avg us: collect {:.0f} table {:.0f} copy {:.0f} evict {:.0f} hot {:.0f}",
+							 m_stats.cap_collect_ns / 1000.0 / m_stats.cap_n, m_stats.cap_table_ns / 1000.0 / m_stats.cap_n,
+							 m_stats.cap_copy_ns / 1000.0 / m_stats.cap_n, m_stats.cap_evict_ns / 1000.0 / m_stats.cap_n,
+							 m_stats.cap_hot_ns / 1000.0 / m_stats.cap_n) : std::string());
 }
