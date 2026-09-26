@@ -110,8 +110,8 @@ private:
 	// Write-protect mode, adaptive: a page written on consecutive captures is "hot" -- it stays writable and
 	// is checked by memcmp against its last captured copy, because a fault + re-protect per frame costs far
 	// more than comparing 4 KiB. A hot page that stays unchanged for HOT_COOLDOWN captures is re-protected.
-	static constexpr u8 HOT_PROMOTE = 2;
-	static constexpr u8 HOT_COOLDOWN = 8;
+	static constexpr u8 HOT_PROMOTE = 1;
+	static constexpr u8 HOT_COOLDOWN = 120;
 	std::vector<u64> m_hot;          // bit per tracked index
 	std::vector<u8> m_dirty_streak;  // consecutive dirty captures
 	std::vector<u8> m_clean_streak;  // consecutive clean captures while hot
