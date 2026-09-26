@@ -377,6 +377,7 @@ namespace GameRollback
 			std::vector<EntryAction> entry_actions;
 			u32 pad_read_fn = 0, pad_site = 0;
 			u32 rng_float = 0, rng_int = 0;
+			u32 sound_seed = 0; // EE word holding the sound-only RNG stream (rolled back; same start on every peer)
 			std::unordered_set<u32> sound_sites;
 			std::unordered_map<u32, u32> trace_ids; // function -> trace id
 		};
@@ -817,6 +818,7 @@ namespace GameRollback
 				const auto r = Child(root, "rng");
 				m->rng_float = Get(r, "range_float", 0);
 				m->rng_int = Get(r, "range_int", 0);
+				m->sound_seed = Get(r, "sound_seed", 0);
 				if (Has(r, "sound_sites"))
 					for (const u32 s : ParseList(Child(r, "sound_sites")))
 						m->sound_sites.insert(s);
@@ -1229,6 +1231,28 @@ namespace GameRollback
 		EeHooks::Action OnRng(u32 pc)
 		{
 			const u32 ra = cpuRegs.GPR.n.ra.UL[0];
+			if (s_man.sound_sites.count(ra - 8) && s_man.sound_seed)
+			{
+				// sound-only draw from its own stream in rolled-back EE memory: never g_RandSeed (the sim stream stays
+				// independent of audio), yet deterministic and rewound like the rest of the game (voice picks feed
+				// voice lengths, which feed the simulation through the virtual stream clock)
+				const u32 seed = Rd(s_man.sound_seed) * 214013u + 2531011u;
+				Wr(s_man.sound_seed, seed);
+				if (pc == s_man.rng_float)
+				{
+					float lo, hi;
+					std::memcpy(&lo, &fpuRegs.fpr[12].UL, 4);
+					std::memcpy(&hi, &fpuRegs.fpr[13].UL, 4);
+					const float r = lo + (hi - lo) * (static_cast<float>(seed >> 16) / 65536.0f);
+					std::memcpy(&fpuRegs.fpr[0].UL, &r, 4);
+				}
+				else
+				{
+					const s32 lo = cpuRegs.GPR.n.a0.SL[0], hi = cpuRegs.GPR.n.a1.SL[0];
+					cpuRegs.GPR.n.v0.SD[0] = lo + static_cast<s32>((static_cast<s64>(seed >> 16) * (hi - lo)) >> 16);
+				}
+				return EeHooks::Action::Return;
+			}
 			if (s_man.sound_sites.count(ra - 8))
 			{
 				// sound-only draw: the host sound stream, never g_RandSeed (sim stream independent of audio)
@@ -1621,6 +1645,8 @@ namespace GameRollback
 			ClearConfig();
 			if (s_man.vs.state) // the virtual stream clock is simulation state: rolled back and compared
 				AddRegion(s_man.vs.state, 0x10 + s_man.vs.channels * 0x30);
+			if (s_man.sound_seed)
+				AddRegion(s_man.sound_seed, 4);
 			for (const RegionSpec& r : s_man.regions)
 			{
 				s64 len = 0;
@@ -1691,6 +1717,8 @@ namespace GameRollback
 				DoStop();
 			ConfigureDevice();
 			VsInit(); // both peers start the clock from the same (empty) state at the rollback start
+			if (s_man.sound_seed)
+				Wr(s_man.sound_seed, 0x5DB2A5D1u); // every peer starts the sound stream from the same seed
 			InstallRollbackHooks();
 			InstallTraceHooks();
 			RollbackDevice::Start(static_cast<RollbackDevice::Mode>(mode), frames, true);
