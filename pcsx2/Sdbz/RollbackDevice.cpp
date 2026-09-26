@@ -134,6 +134,9 @@ namespace RollbackDevice
 
 		std::vector<Range> s_stable;
 		std::vector<u64> s_stable_hash;            // [frame % INPUT_HISTORY]
+		std::vector<u32> s_stable_changed;         // [frame % INPUT_HISTORY] bit i = s_stable[i] changed since the last frame
+		std::vector<u64> s_stable_prev;            // per-range hash of the previous frame
+		u32 s_io_refusal_logs = 0;
 		u64 s_io_gated_frames = 0;
 		std::vector<std::vector<u8>> s_inputs;     // [frame % INPUT_HISTORY]
 		std::vector<std::vector<u8>> s_ref;        // sync test: copy of each compare range before rolling back
@@ -534,6 +537,9 @@ namespace RollbackDevice
 		s_probe_log.clear();
 		s_trace_pass = 0;
 		s_stable_hash.assign(INPUT_HISTORY, 0);
+		s_stable_changed.assign(INPUT_HISTORY, 0);
+		s_stable_prev.clear();
+		s_io_refusal_logs = 0;
 		s_io_gated_frames = 0;
 		s_rng = s_cfg_rng;
 		s_in_render = false;
@@ -832,13 +838,24 @@ namespace RollbackDevice
 				s_gate_ok[static_cast<u32>(s_frame) % INPUT_HISTORY] = ok ? 1 : 0;
 				{
 					u64 h = 1469598103934665603ull; // FNV-1a over the I/O-stable ranges
-					for (const Range& r : s_stable)
+					u32 changed = 0;
+					s_stable_prev.resize(s_stable.size(), 0);
+					for (size_t i = 0; i < s_stable.size(); i++)
 					{
+						const Range& r = s_stable[i];
 						const u8* p = Ram(r.a);
+						u64 hr = 1469598103934665603ull;
 						for (u32 k = 0; k < r.b - r.a; k++)
+						{
 							h = (h ^ p[k]) * 1099511628211ull;
+							hr = (hr ^ p[k]) * 1099511628211ull;
+						}
+						if (hr != s_stable_prev[i] && i < 32)
+							changed |= 1u << i;
+						s_stable_prev[i] = hr;
 					}
 					s_stable_hash[static_cast<u32>(s_frame) % INPUT_HISTORY] = h;
+					s_stable_changed[static_cast<u32>(s_frame) % INPUT_HISTORY] = changed;
 				}
 
 				u32 depth = s_rollback;
@@ -873,6 +890,16 @@ namespace RollbackDevice
 						if (s_stable_hash[static_cast<u32>(f) % INPUT_HISTORY] != h0)
 						{
 							s_io_gated_frames++;
+							if (s_io_refusal_logs++ < 32)
+							{
+								u32 m = 0;
+								for (s32 g = s_frame - static_cast<s32>(depth) + 1; g <= s_frame; g++)
+									m |= s_stable_changed[static_cast<u32>(g) % INPUT_HISTORY];
+								for (size_t i = 0; i < s_stable.size() && i < 32; i++)
+									if (m & (1u << i))
+										Console.Error("RollbackDevice: frame %d: %u-frame rollback refused: I/O range %08X..%08X changed in the window",
+											s_frame, depth, s_stable[i].a, s_stable[i].b);
+							}
 							return 0; // async I/O was submitted inside the window: never re-issue it
 						}
 					}
