@@ -992,7 +992,9 @@ namespace GameRollback
 		bool s_net = false;
 		NetBridge::Plan s_net_plan;
 		std::vector<s32> s_net_resim_saves; // save index per re-simulated step
-		s32 s_net_fwd_save = -1;            // the forward frame's save, answered at the next frame boundary
+		s32 s_net_fwd_save = -1;
+		s32 s_net_frame_base = 0;           // host frame - netcode frame (playback sources start at their own frame 0)
+		bool s_net_base_set = false;            // the forward frame's save, answered at the next frame boundary
 		u8 s_live_report[PAD_PLAYERS][PAD_REPORT] = {};
 		bool s_live_valid[PAD_PLAYERS] = {};
 		std::vector<std::pair<u32, u32>> s_hash_ranges; // the manifest's watched (gameplay) state
@@ -1306,6 +1308,10 @@ namespace GameRollback
 				NetBridge::ResolveSave(s_net_fwd_save, HashState());
 				s_net_fwd_save = -1;
 			}
+			// P2P pacing: the netcode's suggested frame-time stretch when this peer runs ahead
+			const float pace = NetBridge::PaceFactor();
+			if (pace > 1.001f)
+				std::this_thread::sleep_for(std::chrono::microseconds(static_cast<s64>((std::min(pace, 1.5f) - 1.0f) * 16683.0f)));
 			int n = 0;
 			for (int waited = 0;; waited++)
 			{
@@ -1327,8 +1333,22 @@ namespace GameRollback
 				return false;
 			}
 			s_net_resim_saves.clear();
-			for (const NetBridge::Step& st : s_net_plan.steps)
+			if (!s_net_base_set)
 			{
+				for (const NetBridge::Step& st : s_net_plan.steps)
+					if (!st.rolling_back)
+					{
+						s_net_frame_base = s_host_frame + 1 - st.frame;
+						s_net_base_set = true;
+						if (s_net_frame_base != 0)
+							Console.WriteLn("GameRollback: netcode frame %d = host frame %d", st.frame, s_host_frame + 1);
+						break;
+					}
+			}
+			for (const NetBridge::Step& st0 : s_net_plan.steps)
+			{
+				NetBridge::Step st = st0;
+				st.frame += s_net_frame_base;
 				for (u32 p = 0; p < 2; p++)
 				{
 					PadRec& r = s_pad_hist[static_cast<u32>(st.frame) % PAD_HIST][p];
@@ -2123,6 +2143,8 @@ namespace GameRollback
 					DoStart(static_cast<int>(RollbackDevice::Mode::Netplay), 8); // rollback depth fixed at 8
 					s_net = true;
 					s_net_fwd_save = -1;
+					s_net_base_set = false;
+					s_net_frame_base = 0;
 					for (bool& v : s_live_valid)
 						v = false;
 				}
@@ -2180,7 +2202,7 @@ namespace GameRollback
 	int RunningMode() { return s_mode; }
 
 	bool NetStart(int mode, int local_player, const std::string& remote, u16 port, u8 delay, const std::string& replay,
-		std::string* error)
+		const std::string& journal, std::string* error)
 	{
 		std::lock_guard lk(s_req_mtx);
 		if (!s_attached && !s_req.attach)
@@ -2196,6 +2218,7 @@ namespace GameRollback
 		s_req.net.port = port;
 		s_req.net.input_delay = delay;
 		s_req.net.replay_path = replay;
+		s_req.net.journal_path = journal;
 		s_req.net.game_id = s_man.serial;
 		s_req_pending = true;
 		return true;
@@ -2210,7 +2233,8 @@ namespace GameRollback
 	//   PS2RB_MANIFEST  manifest path (attached automatically)
 	//   PS2RB_NET       synctest | p2p        (netplay starts at the next frame boundary)
 	//   PS2RB_LOCAL     local player 0/1       PS2RB_REMOTE  ip:port   PS2RB_PORT  local UDP port   PS2RB_DELAY  frames
-	//   PS2RB_REPLAY    .pcrep to record
+	//   PS2RB_REPLAY    .pcrep to record (or, with PS2RB_NET=replay, to play)
+	//   PS2RB_JOURNAL   host schedule journal to record (or, with PS2RB_NET=journal, to replay offline)
 	void PollAutoStart()
 	{
 		static bool done = false;
@@ -2233,10 +2257,12 @@ namespace GameRollback
 			const char* v = std::getenv(k);
 			return std::string(v && *v ? v : def);
 		};
-		const int mode = std::string(net) == "p2p" ? 2 : std::string(net) == "local" ? 1 : 0;
+		const std::string m = net;
+		const int mode = m == "p2p" ? 2 : m == "local" ? 1 : m == "replay" ? 3 : m == "journal" ? 4 : 0;
 		if (!NetStart(mode, std::atoi(env("PS2RB_LOCAL", "0").c_str()), env("PS2RB_REMOTE", ""),
 				static_cast<u16>(std::atoi(env("PS2RB_PORT", "7000").c_str())),
-				static_cast<u8>(std::atoi(env("PS2RB_DELAY", "2").c_str())), env("PS2RB_REPLAY", ""), &err))
+				static_cast<u8>(std::atoi(env("PS2RB_DELAY", "2").c_str())), env("PS2RB_REPLAY", ""),
+				env("PS2RB_JOURNAL", ""), &err))
 			Console.Error("GameRollback: PS2RB_NET %s: %s", net, err.c_str());
 		else
 			Console.WriteLn("GameRollback: netplay %s requested from the environment", net);

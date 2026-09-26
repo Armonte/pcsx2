@@ -13,7 +13,9 @@
 
 #include "fmt/format.h"
 
+#include <cstdio>
 #include <cstring>
+#include <map>
 
 namespace NetBridge
 {
@@ -27,6 +29,27 @@ namespace NetBridge
 		decltype(&pcb_resolve_save) p_resolve_save = nullptr;
 		decltype(&pcb_get_stats) p_get_stats = nullptr;
 		decltype(&pcb_last_error) p_last_error = nullptr;
+		decltype(&pcb_replay_open) p_replay_open = nullptr;
+		decltype(&pcb_replay_close) p_replay_close = nullptr;
+		decltype(&pcb_replay_frame) p_replay_frame = nullptr;
+		decltype(&pcb_replay_resolve_save) p_replay_resolve_save = nullptr;
+		decltype(&pcb_replay_get_stats) p_replay_get_stats = nullptr;
+		pcb_replay* s_replay_h = nullptr;
+
+		// Host schedule journal: one text record per planned frame and per answered save. A session writes it; the
+		// JournalReplay source plays the same plans back offline and compares every checksum.
+		std::FILE* s_journal = nullptr;
+		struct JPlan
+		{
+			Plan plan;
+		};
+		std::vector<JPlan> s_jplans;
+		std::map<s32, u32> s_jsums; // global save id -> recorded checksum
+		size_t s_jnext = 0;
+		s32 s_save_seq = 0;                 // global save id counter
+		std::map<s32, s32> s_save_to_bridge; // global save id -> the bridge's save index of the current plan
+		u32 s_jcompares = 0, s_jmismatches = 0;
+		s32 s_jfirst_mismatch = -1;
 
 		pcb_session* s_session = nullptr;
 		Host s_host;
@@ -48,7 +71,11 @@ namespace NetBridge
 			const bool ok = s_lib.GetSymbol("pcb_abi_version", &p_abi_version) && s_lib.GetSymbol("pcb_create", &p_create) &&
 							s_lib.GetSymbol("pcb_destroy", &p_destroy) && s_lib.GetSymbol("pcb_frame", &p_frame) &&
 							s_lib.GetSymbol("pcb_resolve_save", &p_resolve_save) &&
-							s_lib.GetSymbol("pcb_get_stats", &p_get_stats) && s_lib.GetSymbol("pcb_last_error", &p_last_error);
+							s_lib.GetSymbol("pcb_get_stats", &p_get_stats) && s_lib.GetSymbol("pcb_last_error", &p_last_error) &&
+							s_lib.GetSymbol("pcb_replay_open", &p_replay_open) && s_lib.GetSymbol("pcb_replay_close", &p_replay_close) &&
+							s_lib.GetSymbol("pcb_replay_frame", &p_replay_frame) &&
+							s_lib.GetSymbol("pcb_replay_resolve_save", &p_replay_resolve_save) &&
+							s_lib.GetSymbol("pcb_replay_get_stats", &p_replay_get_stats);
 			if (!ok || p_abi_version() != PCB_ABI_VERSION)
 			{
 				if (error)
@@ -86,11 +113,81 @@ namespace NetBridge
 		}
 	} // namespace
 
+	bool LoadJournal(const std::string& path, std::string* error)
+	{
+		s_jplans.clear();
+		s_jsums.clear();
+		s_jnext = 0;
+		std::FILE* f = std::fopen(path.c_str(), "r");
+		if (!f)
+		{
+			if (error)
+				*error = fmt::format("cannot open journal {}", path);
+			return false;
+		}
+		char line[512];
+		while (std::fgets(line, sizeof(line), f))
+		{
+			if (line[0] == 'P')
+			{
+				JPlan jp;
+				int has_load = 0, load_frame = -1, rb = 0, n = 0;
+				std::sscanf(line + 1, "%d %d %d %d", &n, &has_load, &load_frame, &rb);
+				jp.plan.has_load = has_load != 0;
+				jp.plan.load_frame = load_frame;
+				jp.plan.rollback_advances = static_cast<u32>(rb);
+				s_jplans.push_back(std::move(jp));
+			}
+			else if (line[0] == 'S' && !s_jplans.empty())
+			{
+				Step st;
+				int frame = 0, rbk = 0, id = -1;
+				unsigned b[12] = {};
+				std::sscanf(line + 1, "%d %d %d %x %x %x %x %x %x %x %x %x %x %x %x", &frame, &rbk, &id, &b[0], &b[1], &b[2], &b[3],
+					&b[4], &b[5], &b[6], &b[7], &b[8], &b[9], &b[10], &b[11]);
+				st.frame = frame;
+				st.rolling_back = rbk != 0;
+				st.save_index = id;
+				for (int k = 0; k < 12; k++)
+					st.inputs[k / 6][k % 6] = static_cast<u8>(b[k]);
+				s_jplans.back().plan.steps.push_back(st);
+			}
+			else if (line[0] == 'C')
+			{
+				int id = 0;
+				unsigned sum = 0;
+				std::sscanf(line + 1, "%d %x", &id, &sum);
+				s_jsums[id] = sum;
+			}
+		}
+		std::fclose(f);
+		return !s_jplans.empty();
+	}
+
 	bool Start(const Config& cfg, Host host, std::string* error)
 	{
 		Stop();
+		s_cfg = cfg;
+		s_host = std::move(host);
+		s_save_seq = 0;
+		s_jcompares = s_jmismatches = 0;
+		s_jfirst_mismatch = -1;
+		if (cfg.mode == Mode::JournalReplay)
+		{
+			if (!LoadJournal(cfg.journal_path, error))
+				return false;
+			Console.WriteLn("NetBridge: journal replay of %s (%zu frames, %zu checksums)", cfg.journal_path.c_str(), s_jplans.size(),
+				s_jsums.size());
+			return true;
+		}
 		if (!Load(error))
 			return false;
+		if (!cfg.journal_path.empty())
+		{
+			s_journal = std::fopen(cfg.journal_path.c_str(), "w");
+			if (s_journal)
+				std::fprintf(s_journal, "# ps2rb host schedule journal: P plan, S step (frame rb saveid 12 input bytes), C checksum\n");
+		}
 		s_cfg = cfg;
 		s_host = std::move(host);
 		s_remote = cfg.remote;
@@ -118,6 +215,19 @@ namespace NetBridge
 		h.scene = CbScene;
 		h.log = CbLog;
 		h.on_desync = CbDesync;
+		if (cfg.mode == Mode::Replay)
+		{
+			c.replay_path = nullptr;
+			s_replay_h = p_replay_open(s_replay.c_str(), &c, &h);
+			if (!s_replay_h)
+			{
+				if (error)
+					*error = fmt::format("pcb_replay_open: {}", p_last_error());
+				return false;
+			}
+			Console.WriteLn("NetBridge: playing %s", s_replay.c_str());
+			return true;
+		}
 		s_session = p_create(&c, &h);
 		if (!s_session)
 		{
@@ -138,9 +248,30 @@ namespace NetBridge
 			s_session = nullptr;
 			Console.WriteLn("NetBridge: session stopped");
 		}
+		if (s_replay_h)
+		{
+			pcb_replay_stats st = {};
+			st.struct_size = sizeof(st);
+			p_replay_get_stats(s_replay_h, &st);
+			Console.WriteLn("NetBridge: replay stopped: %d/%d frames, checks %d ok %d failed (first %d)", st.frame, st.total_frames,
+				st.checks_ok, st.checks_failed, st.first_fail_frame);
+			p_replay_close(s_replay_h);
+			s_replay_h = nullptr;
+		}
+		if (s_journal)
+		{
+			std::fclose(s_journal);
+			s_journal = nullptr;
+		}
+		if (s_cfg.mode == Mode::JournalReplay && !s_jplans.empty())
+		{
+			Console.WriteLn("NetBridge: journal replay stopped: %zu/%zu frames, %u checksum compares, %u mismatches (first frame %d)",
+				s_jnext, s_jplans.size(), s_jcompares, s_jmismatches, s_jfirst_mismatch);
+			s_jplans.clear();
+		}
 	}
 
-	bool Active() { return s_session != nullptr; }
+	bool Active() { return s_session != nullptr || s_replay_h != nullptr || !s_jplans.empty(); }
 
 	int Frame(Plan* plan)
 	{
@@ -148,10 +279,22 @@ namespace NetBridge
 		plan->load_frame = -1;
 		plan->rollback_advances = 0;
 		plan->steps.clear();
-		if (!s_session)
-			return -1;
+		s_save_to_bridge.clear();
+		if (s_cfg.mode == Mode::JournalReplay)
+		{
+			if (s_jnext >= s_jplans.size())
+				return -1; // finished
+			*plan = s_jplans[s_jnext++].plan;
+			return static_cast<int>(plan->steps.size());
+		}
 		const pcb_plan* p = nullptr;
-		const int32_t n = p_frame(s_session, &p);
+		int32_t n;
+		if (s_replay_h)
+			n = p_replay_frame(s_replay_h, &p) > 0 ? 1 : -1;
+		else if (s_session)
+			n = p_frame(s_session, &p);
+		else
+			return -1;
 		if (n <= 0 || !p)
 			return n;
 		for (int32_t k = 0; k < p->event_count; k++)
@@ -173,19 +316,86 @@ namespace NetBridge
 					plan->rollback_advances++;
 			}
 			else if (e.type == PCB_EV_SAVE && !plan->steps.empty())
-				plan->steps.back().save_index = e.save_index;
+			{
+				const s32 id = s_save_seq++;
+				s_save_to_bridge[id] = e.save_index;
+				plan->steps.back().save_index = id;
+			}
+		}
+		if (s_replay_h)
+			n = static_cast<int32_t>(plan->steps.size());
+		if (s_journal)
+		{
+			std::fprintf(s_journal, "P %zu %d %d %u\n", plan->steps.size(), plan->has_load ? 1 : 0, plan->load_frame,
+				plan->rollback_advances);
+			for (const Step& st : plan->steps)
+			{
+				std::fprintf(s_journal, "S %d %d %d", st.frame, st.rolling_back ? 1 : 0, st.save_index);
+				for (int k = 0; k < 12; k++)
+					std::fprintf(s_journal, " %02x", st.inputs[k / 6][k % 6]);
+				std::fprintf(s_journal, "\n");
+			}
 		}
 		return n;
 	}
 
-	void ResolveSave(s32 save_index, u32 checksum)
+	void ResolveSave(s32 save_id, u32 checksum)
 	{
-		if (s_session && save_index >= 0)
-			p_resolve_save(s_session, save_index, pcb_finalize_checksum(checksum), 0);
+		if (save_id < 0)
+			return;
+		checksum = pcb_finalize_checksum(checksum);
+		if (s_journal)
+			std::fprintf(s_journal, "C %d %08x\n", save_id, checksum);
+		if (s_cfg.mode == Mode::JournalReplay)
+		{
+			const auto it = s_jsums.find(save_id);
+			if (it != s_jsums.end())
+			{
+				s_jcompares++;
+				if (it->second != checksum)
+				{
+					if (s_jmismatches++ == 0)
+					{
+						s_jfirst_mismatch = static_cast<s32>(s_jnext) - 1;
+						Console.Error("NetBridge: journal replay MISMATCH at save %d (plan %zu): %08X vs recorded %08X", save_id, s_jnext - 1,
+							checksum, it->second);
+					}
+				}
+			}
+			return;
+		}
+		const auto b = s_save_to_bridge.find(save_id);
+		if (b == s_save_to_bridge.end())
+			return;
+		if (s_session)
+			p_resolve_save(s_session, b->second, checksum, 0);
+		else if (s_replay_h)
+			p_replay_resolve_save(s_replay_h, b->second, checksum, 0);
+	}
+
+	float PaceFactor()
+	{
+		if (!s_session)
+			return 1.0f;
+		pcb_stats st = {};
+		st.struct_size = sizeof(st);
+		p_get_stats(s_session, &st);
+		return st.pace_factor > 0.5f ? st.pace_factor : 1.0f;
 	}
 
 	std::string Status()
 	{
+		if (s_cfg.mode == Mode::JournalReplay && !s_jplans.empty())
+			return fmt::format("net: journal replay {}/{} frames, {} compares, {} mismatches (first {})", s_jnext, s_jplans.size(),
+				s_jcompares, s_jmismatches, s_jfirst_mismatch);
+		if (s_replay_h)
+		{
+			pcb_replay_stats st = {};
+			st.struct_size = sizeof(st);
+			p_replay_get_stats(s_replay_h, &st);
+			return fmt::format("net: replay {}/{} frames, checks {} ok {} failed (first {}) finished {}", st.frame, st.total_frames,
+				st.checks_ok, st.checks_failed, st.first_fail_frame, st.finished);
+		}
 		if (!s_session)
 			return "net: off";
 		pcb_stats st = {};
