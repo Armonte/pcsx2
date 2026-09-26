@@ -64,7 +64,9 @@ namespace RollbackDevice
 		std::vector<Range> s_resim_restore_active; // the ranges saved at this rollback's start (restored at its end)
 		std::vector<u8> s_resim_restore_buf;
 		bool s_dyn_dirty = false;                  // rebuild the ring at the next FRAME_BEGIN
-		std::atomic<bool> s_gate_condition{true};   // host-side gate condition for the next frame (SetFrameGateCondition)
+		std::atomic<bool> s_gate_condition{true};
+		std::atomic<u32> s_ext_rollback{0};   // Netplay: depth requested for the next frame boundary
+		u32 s_cur_depth = 0;                  // depth of the rollback in progress   // host-side gate condition for the next frame (SetFrameGateCondition)
 		std::atomic<bool> s_resimulating{false};   // between a rollback and CUR_PRE (read by other threads)
 		std::atomic<bool> s_lever_host_vsync{true}, s_lever_park{true}, s_lever_iop{true};
 		s32 s_confirmed = -1;                      // resim captures below this frame are skipped (-1 = none)
@@ -667,6 +669,8 @@ namespace RollbackDevice
 		return s_resimulating.load(std::memory_order_relaxed) && s_lever_dma_sink.load(std::memory_order_relaxed);
 	}
 
+	void SetExternalRollback(u32 frames) { s_ext_rollback.store(frames, std::memory_order_relaxed); }
+
 	void SetFrameGateCondition(bool ok) { s_gate_condition.store(ok, std::memory_order_relaxed); }
 
 	const u8* ResimulatingFlag()
@@ -835,11 +839,20 @@ namespace RollbackDevice
 					s_stable_hash[static_cast<u32>(s_frame) % INPUT_HISTORY] = h;
 				}
 
-				if ((s_mode != Mode::SyncTest && s_mode != Mode::Bench) || s_frame - s_first_frame < static_cast<s32>(s_rollback))
+				u32 depth = s_rollback;
+				if (s_mode == Mode::Netplay)
+				{
+					depth = std::min(s_ext_rollback.exchange(0, std::memory_order_relaxed), s_rollback);
+					if (depth == 0)
+						return 0;
+				}
+				else if (s_mode != Mode::SyncTest && s_mode != Mode::Bench)
+					return 0;
+				if (s_frame - s_first_frame < static_cast<s32>(depth))
 					return 0;
 				if (s_mode == Mode::Bench && (s_frame % static_cast<s32>(s_bench_every)) != 0)
 					return 0;
-				for (s32 f = s_frame - static_cast<s32>(s_rollback) + 1; f <= s_frame; f++)
+				for (s32 f = s_frame - static_cast<s32>(depth) + 1; f <= s_frame; f++)
 				{
 					if (!s_gate_ok[static_cast<u32>(f) % INPUT_HISTORY])
 					{
@@ -849,8 +862,8 @@ namespace RollbackDevice
 				}
 				if (!s_stable.empty())
 				{
-					const u64 h0 = s_stable_hash[static_cast<u32>(s_frame - static_cast<s32>(s_rollback)) % INPUT_HISTORY];
-					for (s32 f = s_frame - static_cast<s32>(s_rollback) + 1; f <= s_frame; f++)
+					const u64 h0 = s_stable_hash[static_cast<u32>(s_frame - static_cast<s32>(depth)) % INPUT_HISTORY];
+					for (s32 f = s_frame - static_cast<s32>(depth) + 1; f <= s_frame; f++)
 					{
 						if (s_stable_hash[static_cast<u32>(f) % INPUT_HISTORY] != h0)
 						{
@@ -867,7 +880,7 @@ namespace RollbackDevice
 				if (s_mode == Mode::SyncTest && (!s_ring || !s_ring->Pin(s_frame, s_ref_pages)))
 					TakeReference(); // fallback: full copy
 				s_sum_ref_us += static_cast<u64>(t.GetTimeNanoseconds() / 1000.0);
-				const s32 target = s_frame - static_cast<s32>(s_rollback);
+				const s32 target = s_frame - static_cast<s32>(depth);
 				t.Reset();
 				RbProfiler::SetPhase(RbProfiler::PH_LOAD);
 				if (!s_ring->Load(target))
@@ -897,7 +910,8 @@ namespace RollbackDevice
 					}
 				}
 				s_rollbacks++;
-				return s_rollback;
+				s_cur_depth = depth;
+				return depth;
 			}
 
 			case CMD_RESIM_PRE:
@@ -1042,7 +1056,7 @@ namespace RollbackDevice
 		const u64 avg = s_rollbacks ? s_sum_rollback_us / s_rollbacks : 0;
 		std::string s = fmt::format("rbdev: {} R={} frame {} | rollbacks {} (last {} us, avg {} us, max {} us) | "
 									"SIM DESYNC frames {} (first {}) | other-memory diff frames {} (last {} B in {} runs)",
-			s_mode == Mode::SyncTest ? "synctest" : s_mode == Mode::Bench ? "bench" : "capture", s_rollback, s_frame, s_rollbacks, s_last_rollback_us, avg,
+			s_mode == Mode::SyncTest ? "synctest" : s_mode == Mode::Bench ? "bench" : s_mode == Mode::Netplay ? "netplay" : "capture", s_rollback, s_frame, s_rollbacks, s_last_rollback_us, avg,
 			s_max_rollback_us, s_sim_desync_frames, s_first_sim_desync_frame, s_desync_frames, s_last_diff_bytes,
 			s_last_runs.size());
 		if (s_rollbacks)

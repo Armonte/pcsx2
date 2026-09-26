@@ -60,7 +60,11 @@ namespace RollbackDevice
 		Capture = 1,
 		SyncTest = 2,
 		Bench = 3, // netplay-like load: roll back R frames every K frames, no reference copy / compare
+		Netplay = 4, // the netcode decides: roll back SetExternalRollback() frames at the next frame boundary
 	};
+	// Netplay mode: re-simulate `frames` frames at the next CMD_FRAME_BEGIN (0 = none; at most the ring depth).
+	// The device returns the depth it actually did (0 if the window was gated), so the host can detect a refusal.
+	void SetExternalRollback(u32 frames);
 	void SetBenchEvery(u32 frames); // Bench mode: K (>= 1)
 	// Netplay: the earliest frame a future rollback can target (last frame with confirmed inputs from every peer).
 	// Re-simulated frames before it can never be rolled back to again, so they are not captured. -1 = capture all.
