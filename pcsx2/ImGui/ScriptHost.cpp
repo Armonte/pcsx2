@@ -327,6 +327,23 @@ namespace
 		// engine = generic, game-agnostic services only (no SDBZ knowledge -- the script owns players / freeze /
 		// freecam / training via memory + patch + input below).
 		auto eng = lua.create_named_table("engine");
+		// Script logging goes to the emulator log (emulog.txt / console): print(...) and engine.log(msg).
+		auto lua_log = [](sol::variadic_args va, sol::this_state ts) {
+			std::string line;
+			lua_State* L = ts;
+			for (auto v : va)
+			{
+				size_t len = 0;
+				const char* str = luaL_tolstring(L, v.stack_index(), &len);
+				if (!line.empty())
+					line += '\t';
+				line.append(str, len);
+				lua_pop(L, 1);
+			}
+			Console.WriteLnFmt("[lua] {}", line);
+		};
+		lua.set_function("print", lua_log);
+		eng.set_function("log", lua_log);
 		eng.set_function("set_cursor", [](bool on) { ScriptBridge::SetCursorVisible(on); });
 		eng.set_function("set_gamepad_nav", [](bool on) { ScriptBridge::SetGamepadNav(on); });
 		eng.set_function("set_popout", [](bool on) { Script::SetPopout(on); }); // pop the script's GUI into its own window
