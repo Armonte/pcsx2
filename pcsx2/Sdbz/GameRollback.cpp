@@ -1054,6 +1054,20 @@ namespace GameRollback
 
 		EeHooks::Action OnPadRead(u32)
 		{
+			if (cpuRegs.GPR.n.ra.UL[0] == s_man.pad_site + 8 && s_man.pad_record_replay && s_driving)
+			{
+				// re-simulated frame: answer the read from the recorded report without running the pad library
+				// (its IOP-side state is live hardware; the report is all the game gets from it)
+				const u32 player = (cpuRegs.GPR.n.a0.UL[0] + cpuRegs.GPR.n.a1.UL[0]) % PAD_PLAYERS;
+				const s32 f = s_host_frame - static_cast<s32>(s_R) + static_cast<s32>(s_i);
+				const PadRec& r = s_pad_hist[static_cast<u32>(f) % PAD_HIST][player];
+				if (f >= 0 && r.frame == f)
+				{
+					std::memcpy(&eeMem->Main[cpuRegs.GPR.n.a2.UL[0] & RAM_MASK], r.report, PAD_REPORT);
+					cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(r.ret);
+					return EeHooks::Action::Return;
+				}
+			}
 			if (cpuRegs.GPR.n.ra.UL[0] == s_man.pad_site + 8)
 			{
 				s_pad_player = cpuRegs.GPR.n.a0.UL[0] + cpuRegs.GPR.n.a1.UL[0];
