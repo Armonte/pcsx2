@@ -7,6 +7,7 @@
 #include "Sdbz/EeHooks.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
 #include "GS/GS.h"
+#include "R5900.h"
 #include "MTGS.h"
 #include "Sdbz/SnapshotBench.h" // snap.* Lua table (incremental page-snapshot ring)
 #include "Sdbz/RollbackDevice.h"
@@ -421,6 +422,16 @@ namespace
 		// Emulator-level EE hooks (Sdbz/EeHooks.h): no game memory is patched; hot reload drops and re-registers them.
 		//   hook_gate(addr): at this function entry, return at once while the rollback device re-simulates
 		eng.set_function("hook_gate", [](uint32_t a) { EeHooks::AddResimGate(a); });
+		// hook_set_reg(pc, reg, value): before the instruction at pc executes, GPR[reg] = value (every pass, forward and
+		// re-simulation alike, so it is part of the simulation: install it identically on every peer)
+		eng.set_function("hook_set_reg", [](uint32_t a, uint32_t reg, uint32_t value) {
+			if (reg == 0 || reg > 31)
+				return;
+			EeHooks::AddCall(a, [reg, value](u32) {
+				cpuRegs.GPR.r[reg].UD[0] = static_cast<u64>(static_cast<s64>(static_cast<s32>(value)));
+				return EeHooks::Action::Continue;
+			});
+		});
 		eng.set_function("hook_remove", [](uint32_t a) { EeHooks::Remove(a); });
 		eng.set_function("hook_clear", []() { EeHooks::Clear(); });
 		eng.set_function("hook_gate_returns", []() { return static_cast<double>(EeHooks::GateReturns()); });
