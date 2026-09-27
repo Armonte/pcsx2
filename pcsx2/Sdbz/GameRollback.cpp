@@ -3161,6 +3161,8 @@ namespace GameRollback
 			return static_cast<u32>(h ^ (h >> 32));
 		}
 		// Frame boundary. Returns true when this frame runs locally (menus / waiting).
+		std::string s_last_sync;   // the desync detector's latest verdict (kept for the menus after a battle)
+		u32 s_last_sync_battle = 0;
 		std::mutex s_badge_mtx;
 		std::string s_badge;
 		void LinkBadgeUpdate()
@@ -3189,9 +3191,14 @@ namespace GameRollback
 				if (battle)
 				{
 					b += fmt::format(" | ping {} ms +-{} | input delay {}f | ahead {:+.1f}f", ns.ping_ms, ns.jitter_ms, ns.delay, ns.frames_ahead);
-					b += fmt::format("\nrollbacks {} (last {}f, {} frames resimulated) | stalls {} | checks {}/{}{}", ns.rollbacks,
-						ns.last_rollback_frames, ns.rollback_frames_total, ns.stalled, ns.compares, ns.mismatches,
-						ns.desynced ? fmt::format(" | DESYNC at {}", ns.desync_frame) : std::string());
+					// the desync detector: cross-peer checksum compares of confirmed frames
+					s_last_sync = ns.desynced ?
+									  fmt::format("DESYNC at frame {} (checks {}/{} mismatched)", ns.desync_frame, ns.compares, ns.mismatches) :
+									  fmt::format("sync OK | {} checks, {} mismatches", ns.compares, ns.mismatches);
+					s_last_sync_battle = s_battle_counter;
+					b += "\n" + s_last_sync;
+					b += fmt::format("\nrollbacks {} (last {}f, {} frames resimulated) | stalls {}", ns.rollbacks,
+						ns.last_rollback_frames, ns.rollback_frames_total, ns.stalled);
 					RollbackDevice::Perf pf;
 					if (RollbackDevice::GetPerf(&pf))
 						b += fmt::format("\nrollback cost avg {:.2f} ms (load {:.2f}, resim {:.2f}) max {:.1f} | sim {:.2f} ms/f | "
@@ -3204,6 +3211,9 @@ namespace GameRollback
 					if (const u32 ping = NetBridge::LinkPingMs())
 						b += fmt::format(" | ping {} ms", ping);
 					b += fmt::format(" | input delay {}f", NetBridge::InputDelay());
+					if (s_last_sync_battle)
+						b += fmt::format("\nlast battle {}: {}", s_last_sync_battle,
+							s_last_sync.rfind("DESYNC", 0) == 0 ? s_last_sync : "in sync (" + s_last_sync.substr(10) + ")");
 				}
 			}
 			std::lock_guard lk(s_badge_mtx);
