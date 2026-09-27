@@ -415,6 +415,8 @@ namespace GameRollback
 				std::vector<std::pair<u32, int>> selection; // resolved picks: address, owning player (0/1)
 				u32 seed_addr = 0;                          // written from player 0's value at commit
 				std::vector<ExprWrite> attach_writes;       // canonicalization at every (re-)attach
+				std::vector<ExprWrite> commit_writes;       // canonicalization at the commit (menu-async state that drives the
+				                                            // commit -> attach window: effect/sound RNG streams, ...)
 				Val onemore_decided;                        // the local one-more choice has been made
 				u32 onemore_choice = 0, retry_value = 1;    // choice word, its RETRY value
 				std::vector<ExprWrite> retry_writes, css_writes; // apply the agreed choice
@@ -873,6 +875,7 @@ namespace GameRollback
 							m->link.selection.emplace_back(Get(c, "addr", 0), static_cast<int>(Get(c, "owner", 0)));
 					m->link.seed_addr = Get(lk, "seed", 0);
 					writes("attach_writes", m->link.attach_writes);
+					writes("commit_writes", m->link.commit_writes);
 					if (Has(lk, "hold"))
 					{
 						const auto hd = Child(lk, "hold");
@@ -2565,6 +2568,11 @@ namespace GameRollback
 				Wr(s_man.link.seed_addr, s_local == 0 ? mine[sel.size()] : s_remote_pick[sel.size()]);
 			s_remote_pick_valid = false;
 			s_pre_attach_neutral = true;
+			// the commit -> attach window must run identically: reset what the async menus let drift (the virtual
+			// audio clock restarts from its canonical empty state, like at every rollback start)
+			ApplyWrites(s_man.link.commit_writes);
+			if (s_man.vs.state)
+				VsInit();
 			Console.WriteLn("GameRollback: link: selections committed (%zu values)", sel.size());
 		}
 		// the game's pending load requests (FUC LoadReq_CountPending: list nodes -> request, done bit)
@@ -2672,6 +2680,12 @@ namespace GameRollback
 												   s_remote_choice == static_cast<s32>(s_man.link.retry_value);
 								ApplyWrites(retry ? s_man.link.retry_writes : s_man.link.css_writes);
 								s_pre_attach_neutral = retry; // RETRY: straight to the attach point with neutral pads
+								if (retry)
+								{
+									ApplyWrites(s_man.link.commit_writes); // the RETRY -> attach window, like a commit
+									if (s_man.vs.state)
+										VsInit();
+								}
 								Console.WriteLn("GameRollback: link: one-more %s (mine %d, peer %d)", retry ? "RETRY" : "CHARACTER SELECT",
 									mine, s_remote_choice);
 							}
