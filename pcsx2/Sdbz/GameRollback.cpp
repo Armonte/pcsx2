@@ -2744,7 +2744,11 @@ namespace GameRollback
 				}
 				case LinkPhase::Battle:
 					if (s_detach_req || NetBridge::RemoteDetachRequested())
+					{
+						// the session's stats as the battle ends (the status line reads "net: off" once detached)
+						Console.WriteLn("GameRollback: link: battle %u end: %s", s_battle_counter, NetBridge::Status().c_str());
 						s_lphase = LinkPhase::Detaching;
+					}
 					return false;
 				case LinkPhase::Detaching:
 				{
