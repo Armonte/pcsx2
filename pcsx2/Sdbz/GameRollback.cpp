@@ -28,6 +28,7 @@
 #include <cctype>
 #include <functional>
 #include <map>
+#include <set>
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
@@ -4178,6 +4179,7 @@ namespace GameRollback
 		std::vector<CsOpen> s_cs_stack;
 		std::map<u32, std::pair<bool, bool>> s_cs_pcs; // pc -> (is a call site, is a return point)
 		std::map<u32, int> s_cs_objreg;                // vtable-keyed site -> register holding the callee's a0 (-1 = off)
+		std::set<u32> s_cs_objkey;                     // sites keyed by the object address itself (not its vtable)
 		void CallProfPc(u32 pc)
 		{
 			const auto [is_call, is_ret] = s_cs_pcs[pc];
@@ -4204,14 +4206,21 @@ namespace GameRollback
 			{
 				u64 key = pc;
 				if (const auto it = s_cs_objreg.find(pc); it != s_cs_objreg.end())
-					key |= static_cast<u64>(Rd(cpuRegs.GPR.r[it->second].UL[0])) << 32;
+				{
+					const u32 obj = cpuRegs.GPR.r[it->second].UL[0];
+					key |= static_cast<u64>(s_cs_objkey.count(pc) ? obj : Rd(obj)) << 32;
+				}
 				s_cs_stack.push_back({key, cpuRegs.cycle, 0, 0, std::chrono::steady_clock::now()});
 			}
 		}
 	}
-	bool CallProfStart(const std::vector<u32>& sites, const std::vector<u32>& vt_sites)
+	bool CallProfStart(const std::vector<u32>& sites, const std::vector<u32>& vt_sites, const std::vector<u32>& obj_sites)
 	{
 		CallProfStop();
+		std::vector<u32> keyed = vt_sites;
+		keyed.insert(keyed.end(), obj_sites.begin(), obj_sites.end());
+		for (const u32 s : obj_sites)
+			s_cs_objkey.insert(s);
 		s_cs_costs.clear();
 		s_cs_stack.clear();
 		for (const u32 site : sites)
@@ -4219,7 +4228,7 @@ namespace GameRollback
 			s_cs_pcs[site].first = true;
 			s_cs_pcs[site + 8].second = true;
 		}
-		for (const u32 site : vt_sites)
+		for (const u32 site : keyed)
 		{
 			s_cs_pcs[site].first = true;
 			s_cs_pcs[site + 8].second = true;
@@ -4244,11 +4253,12 @@ namespace GameRollback
 			EeHooks::Remove(pc);
 		s_cs_pcs.clear();
 		s_cs_objreg.clear();
+		s_cs_objkey.clear();
 		s_cs_stack.clear();
 	}
 	std::string CallProfReport()
 	{
-		std::string out = "# call-site profiler: inclusive and self (minus nested profiled calls) EE cycles per call site [/ object vtable]\n";
+		std::string out = "# call-site profiler: inclusive and self (minus nested profiled calls) EE cycles per call site [/ object vtable or address]\n";
 		for (int r = 1; r >= 0; r--)
 		{
 			u64 host_self = 0, frames_self = 0;
