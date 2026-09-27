@@ -5,6 +5,7 @@
 #include "ImGui/ScriptBridge.h"
 #include "Sdbz/GameRollback.h"
 #include "Sdbz/EeBlockProf.h"
+#include "Sdbz/MemCensus.h"
 #include "Sdbz/EeHooks.h"
 #include "Sdbz/PcInput.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
@@ -279,6 +280,28 @@ namespace
 		});
 		rd.set_function("call_prof_report", []() { return GameRollback::CallProfReport(); });
 		rd.set_function("block_prof_start", []() { EeBlockProf::Start(); });
+		// census_start("lo-hi[/stride],lo-hi,...", "r"|"w"|"rw"): every EE access to the ranges, by pc and phase
+		rd.set_function("census_start", [](std::string list, sol::optional<std::string> mode) {
+			std::vector<MemCensus::Range> ranges;
+			for (const std::string_view v : StringUtil::SplitString(list, ','))
+			{
+				const std::string e(v);
+				MemCensus::Range r{};
+				char* end = nullptr;
+				r.lo = static_cast<u32>(std::strtoul(e.c_str(), &end, 0));
+				if (!end || *end != '-')
+					continue;
+				r.hi = static_cast<u32>(std::strtoul(end + 1, &end, 0));
+				if (end && *end == '/')
+					r.stride = static_cast<u32>(std::strtoul(end + 1, nullptr, 0));
+				if (r.hi > r.lo)
+					ranges.push_back(r);
+			}
+			const std::string m = mode.value_or("rw");
+			MemCensus::Start(std::move(ranges), m.find('r') != std::string::npos, m.find('w') != std::string::npos);
+		});
+		rd.set_function("census_stop", []() { MemCensus::Stop(); });
+		rd.set_function("census_dump", [](std::string path) { return MemCensus::DumpFile(path); });
 		rd.set_function("block_prof_stop", []() { EeBlockProf::Stop(); });
 		rd.set_function("block_prof_dump", [](std::string path) { return EeBlockProf::DumpFile(path); });
 		rd.set_function("task_prof_report", [](sol::optional<uint32_t> top) { return GameRollback::TaskProfReport(top.value_or(40)); });

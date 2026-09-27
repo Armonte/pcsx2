@@ -170,6 +170,8 @@ namespace RbProfiler
 		s_phase.store(p, std::memory_order_relaxed);
 	}
 
+	Phase CurrentPhase() { return static_cast<Phase>(s_phase.load(std::memory_order_relaxed)); }
+
 	void Start(u32 hz)
 	{
 #ifdef _WIN32

@@ -6,6 +6,7 @@
 #include "DebugTools/Breakpoints.h"
 #include "Sdbz/EeHooks.h"
 #include "Sdbz/EeBlockProf.h"
+#include "Sdbz/MemCensus.h"
 #include "Elfheader.h"
 #include "GS.h"
 #include "Host.h"
@@ -1729,6 +1730,57 @@ void recMemcheck(u32 op, u32 bits, bool store)
 	}
 }
 
+// MemCensus: record EE accesses to the census ranges (native range test, C++ call on a hit only)
+static void encodeCensus()
+{
+	u32 mpc = pc;
+	{
+		const OPCODE& cur = GetInstruction(memRead32(pc));
+		if ((cur.flags & IS_BRANCH) && cur.flags != (IS_BRANCH | BRANCHTYPE_SYSCALL) && cur.flags != (IS_BRANCH | BRANCHTYPE_ERET))
+			mpc += 4; // the delay slot's access, tested before the branch (as the debugger's memchecks do)
+	}
+	const u32 op = memRead32(mpc);
+	const OPCODE& opcode = GetInstruction(op);
+	if (!(opcode.flags & IS_MEMORY))
+		return;
+	const bool store = (opcode.flags & IS_STORE) != 0;
+	if (store ? !MemCensus::WantWrites() : !MemCensus::WantReads())
+		return;
+	u32 bits = 0, code = 0;
+	switch (opcode.flags & MEMTYPE_MASK)
+	{
+		case MEMTYPE_BYTE: bits = 8, code = 0; break;
+		case MEMTYPE_HALF: bits = 16, code = 1; break;
+		case MEMTYPE_WORD: bits = 32, code = 2; break;
+		case MEMTYPE_DWORD: bits = 64, code = 3; break;
+		case MEMTYPE_QWORD: bits = 128, code = 4; break;
+		default: return;
+	}
+	const std::vector<MemCensus::Range>& ranges = MemCensus::Ranges();
+	if (ranges.empty())
+		return;
+	iFlushCall(FLUSH_EVERYTHING | FLUSH_PC);
+	_eeMoveGPRtoR(ecx, (op >> 21) & 0x1F, false);
+	if (static_cast<s16>(op) != 0)
+		xADD(ecx, static_cast<s16>(op));
+	if (bits == 128)
+		xAND(ecx, ~0x0F);
+	xAND(ecx, 0x0FFFFFFF); // cached / uncached / uncached-accelerated RAM aliases -> physical
+	std::deque<xForwardJB32> hits;
+	for (const MemCensus::Range& r : ranges)
+	{
+		xLEA(eax, ptr[rcx - static_cast<s32>(r.lo)]);
+		xCMP(eax, r.hi - r.lo);
+		hits.emplace_back();
+	}
+	xForwardJump32 done;
+	for (xForwardJB32& h : hits)
+		h.SetTarget();
+	xMOV(edx, mpc | (store ? 0x80000000u : 0u) | (code << 28));
+	xFastCall((void*)MemCensus::Hit, ecx, edx);
+	done.SetTarget();
+}
+
 bool encodeBreakpoint()
 {
 	if (isBreakpointNeeded(pc) != 0)
@@ -1779,6 +1831,8 @@ void recompileNextInstruction(bool delayslot, bool swapped_delay_slot)
 	// add breakpoint
 	if (!delayslot)
 	{
+		if (MemCensus::Enabled())
+			encodeCensus();
 		if(encodeBreakpoint() || encodeMemcheck())
 			xFastCall((void*)CBreakPoints::CommitClearSkipFirst, BREAKPOINT_EE);
 	}
