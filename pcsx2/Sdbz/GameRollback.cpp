@@ -418,6 +418,11 @@ namespace GameRollback
 				Val onemore_decided;                        // the local one-more choice has been made
 				u32 onemore_choice = 0, retry_value = 1;    // choice word, its RETRY value
 				std::vector<ExprWrite> retry_writes, css_writes; // apply the agreed choice
+				// pre-attach hold (async-menus option B): between the commit and the attach, a frame where the game's
+				// load request list has pending requests skips the sim/render (jump at -> to), so every load costs the
+				// same number of simulation ticks on every peer regardless of disc timing
+				u32 pend_list = 0, pend_pool = 0, pend_done_bit = 0x100, pend_next_off = 8, pend_sentinel = 1;
+				std::vector<std::pair<u32, u32>> hold_jumps;
 			} link;
 			u32 script_hook = 0;
 			int script_file_reg = 5; // a1
@@ -864,6 +869,18 @@ namespace GameRollback
 							m->link.selection.emplace_back(Get(c, "addr", 0), static_cast<int>(Get(c, "owner", 0)));
 					m->link.seed_addr = Get(lk, "seed", 0);
 					writes("attach_writes", m->link.attach_writes);
+					if (Has(lk, "hold"))
+					{
+						const auto hd = Child(lk, "hold");
+						m->link.pend_list = Get(hd, "list", 0);
+						m->link.pend_pool = Get(hd, "pool", 0);
+						m->link.pend_done_bit = Get(hd, "done_bit", 0x100);
+						m->link.pend_next_off = Get(hd, "next_off", 8);
+						m->link.pend_sentinel = Get(hd, "sentinel", 1);
+						if (Has(hd, "jumps"))
+							for (const auto& c : Child(hd, "jumps").children())
+								m->link.hold_jumps.emplace_back(Get(c, "at", 0), Get(c, "to", 0));
+					}
 					if (Has(lk, "onemore"))
 					{
 						const auto om = Child(lk, "onemore");
@@ -2502,9 +2519,46 @@ namespace GameRollback
 			s_pre_attach_neutral = true;
 			Console.WriteLn("GameRollback: link: selections committed (%zu values)", sel.size());
 		}
+		// the game's pending load requests (FUC LoadReq_CountPending: list nodes -> request, done bit)
+		u32 LinkPendingLoads()
+		{
+			const auto& L = s_man.link;
+			if (!L.pend_list || (L.pend_pool && Rd(L.pend_pool) == 0))
+				return 0;
+			u32 n = 0, node = Rd(L.pend_list);
+			for (int guard = 0; guard < 4096 && node; guard++)
+			{
+				const u32 req = Rd(node);
+				if (req == L.pend_sentinel)
+					break;
+				if ((Rd(req) & L.pend_done_bit) == 0)
+					n++;
+				node = Rd(node + L.pend_next_off);
+			}
+			return n;
+		}
+		bool s_hold_frame = false; // decided at the first hold jump of the frame, reused by the others
+		u64 s_held_frames = 0;
 		void InstallLinkHooks()
 		{
 			const auto& L = s_man.link;
+			for (size_t k = 0; k < L.hold_jumps.size(); k++)
+			{
+				const auto [at, to] = L.hold_jumps[k];
+				const bool first = (k == 0);
+				EeHooks::AddCall(at, [to, first](u32) {
+					if (first)
+					{
+						s_hold_frame = s_pre_attach_neutral && LinkPendingLoads() > 0;
+						s_held_frames += s_hold_frame ? 1 : 0;
+					}
+					if (!s_hold_frame)
+						return EeHooks::Action::Continue;
+					cpuRegs.pc = to;
+					return EeHooks::Action::Jump;
+				}, EeHooks::OWNER_GAME);
+				s_link_hooks.push_back(at);
+			}
 			// attach and detach may share one pc (FUC: Seq_DebugPrint with different strings)
 			std::map<u32, int> at;
 			if (L.attach.at)
@@ -2620,7 +2674,10 @@ namespace GameRollback
 					s_battle_counter++;
 					s_detach_req = false;
 					s_lphase = LinkPhase::Battle;
-					Console.WriteLn("GameRollback: link: battle %u attached", s_battle_counter);
+					Console.WriteLn("GameRollback: link: battle %u attached (%llu frames held for loads)", s_battle_counter,
+						static_cast<unsigned long long>(s_held_frames));
+					s_held_frames = 0;
+					s_hold_frame = false;
 					return false; // this frame is the session's frame 0
 				}
 				case LinkPhase::Battle:
