@@ -33,6 +33,7 @@
 
 #include <atomic>
 #include <bit>
+#include <array>
 #include <map>
 #include <unordered_set>
 #include <unordered_map>
@@ -1443,10 +1444,54 @@ static __fi void DirtyTrack_MarkDirty(u32 rampage)
 		s_dirty_bits[rampage >> 6].fetch_or(1ull << (rampage & 63), std::memory_order_relaxed);
 }
 
+// Fastmem aliases of a run of RAM pages, protected with one call per contiguous alias run (the per-page
+// vtlb_UpdateFastmemProtection issued one syscall per page per alias: most of a rollback snapshot's cost).
+static void DirtyTrack_FastmemProtect(u32 first_page, u32 count, const PageProtectionMode& prot)
+{
+	if (!CHECK_FASTMEM)
+		return;
+	constexpr u32 MAX_ALIASES = 16;
+	std::array<std::pair<u32, u32>, MAX_ALIASES> runs{}; // per alias slot: (first fastmem offset, pages)
+	u32 slots = 0;
+	auto flush = [&](u32 k) {
+		if (runs[k].second)
+			HostSys::MemProtect(s_fastmem_area->OffsetPointer(runs[k].first), runs[k].second * __pagesize, prot);
+		runs[k].second = 0;
+	};
+	for (u32 page = first_page; page < first_page + count; page++)
+	{
+		u32 mm_start, mm_size;
+		PageProtectionMode old_prot;
+		u32 k = 0;
+		if (vtlb_GetMainMemoryOffset(page << __pageshift, &mm_start, &mm_size, &old_prot))
+		{
+			const auto range = s_fastmem_physical_mapping.equal_range(mm_start);
+			for (auto it = range.first; it != range.second && k < MAX_ALIASES; ++it)
+			{
+				if (!vtlb_IsHostAligned(it->second))
+					continue;
+				if (runs[k].second && runs[k].first + runs[k].second * __pagesize == it->second)
+					runs[k].second++;
+				else
+				{
+					flush(k);
+					runs[k] = {it->second, 1};
+				}
+				k++;
+			}
+		}
+		for (u32 j = k; j < slots; j++)
+			flush(j);
+		slots = std::max(slots, k);
+	}
+	for (u32 k = 0; k < slots; k++)
+		flush(k);
+}
+
 static void DirtyTrack_SetPageProtection(u32 first_page, u32 count, const PageProtectionMode& prot)
 {
 	HostSys::MemProtect(&eeMem->Main[first_page << __pageshift], count << __pageshift, prot);
-	vtlb_UpdateFastmemProtection(first_page << __pageshift, count << __pageshift, prot);
+	DirtyTrack_FastmemProtect(first_page, count, prot);
 }
 
 // Handles a write fault on a tracked RAM page. Returns false if the page isn't tracked.
