@@ -39,7 +39,8 @@ namespace GameRollback
 		const std::string& journal,
 		std::string* error = nullptr);
 	void NetStop();
-	void SessionLocks(bool on); // manifest session lock-down outside netplay (harness tests)
+	void SessionLocks(bool on);
+	void LinkDumpAtAttach(const std::string& prefix); // link mode: EE RAM dump at every battle attach (prefix.genN) // manifest session lock-down outside netplay (harness tests)
 	std::string NetStatus();
 	void PollAutoStart(); // CPU thread, each presented frame: launcher environment (PS2RB_*), once
 

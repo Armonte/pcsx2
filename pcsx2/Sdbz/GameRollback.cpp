@@ -2397,6 +2397,7 @@ namespace GameRollback
 		s32 s_menu_frame = 0;
 		u32 s_battle_counter = 0;
 		std::vector<u32> s_link_hooks;
+		std::string s_link_dump_prefix; // desync forensics: EE RAM at every attach (after the canonical writes)
 
 		void LinkPump()
 		{
@@ -2567,6 +2568,16 @@ namespace GameRollback
 						std::this_thread::sleep_for(std::chrono::milliseconds(1));
 					}
 					ApplyWrites(s_man.link.attach_writes); // canonical state at every (re-)attach
+					if (!s_link_dump_prefix.empty())
+					{
+						const std::string out = fmt::format("{}.gen{}", s_link_dump_prefix, s_battle_counter + 1);
+						if (std::FILE* fp = FileSystem::OpenCFile(out.c_str(), "wb"))
+						{
+							std::fwrite(eeMem->Main, 1, Ps2MemSize::MainRam, fp);
+							std::fclose(fp);
+							Console.WriteLn("GameRollback: link: EE RAM at attach -> %s", out.c_str());
+						}
+					}
 					DoStart(static_cast<int>(RollbackDevice::Mode::Netplay), 8);
 					s_net = true;
 					s_net_fwd_save = -1;
@@ -2859,6 +2870,7 @@ namespace GameRollback
 		return true;
 	}
 	// the manifest's session lock-down outside a netplay session (harness tests): applied at the next frame boundary
+	void LinkDumpAtAttach(const std::string& prefix) { s_link_dump_prefix = prefix; }
 	void SessionLocks(bool on)
 	{
 		std::lock_guard lk(s_req_mtx);
