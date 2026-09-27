@@ -1588,7 +1588,7 @@ static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
 	if (kind == EeHooks::Kind::ResimGate || kind == EeHooks::Kind::ResimGateRet)
 	{
 		// if (resimulating) { [v0 = value;] pc = ra; exit block } -- one byte compare on the fast path
-		xCMP(ptr8[EeHooks::ResimFlag()], 0);
+		xCMP(ptr8[EeHooks::ResimFlagFor(startpc)], 0);
 		xForwardJZ32 run;
 		xADD(ptr64[EeHooks::GateReturnCounter()], 1);
 		if (kind == EeHooks::Kind::ResimGateRet)
@@ -1608,7 +1608,7 @@ static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
 		std::optional<xForwardJZ32> run;
 		if (kind != EeHooks::Kind::SkipCallAlways)
 		{
-			xCMP(ptr8[kind == EeHooks::Kind::SkipCallResim ? EeHooks::ResimFlag() : EeHooks::ResimNonFinalFlag()], 0);
+			xCMP(ptr8[EeHooks::ResimFlagFor(startpc)], 0);
 			run.emplace();
 		}
 		xMOV(ptr32[&cpuRegs.pc], startpc + 4);

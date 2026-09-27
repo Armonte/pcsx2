@@ -12,6 +12,8 @@
 #include "Counters.h"
 
 #include "common/Console.h"
+
+#include <cmath>
 #include "common/Error.h"
 #include "common/FileSystem.h"
 #include "common/Timer.h"
@@ -72,6 +74,12 @@ namespace RollbackDevice
 		u32 s_cur_depth = 0;                  // depth of the rollback in progress   // host-side gate condition for the next frame (SetFrameGateCondition)
 		std::atomic<bool> s_resimulating{false};   // between a rollback and CUR_PRE (read by other threads)
 		u8 s_resim_nonfinal = 0;                   // re-simulating a frame that is not the rollback's last (EeHooks byte)
+		// Interleaved A/B: hooks marked `ab` act only on every other rollback (phase B); both arms share one process
+		// and one machine load, so the per-arm resim averages are a paired comparison.
+		bool s_ab_phase = false;
+		u8 s_resim_ab = 0, s_resim_nonfinal_ab = 0; // the EeHooks bytes of ab-marked hooks
+		u64 s_ab_other_at_start = 0, s_ab_sum_us[2] = {0, 0}, s_ab_sum_sq[2] = {0, 0}, s_ab_n[2] = {0, 0};
+		bool s_ab_used = false;
 		std::atomic<bool> s_lever_host_vsync{true}, s_lever_park{true}, s_lever_iop{true};
 		s32 s_confirmed = -1;                      // resim captures below this frame are skipped (-1 = none)
 		u32 s_resim_flag_addr = 0;                 // game-side resim flag word (0 = none)
@@ -381,7 +389,8 @@ namespace RollbackDevice
 			s_ref_pages.clear(); // pins of a dropped ring: never unpinned into another ring
 			s_ring.reset();
 			s_resimulating.store(false, std::memory_order_relaxed);
-			s_resim_nonfinal = 0;
+			s_resim_nonfinal = s_resim_nonfinal_ab = s_resim_ab = 0;
+			s_ab_sum_us[0] = s_ab_sum_us[1] = s_ab_sum_sq[0] = s_ab_sum_sq[1] = s_ab_n[0] = s_ab_n[1] = 0;
 			s_frame = -1;
 			s_dyn_rebuilds = 0;
 			s_resim_active = false;
@@ -575,7 +584,7 @@ namespace RollbackDevice
 		std::lock_guard lk(s_mtx);
 		s_mode = Mode::Off;
 		s_resimulating.store(false, std::memory_order_relaxed); // EE unparks the sync counters at its next event test
-		s_resim_nonfinal = 0;
+		s_resim_nonfinal = s_resim_nonfinal_ab = s_resim_ab = 0;
 		s_ring.reset();
 	}
 
@@ -686,6 +695,9 @@ namespace RollbackDevice
 	void SetFrameGateCondition(bool ok) { s_gate_condition.store(ok, std::memory_order_relaxed); }
 
 	const u8* ResimNonFinalFlag() { return &s_resim_nonfinal; }
+	const u8* ResimABFlag() { return &s_resim_ab; }
+	const u8* ResimNonFinalABFlag() { return &s_resim_nonfinal_ab; }
+	void MarkABUsed() { s_ab_used = true; }
 	const u8* ResimulatingFlag()
 	{
 		static_assert(sizeof(std::atomic<bool>) == 1, "EeHooks tests the flag as a byte");
@@ -923,6 +935,8 @@ namespace RollbackDevice
 
 				// Sync test: remember this frame's state, rewind R frames, let the game re-simulate them.
 				s_rollback_timer.Reset();
+				s_ab_phase = !s_ab_phase;
+				s_ab_other_at_start = s_sum_ref_us + s_sum_load_us + s_sum_cap_us + s_sum_cmp_us;
 				CpuTimer t;
 				RbProfiler::SetPhase(RbProfiler::PH_SYNCTEST);
 				if (s_mode == Mode::SyncTest && (!s_ring || !s_ring->Pin(s_frame, s_ref_pages)))
@@ -939,6 +953,7 @@ namespace RollbackDevice
 				if (s_mode == Mode::Bench)
 					s_confirmed = s_frame + static_cast<s32>(s_bench_every) - static_cast<s32>(s_rollback); // next target
 				s_resimulating.store(true, std::memory_order_relaxed);
+				s_resim_ab = s_ab_phase;
 				if (s_lever_park.load(std::memory_order_relaxed))
 					rcntRollbackPark(); // re-simulation takes no display time
 				WriteResimFlag(1);
@@ -969,6 +984,7 @@ namespace RollbackDevice
 				s_phase = Phase::Resim;
 				s_phase_frame = s_resim_base + static_cast<s32>(arg);
 				s_resim_nonfinal = s_resim_active && arg + 1 < s_cur_depth;
+				s_resim_nonfinal_ab = s_resim_nonfinal && s_ab_phase;
 				s_cur_trace.clear();
 				return 0;
 
@@ -1060,7 +1076,7 @@ namespace RollbackDevice
 					}
 					InjectInput(s_frame);
 					s_resim_active = false;
-					s_resim_nonfinal = 0;
+					s_resim_nonfinal = s_resim_nonfinal_ab = s_resim_ab = 0;
 					s_resimulating.store(false, std::memory_order_relaxed);
 					rcntRollbackUnpark();
 					WriteResimFlag(0);
@@ -1077,6 +1093,14 @@ namespace RollbackDevice
 					s_last_rollback_us = static_cast<u64>(s_rollback_timer.GetTimeNanoseconds() / 1000.0);
 					s_max_rollback_us = std::max(s_max_rollback_us, s_last_rollback_us);
 					s_sum_rollback_us += s_last_rollback_us;
+					{
+						const u64 other = s_sum_ref_us + s_sum_load_us + s_sum_cap_us + s_sum_cmp_us - s_ab_other_at_start;
+						const u64 game = s_last_rollback_us > other ? s_last_rollback_us - other : 0;
+						const int arm = s_ab_phase ? 1 : 0;
+						s_ab_sum_us[arm] += game;
+						s_ab_sum_sq[arm] += game * game;
+						s_ab_n[arm]++;
+					}
 				}
 				s_phase = Phase::NormalSim;
 				RbProfiler::SetPhase(RbProfiler::PH_SIM);
@@ -1179,6 +1203,18 @@ namespace RollbackDevice
 				s_sum_load_us / n, (s_sum_rollback_us > other ? s_sum_rollback_us - other : 0) / n, s_sum_cap_us / n,
 				(s_sum_rollback_us > s_sum_ref_us + s_sum_cmp_us ? s_sum_rollback_us - s_sum_ref_us - s_sum_cmp_us : 0) / n,
 				s_sum_ref_us / n, s_sum_cmp_us / n);
+			if (s_ab_used && s_ab_n[0] && s_ab_n[1])
+			{
+				double mean[2], se[2];
+				for (int k = 0; k < 2; k++)
+				{
+					mean[k] = static_cast<double>(s_ab_sum_us[k]) / s_ab_n[k];
+					const double var = std::max(0.0, static_cast<double>(s_ab_sum_sq[k]) / s_ab_n[k] - mean[k] * mean[k]);
+					se[k] = std::sqrt(var / s_ab_n[k]);
+				}
+				s += fmt::format(" | A/B resim game: A(off) {:.0f}+-{:.0f} us n={} B(on) {:.0f}+-{:.0f} us n={} delta {:+.1f}%", mean[0], se[0],
+					s_ab_n[0], mean[1], se[1], s_ab_n[1], mean[0] > 0 ? 100.0 * (mean[1] - mean[0]) / mean[0] : 0.0);
+			}
 		}
 		if (s_pace_frames)
 		{
