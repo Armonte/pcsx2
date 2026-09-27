@@ -251,6 +251,9 @@ namespace
 		rd.set_function("set_resim_flag", [](uint32_t a) { RollbackDevice::SetResimFlagAddr(a); });
 		rd.set_function("set_dma_sink", [](bool on) { RollbackDevice::SetDmaSink(on); });
 		rd.set_function("set_quiet_iop", [](bool on) { RollbackDevice::SetQuietIop(on); });
+		rd.set_function("task_prof_start", [](uint32_t call_pc, uint32_t ret_pc, uint32_t reg) { return GameRollback::TaskProfStart(call_pc, ret_pc, reg); });
+		rd.set_function("task_prof_stop", []() { GameRollback::TaskProfStop(); });
+		rd.set_function("task_prof_report", [](sol::optional<uint32_t> top) { return GameRollback::TaskProfReport(top.value_or(40)); });
 		rd.set_function("set_levers", [](bool host_vsync, bool park, bool iop) { RollbackDevice::SetLevers(host_vsync, park, iop); });
 		// Deterministic controller feed (player 1-based; buttons = game layout, see PadFeed.h):
 		//   pad_off(p) | pad_const(p, buttons[, lx, ly, rx, ry]) | pad_seq(p, {{buttons, frames[, lx, ly, rx, ry]}, ...}[, loop])

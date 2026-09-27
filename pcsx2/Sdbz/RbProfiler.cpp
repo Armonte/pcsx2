@@ -38,6 +38,11 @@ namespace RbProfiler
 		std::atomic<u32> s_ee_tid{0};
 		std::atomic<bool> s_running{false};
 		std::thread s_thread;
+		// a sampler still running at process exit would abort it (joinable std::thread destroyed): stop it first
+		struct StopAtExit
+		{
+			~StopAtExit();
+		} s_stop_at_exit;
 		std::mutex s_mtx; // guards s_hits / s_phase_samples
 		std::unordered_map<u64, u64> s_hits; // (phase << 56) | rip -> samples
 		std::unordered_map<u64, u64> s_ee_pc; // (phase << 32) | EE pc -> samples taken in EE recompiled code
@@ -278,5 +283,9 @@ namespace RbProfiler
 		(void)top_n;
 		return "RbProfiler: only implemented on Windows\n";
 #endif
+	}
+	namespace
+	{
+		StopAtExit::~StopAtExit() { Stop(); }
 	}
 } // namespace RbProfiler

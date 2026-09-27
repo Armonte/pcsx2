@@ -293,3 +293,20 @@ Every new mechanism is A/B-tested against the previous one (interleaved pairs, m
   - `ai_route` makes every fighter's CPU AI tick and play through its real pad, as simulation-level hooks
     (netplay-safe);
   - `gs_shot` captures game video only.
+
+## 10. Rollback cost work (2026-09-27)
+
+Measured with `FUC/tools/fuc_synctest2.sh` (single instance, every frame rolled back 8 and re-simulated, SIM
+DESYNC must stay 0) and in link-mode netplay (WAN relay ~100 ms, max CPU AI).
+
+| change | effect |
+|---|---|
+| `quiet_iop` lever (R5900.cpp, default on): with the IOP frozen for re-simulation, the EE event test neither runs `iopEventTest` nor schedules event checks for the IOP (they fired every few hundred cycles with nothing due) | resim 1.62 -> 0.87 ms per frame (synctest R=8), event-test share of resim ~26% -> <1%; 0 SIM DESYNC over 2371 depth-8 rollbacks |
+| dirty tracking protects fastmem aliases per contiguous run (vtlb.cpp `DirtyTrack_FastmemProtect`), not per page per alias | per-frame snapshot 556 -> ~130 us (collect 429 -> 125-150 us) |
+| 8-bytes-per-step state checksum (`HashState`) | every save hashes the watch set |
+| netplay per rollback (avg) | 3.4-4.3 ms -> 1.7-2.7 ms |
+
+Next: per game task inclusive cost during re-simulation (`task_prof` harness command: hooks the task dispatcher
+jalr/return, FUC 0x211230/0x211238) and a proof per candidate (skip it while re-simulating in synctest: SIM DESYNC
+must stay 0) before any skip ships; skipping saves of confirmed re-simulated frames needs the bridge to expose a
+per-ADVANCE `confirmed` flag (requested).
