@@ -303,6 +303,8 @@ namespace
 		});
 		rd.set_function("census_stop", []() { MemCensus::Stop(); });
 		rd.set_function("callgraph_start", []() { EeCallGraph::Start(); });
+		rd.set_function("memo_probe_start", [](uint32_t pc, std::string spec) { return GameRollback::MemoProbeStart(pc, spec); });
+		rd.set_function("memo_probe_report", []() { return GameRollback::MemoProbeReport(); });
 		rd.set_function("callgraph_stop", []() { EeCallGraph::Stop(); });
 		rd.set_function("callgraph_dump", [](std::string path) { return EeCallGraph::DumpFile(path); });
 		rd.set_function("census_dump", [](std::string path) { return MemCensus::DumpFile(path); });
