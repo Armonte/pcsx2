@@ -2716,7 +2716,17 @@ namespace GameRollback
 					return;
 				const auto it = s_vl_reqs.find(req);
 				if (it != s_vl_reqs.end() && s_vl_tick >= it->second.deadline && !VlRealReady(req))
+				{
 					stall = true;
+					if (s_vl_stalls < 4 || (s_vl_stalls % 30) == 0) // diagnostics: which read, what the ADXF status says
+					{
+						const u32 h = Rd(req + V.handle_off);
+						Console.WriteLn("GameRollback: vload: stall %llu: req %08x state %u handle %08x stat %d tick %u deadline %u",
+							static_cast<unsigned long long>(s_vl_stalls), req, Rd(req + V.state_off), h,
+							h ? static_cast<int>(static_cast<s8>(eeMem->Main[(h + V.stat_off) & RAM_MASK])) : -99, s_vl_tick,
+							it->second.deadline);
+					}
+				}
 			});
 			if (stall)
 			{
@@ -2777,7 +2787,13 @@ namespace GameRollback
 						r.real_ready = static_cast<s32>(s_vl_frame_tick - r.first);
 					const bool due = !s_hold_frame && s_vl_frame_tick >= r.deadline;
 					if (due && !real)
+					{
 						s_vl_late++; // the frame-start stall check should have held this frame
+						const u32 h = Rd(req + V.handle_off);
+						Console.WriteLn("GameRollback: vload: late poll: req %08x handle %08x (a0 %08x) stat %d tick %u deadline %u", req, h,
+							cpuRegs.GPR.r[4].UL[0], h ? static_cast<int>(static_cast<s8>(eeMem->Main[(h + V.stat_off) & RAM_MASK])) : -99,
+							s_vl_frame_tick, r.deadline);
+					}
 					cpuRegs.GPR.r[2].UD[0] = (due && real) ? 1 : 0;
 					return EeHooks::Action::Continue;
 				}, EeHooks::OWNER_GAME);
