@@ -44,7 +44,7 @@ extern "C" {
  *   2  the persistent peer link (pcb_link_*): reliable ordered host messages while no rollback session
  *      exists (async menus), and per-battle pcb_attach / pcb_detach of the rollback session, repeatable on
  *      one link; one .pcrep per link with one generation per attach (pcb_replay_open_gen). */
-#define PCB_ABI_REVISION 2u
+#define PCB_ABI_REVISION 3u   /* 3: pcb_stats.prediction_depth */
 
 typedef struct pcb_session pcb_session;   /* a netplay / synctest / local session */
 typedef struct pcb_replay  pcb_replay;    /* a .pcrep playback */
@@ -215,6 +215,10 @@ typedef struct pcb_stats {
     int32_t  stalled_frames;        /* pcb_frame calls that advanced nothing (the host did not run a frame) */
     int64_t  replay_frames_recorded;  /* advance events the recorder consumed (re-simulations included) */
     int32_t  replay_anchor_frame;   /* -1 until the recording's state anchor was written */
+    /* revision 3: simulated frames still resting on predicted remote input (gekko_prediction_depth). Every frame
+     * <= current_frame - 1 - prediction_depth ran on real inputs from every peer and is never loaded again by the
+     * session (while no peer is disconnected), so a host may answer its SAVE with the checksum only. */
+    int32_t  prediction_depth;
 } pcb_stats;
 
 PCB_API uint32_t     PCB_CALL pcb_abi_version(void);
@@ -307,7 +311,12 @@ PCB_API const char*  PCB_CALL pcb_last_error(void);
  *                pcb_link_poll may be called too (messages keep flowing)
  *   detaching  : (resolve the previous plan's saves) -> pcb_detach(link); while it returns
  *                PCB_DETACH_PENDING, keep calling pcb_frame and running its plan exactly as when attached
- *                (the plan may still carry rollbacks, and forward frames up to the agreed stop frame).
+ *                (the plan may still carry rollbacks, and forward frames up to the agreed stop frame; every
+ *                non-empty plan has exactly one forward frame). The stop frame's plan is handed out only once
+ *                every input through it is confirmed; after it pcb_frame returns 0 (hold, empty plan) until
+ *                pcb_detach completes -- a host that spins on a 0 return must call pcb_detach in that spin.
+ *                DETACHED means: this peer ran exactly up to the stop frame (its saves resolved), the peer
+ *                did too, and both have every input through it -- the stop frame is last_stop_frame on both.
  *                Once it returns DETACHED/FORCED the session is gone (the pointer is invalid).
  */
 
