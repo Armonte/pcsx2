@@ -3180,6 +3180,8 @@ namespace GameRollback
 			return static_cast<u32>(h ^ (h >> 32));
 		}
 		// Frame boundary. Returns true when this frame runs locally (menus / waiting).
+		std::string s_desync_prefix;       // desync evidence files: <recording path minus .pcrep>.desync.bN.frameF.*
+		u32 s_desync_dumped_battle = ~0u;
 		std::string s_last_sync;   // the desync detector's latest verdict (kept for the menus after a battle)
 		u32 s_last_sync_battle = 0;
 		std::mutex s_badge_mtx;
@@ -3599,6 +3601,23 @@ namespace GameRollback
 						std::memcpy(out, NEUTRAL, sizeof(NEUTRAL));
 				};
 				host.state_checksum = [] { return HashState(); };
+				// desync evidence: the rollback ring (every frame it still holds) + live memory, once per battle, next to
+				// the session recording -- a soak stops at the first desync and keeps this
+				s_desync_prefix = r.net.replay_path;
+				if (const size_t k = s_desync_prefix.find(";dump="); k != std::string::npos)
+					s_desync_prefix.resize(k);
+				if (s_desync_prefix.size() > 6 && s_desync_prefix.ends_with(".pcrep"))
+					s_desync_prefix.resize(s_desync_prefix.size() - 6);
+				s_desync_dumped_battle = ~0u;
+				host.on_desync = [](int frame, u32 local, u32 remote, int kind) {
+					if (s_desync_prefix.empty() || s_desync_dumped_battle == s_battle_counter)
+						return;
+					s_desync_dumped_battle = s_battle_counter;
+					const std::string pre = fmt::format("{}.desync.b{}.frame{}", s_desync_prefix, s_battle_counter, frame);
+					RollbackDevice::DumpRing(pre);
+					Console.Error("GameRollback: DESYNC evidence (battle %u frame %d kind %d, local %08X remote %08X) -> %s.*.ee",
+						s_battle_counter, frame, kind, local, remote, pre.c_str());
+				};
 				host.in_game = [] {
 					s64 v = 1;
 					return !s_man.gate_when || (Eval(*s_man.gate_when, 0, &v) && v != 0);

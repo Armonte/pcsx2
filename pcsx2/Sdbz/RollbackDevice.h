@@ -160,4 +160,6 @@ namespace RollbackDevice
 		u32 pace_p99_ms = 0;
 	};
 	bool GetPerf(Perf* out); // false: device off
+	// Desync evidence: every frame in the rollback ring as <prefix>.fN.ee plus the live memory as <prefix>.live.ee
+	u32 DumpRing(const std::string& prefix);
 } // namespace RollbackDevice
