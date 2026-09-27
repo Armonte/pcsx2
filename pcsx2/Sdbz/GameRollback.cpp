@@ -3159,6 +3159,39 @@ namespace GameRollback
 			return static_cast<u32>(h ^ (h >> 32));
 		}
 		// Frame boundary. Returns true when this frame runs locally (menus / waiting).
+		std::mutex s_badge_mtx;
+		std::string s_badge;
+		void LinkBadgeUpdate()
+		{
+			static u32 tick = 0;
+			static LinkPhase last = LinkPhase::Off;
+			static bool last_wait = false;
+			if (s_lphase == last && s_wait_hold == last_wait && ++tick < 30)
+				return;
+			tick = 0;
+			last = s_lphase;
+			last_wait = s_wait_hold;
+			std::string b;
+			if (s_lphase != LinkPhase::Off)
+			{
+				b = fmt::format("P{}", s_local + 1);
+				if (s_wait_hold)
+					b += " | waiting for the other player";
+				else if (s_lphase == LinkPhase::Battle || s_lphase == LinkPhase::Detaching)
+				{
+					b += fmt::format(" | battle {}", s_battle_counter);
+					const std::string st = NetBridge::Status();
+					if (const size_t k = st.find("rollbacks "); k != std::string::npos)
+						b += fmt::format(" | rb {}", std::atoi(st.c_str() + k + 10));
+				}
+				else
+					b += CssMirror::InCss() ? " | character select" : " | menus";
+				if (const u32 ping = NetBridge::LinkPingMs())
+					b += fmt::format(" | ping {} ms", ping);
+			}
+			std::lock_guard lk(s_badge_mtx);
+			s_badge = std::move(b);
+		}
 		void LinkWaitOsd()
 		{
 			static bool shown = false;
@@ -3182,6 +3215,7 @@ namespace GameRollback
 		{
 			LinkPump();
 			LinkWaitOsd();
+			LinkBadgeUpdate();
 			switch (s_lphase)
 			{
 				case LinkPhase::Menu:
@@ -3682,4 +3716,9 @@ namespace GameRollback
 	}
 	std::string Status() { return s_status + fmt::format(" | mode {}", s_mode); }
 	void SetFileWatch(bool on) { s_watch = on; }
+	std::string LinkBadge()
+	{
+		std::lock_guard lk(s_badge_mtx);
+		return s_badge;
+	}
 } // namespace GameRollback

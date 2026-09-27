@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
+#include "Sdbz/GameRollback.h"
 #include "Sdbz/PcInput.h"
 #include "BuildVersion.h"
 #include "Config.h"
@@ -1837,6 +1838,18 @@ void ImGuiManager::RenderOverlays()
 	DrawInputsOverlay(scale, margin, spacing);
 	if (SaveStateSelectorUI::s_open)
 		SaveStateSelectorUI::Draw();
+	if (const std::string badge = GameRollback::LinkBadge(); !badge.empty())
+	{
+		// netplay session badge (top right): which player this window is, the phase, ping
+		ImFont* const font = ImGuiManager::GetFixedFont();
+		const float size = ImGuiManager::GetFontSizeStandard();
+		const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, badge.c_str());
+		const ImVec2 io = ImGui::GetIO().DisplaySize;
+		const ImVec2 p0(io.x - ts.x - margin - 2.0f * spacing, margin), p1(io.x - margin, margin + ts.y + 2.0f * spacing);
+		ImDrawList* dl = ImGui::GetForegroundDrawList();
+		dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 170), 4.0f * scale);
+		dl->AddText(font, size, ImVec2(p0.x + spacing, p0.y + spacing), IM_COL32(255, 220, 90, 255), badge.c_str());
+	}
 	PcInput::DrawOverlay(); // creamybinder binder (PovertyCaster session input), on top
 }
 
