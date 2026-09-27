@@ -266,16 +266,16 @@ namespace
 		rd.set_function("op_prof_start", [](uint32_t call_pc, uint32_t ret_pc, uint32_t vm_reg, uint32_t ip_reg) { return GameRollback::OpProfStart(call_pc, ret_pc, vm_reg, ip_reg); });
 		rd.set_function("op_prof_report", [](sol::optional<uint32_t> top) { return GameRollback::OpProfReport(top.value_or(60)); });
 		rd.set_function("call_prof_start", [](std::string list) {
-			// "0xSITE,0xSITE:v,...": ":v" keys that site by the called object's vtable
-			std::vector<u32> sites, vt_sites;
+			// "0xSITE,0xSITE:v,0xSITE:o,...": ":v" keys that site by the called object's vtable, ":o" by its address
+			std::vector<u32> sites, vt_sites, obj_sites;
 			for (const std::string_view v : StringUtil::SplitString(list, ','))
 				if (!v.empty())
 				{
 					const std::string e(v);
 					const u32 pc = static_cast<u32>(std::strtoul(e.c_str(), nullptr, 0));
-					(e.ends_with(":v") ? vt_sites : sites).push_back(pc);
+					(e.ends_with(":v") ? vt_sites : e.ends_with(":o") ? obj_sites : sites).push_back(pc);
 				}
-			return GameRollback::CallProfStart(sites, vt_sites);
+			return GameRollback::CallProfStart(sites, vt_sites, obj_sites);
 		});
 		rd.set_function("call_prof_report", []() { return GameRollback::CallProfReport(); });
 		rd.set_function("block_prof_start", []() { EeBlockProf::Start(); });
