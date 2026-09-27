@@ -1021,6 +1021,8 @@ namespace GameRollback
 						C.var_stage_avail = Get(cm, "var_stage_avail", 0);
 						C.main_thread = Get(cm, "main_thread", 1);
 						C.pc_stage = Get(cm, "pc_stage", 0);
+						C.stage_id_addr = Get(cm, "stage_id_addr", 0);
+						C.confirmed_value = Get(cm, "confirmed_value", 2);
 						C.grid_table = Get(cm, "grid_table", 0);
 						C.grid_table_b = Get(cm, "grid_table_b", 0);
 						C.grid_cols = Get(cm, "grid_cols", 9);

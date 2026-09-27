@@ -37,7 +37,9 @@ namespace CssMirror
 		std::array<u32, 2> side_thread{};       // VM thread index of each side
 		u32 main_thread = 1;
 		std::array<u32, 2> pc_browse{}, pc_colour{}, pc_locked{}, pc_confirm{}, pc_colour_confirm{};
-		u32 pc_stage = 0;
+		u32 pc_stage = 0;                       // (diagnostic only)
+		u32 stage_id_addr = 0;                  // the confirmed stage id (written at the stage confirm)
+		u32 confirmed_value = 2;                // side 0 entry state (side_rec[0]+0) once the stage is confirmed
 		u32 grid_table = 0, grid_table_b = 0, grid_cols = 9, grid_rows = 2, random_col = 4;
 		u32 unlock_bits = 0, unlock_base = 511;
 		u32 stage_entries = 10;                 // stage cursor 0..stage_entries (0 = RANDOM)
