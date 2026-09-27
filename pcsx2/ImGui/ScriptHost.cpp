@@ -234,6 +234,7 @@ namespace
 		});
 		rd.set_function("net_stop", []() { GameRollback::NetStop(); });
 		rd.set_function("session_locks", [](bool on) { GameRollback::SessionLocks(on); });
+		rd.set_function("link_dump", [](const std::string& prefix) { GameRollback::LinkDumpAtAttach(prefix); });
 		// PovertyCaster input (creamybinder owns the devices): pcinput_start(profile[, online_seat]) / stop / status
 		rd.set_function("pcinput_start", [](const std::string& profile, sol::optional<int> seat) {
 			PcInput::Params p;
