@@ -35,6 +35,18 @@ namespace NetBridge
 		decltype(&pcb_replay_frame) p_replay_frame = nullptr;
 		decltype(&pcb_replay_resolve_save) p_replay_resolve_save = nullptr;
 		decltype(&pcb_replay_get_stats) p_replay_get_stats = nullptr;
+		decltype(&pcb_abi_revision) p_abi_revision = nullptr;
+		decltype(&pcb_link_open) p_link_open = nullptr;
+		decltype(&pcb_link_close) p_link_close = nullptr;
+		decltype(&pcb_link_send) p_link_send = nullptr;
+		decltype(&pcb_link_poll) p_link_poll = nullptr;
+		decltype(&pcb_link_get_stats) p_link_get_stats = nullptr;
+		decltype(&pcb_attach) p_attach = nullptr;
+		decltype(&pcb_link_session) p_link_session = nullptr;
+		decltype(&pcb_detach) p_detach = nullptr;
+		pcb_link* s_link = nullptr;
+		pcb_config s_attach_cfg = {};
+		pcb_host s_attach_host = {};
 		pcb_replay* s_replay_h = nullptr;
 
 		// Host schedule journal: one text record per planned frame and per answered save. A session writes it; the
@@ -77,6 +89,18 @@ namespace NetBridge
 							s_lib.GetSymbol("pcb_replay_frame", &p_replay_frame) &&
 							s_lib.GetSymbol("pcb_replay_resolve_save", &p_replay_resolve_save) &&
 							s_lib.GetSymbol("pcb_replay_get_stats", &p_replay_get_stats);
+			// revision 2 (the link) is optional: resolved only when the DLL announces it
+			if (ok && s_lib.GetSymbol("pcb_abi_revision", &p_abi_revision) && p_abi_revision() >= 2)
+			{
+				s_lib.GetSymbol("pcb_link_open", &p_link_open);
+				s_lib.GetSymbol("pcb_link_close", &p_link_close);
+				s_lib.GetSymbol("pcb_link_send", &p_link_send);
+				s_lib.GetSymbol("pcb_link_poll", &p_link_poll);
+				s_lib.GetSymbol("pcb_link_get_stats", &p_link_get_stats);
+				s_lib.GetSymbol("pcb_attach", &p_attach);
+				s_lib.GetSymbol("pcb_link_session", &p_link_session);
+				s_lib.GetSymbol("pcb_detach", &p_detach);
+			}
 			if (!ok || p_abi_version() != PCB_ABI_VERSION)
 			{
 				if (error)
@@ -308,6 +332,38 @@ namespace NetBridge
 		h.on_desync = CbDesync;
 		h.export_state = CbExportState;
 		h.import_state = CbImportState;
+		if (cfg.mode == Mode::Link)
+		{
+			if (!p_link_open || !p_attach || !p_detach)
+			{
+				if (error)
+					*error = "pc_ps2bridge.dll has no link (ABI revision < 2)";
+				return false;
+			}
+			pcb_link_config lc = {};
+			lc.struct_size = sizeof(lc);
+			lc.abi_version = PCB_ABI_VERSION;
+			lc.local_player = cfg.local_player;
+			lc.remote_addr = s_remote.c_str();
+			lc.local_port = cfg.port;
+			lc.input_size = INPUT_SIZE;
+			lc.replay_path = s_replay.empty() ? nullptr : s_replay.c_str();
+			lc.game_id = s_game.c_str();
+			lc.log = CbLog;
+			s_link = p_link_open(&lc);
+			if (!s_link)
+			{
+				if (error)
+					*error = fmt::format("pcb_link_open: {}", p_last_error());
+				return false;
+			}
+			c.mode = PCB_MODE_P2P;
+			c.replay_path = nullptr; // the link records
+			s_attach_cfg = c;
+			s_attach_host = h;
+			Console.WriteLn("NetBridge: link open (local player %d, %s <- :%u)", cfg.local_player, s_remote.c_str(), cfg.port);
+			return true;
+		}
 		if (cfg.mode == Mode::Replay)
 		{
 			c.replay_path = nullptr;
@@ -335,6 +391,13 @@ namespace NetBridge
 
 	void Stop()
 	{
+		if (s_link)
+		{
+			s_session = nullptr; // owned by the link
+			p_link_close(s_link);
+			s_link = nullptr;
+			Console.WriteLn("NetBridge: link closed");
+		}
 		if (s_session)
 		{
 			p_destroy(s_session);
@@ -364,7 +427,78 @@ namespace NetBridge
 		}
 	}
 
-	bool Active() { return s_session != nullptr || s_replay_h != nullptr || !s_jplans.empty(); }
+	bool Active() { return s_link != nullptr || s_session != nullptr || s_replay_h != nullptr || !s_jplans.empty(); }
+
+	bool LinkSend(u16 type, s32 frame, const void* data, u32 len)
+	{
+		return s_link && p_link_send(s_link, type, frame, data, len) > 0;
+	}
+	bool LinkPoll(Message* out)
+	{
+		if (!s_link)
+			return false;
+		pcb_link_msg m = {};
+		m.struct_size = sizeof(m);
+		if (p_link_poll(s_link, &m) != 1)
+			return false;
+		out->type = m.type;
+		out->frame = m.frame;
+		out->data.assign(m.data, m.data + m.len);
+		return true;
+	}
+	int Attach(u32 attach_id)
+	{
+		if (!s_link)
+			return -1;
+		const int32_t r = p_attach(s_link, attach_id, &s_attach_cfg, &s_attach_host);
+		if (r == PCB_ATTACH_ATTACHED)
+		{
+			s_session = p_link_session(s_link);
+			// a fresh session: frame 0 = this frame
+			s_save_seq = 0;
+			s_save_to_bridge.clear();
+			s_save_frame.clear();
+			s_frame_checksum.clear();
+			s_frame_inputs.clear();
+			s_pre_save_ids.clear();
+			s_start_known = false;
+			Console.WriteLn("NetBridge: attached (id %08X)", attach_id);
+			return 1;
+		}
+		return r < 0 ? r : 0;
+	}
+	int Detach()
+	{
+		if (!s_link)
+			return -1;
+		const int32_t r = p_detach(s_link);
+		if (r == PCB_DETACH_CLEAN || r == PCB_DETACH_FORCED)
+		{
+			s_session = nullptr;
+			Console.WriteLn("NetBridge: detached (%s)", r == PCB_DETACH_CLEAN ? "clean" : "forced");
+			return r;
+		}
+		return r < 0 ? r : 0;
+	}
+	bool Attached() { return s_link && s_session; }
+	bool RemoteDetachRequested()
+	{
+		if (!s_link || !p_link_get_stats)
+			return false;
+		pcb_link_stats st = {};
+		st.struct_size = sizeof(st);
+		p_link_get_stats(s_link, &st);
+		return st.remote_detach_requested != 0;
+	}
+	u32 LinkPingMs()
+	{
+		if (!s_link || !p_link_get_stats)
+			return 0;
+		pcb_link_stats st = {};
+		st.struct_size = sizeof(st);
+		p_link_get_stats(s_link, &st);
+		return st.ping_ms;
+	}
 
 	int Frame(Plan* plan)
 	{

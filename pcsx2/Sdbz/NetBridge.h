@@ -24,6 +24,8 @@ namespace NetBridge
 		P2P = 2,
 		Replay = 3,        // play a .pcrep (replay_path): recorded confirmed inputs + CHECK compares
 		JournalReplay = 4, // play a host schedule journal (journal_path) offline: same plans, checksum compare
+		Link = 5,          // a persistent peer link (bridge revision 2): async menus via messages, the rollback
+		                   // session attached per battle (Attach/Detach); Frame/ResolveSave work while attached
 	};
 	struct Config
 	{
@@ -67,4 +69,22 @@ namespace NetBridge
 	void ResolveSave(s32 save_index, u32 checksum);
 	std::string Status();
 	float PaceFactor(); // P2P: suggested frame-time multiplier (1.0 nominal)
+
+	// ---- Link mode (Mode::Link). EE thread. ----
+	struct Message
+	{
+		u16 type = 0;
+		s32 frame = 0;
+		std::vector<u8> data;
+	};
+	bool LinkSend(u16 type, s32 frame, const void* data, u32 len);
+	// Pumps the link (resends, keepalive) and returns the next received message; false = none.
+	bool LinkPoll(Message* out);
+	// 0 pending (call again next vsync; do not run game frames), 1 attached (frame 0 = this frame), < 0 failed
+	int Attach(u32 attach_id);
+	// 0 pending (keep running Frame plans), 1 clean, 2 forced, < 0 error
+	int Detach();
+	bool Attached();
+	bool RemoteDetachRequested();
+	u32 LinkPingMs();
 } // namespace NetBridge
