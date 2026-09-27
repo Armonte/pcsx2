@@ -356,6 +356,31 @@ const u8* PageSnapshotRing::PageData(u32 id) const
 	return Data(id);
 }
 
+std::vector<s32> PageSnapshotRing::Frames() const
+{
+	std::vector<s32> f;
+	for (const Snapshot& sn : m_ring)
+		f.push_back(sn.frame);
+	return f;
+}
+
+bool PageSnapshotRing::WriteImage(s32 frame, const u8* live, u32 size, std::FILE* fp) const
+{
+	const auto it = std::find_if(m_ring.begin(), m_ring.end(), [frame](const Snapshot& sn) { return sn.frame == frame; });
+	if (it == m_ring.end() || !fp)
+		return false;
+	for (u32 page = 0; page < size / 4096; page++)
+	{
+		const auto pi = std::lower_bound(m_page_index.begin(), m_page_index.end(), page);
+		const u8* src = live + page * 4096u;
+		if (pi != m_page_index.end() && *pi == page)
+			src = Data(it->pages[static_cast<size_t>(pi - m_page_index.begin())]);
+		if (std::fwrite(src, 1, 4096, fp) != 4096)
+			return false;
+	}
+	return true;
+}
+
 bool PageSnapshotRing::Has(s32 frame) const
 {
 	return std::any_of(m_ring.begin(), m_ring.end(), [frame](const Snapshot& s) { return s.frame == frame; });

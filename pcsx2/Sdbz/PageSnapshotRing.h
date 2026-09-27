@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <cstdio>
+
 #include "common/Pcsx2Defs.h"
 
 #include <string>
@@ -89,6 +91,10 @@ public:
 	// Dirty-page census: how many captures copied each tracked page (EE page address, count), most first.
 	std::vector<std::pair<u32, u32>> TopDirtyPages(u32 n) const;
 
+	// Frames currently held (oldest first), and a full 32 MiB EE image of one of them: tracked pages from the snapshot,
+	// everything else from the live memory (diagnostics: desync dumps, same format as a plain EE dump).
+	std::vector<s32> Frames() const;
+	bool WriteImage(s32 frame, const u8* live, u32 size, std::FILE* fp) const;
 	DirtyMode Mode() const { return m_mode; }
 	const Stats& GetStats() const { return m_stats; }
 	std::string Describe() const;

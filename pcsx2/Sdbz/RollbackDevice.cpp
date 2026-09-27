@@ -12,6 +12,7 @@
 #include "Counters.h"
 
 #include "common/Console.h"
+#include "common/FileSystem.h"
 #include "common/Timer.h"
 #include "Sdbz/CpuTimer.h"
 
@@ -1078,6 +1079,28 @@ namespace RollbackDevice
 				}
 				return 0;
 		}
+	}
+
+	u32 DumpRing(const std::string& prefix)
+	{
+		std::lock_guard lk(s_mtx);
+		u32 n = 0;
+		auto write = [](const std::string& path, auto&& body) {
+			std::FILE* fp = FileSystem::OpenCFile(path.c_str(), "wb");
+			if (!fp)
+				return false;
+			const bool ok = body(fp);
+			std::fclose(fp);
+			return ok;
+		};
+		if (write(prefix + ".live.ee", [](std::FILE* fp) { return std::fwrite(eeMem->Main, 1, Ps2MemSize::MainRam, fp) == Ps2MemSize::MainRam; }))
+			n++;
+		if (s_ring)
+			for (const s32 f : s_ring->Frames())
+				if (write(fmt::format("{}.f{}.ee", prefix, f), [f](std::FILE* fp) { return s_ring->WriteImage(f, eeMem->Main, Ps2MemSize::MainRam, fp); }))
+					n++;
+		Console.WriteLn("RollbackDevice: desync dump: %u images -> %s.*.ee", n, prefix.c_str());
+		return n;
 	}
 
 	bool GetPerf(Perf* out)
