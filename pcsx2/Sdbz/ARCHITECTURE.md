@@ -306,6 +306,15 @@ DESYNC must stay 0) and in link-mode netplay (WAN relay ~100 ms, max CPU AI).
 | 8-bytes-per-step state checksum (`HashState`) | every save hashes the watch set |
 | netplay per rollback (avg) | 3.4-4.3 ms -> 1.7-2.7 ms |
 
+| SwingPhys_UpdateAll skipped while re-simulating (FUC manifest, census-proven cosmetic: notes/SWING_CENSUS.md) | resim -14% (7.15 -> 6.16 ms per depth-8 rollback), 0 SIM DESYNC |
+| human-side CPU AI ticks skipped on both peers, every frame (session.ai_human_skip, tail-call LTM shim; notes/COSMETIC_SUBSYSTEMS.md 6) | exact (0 SIM DESYNC, ~40k skips/run); small |
+| bridge revision 3 `pcb_stats.prediction_depth` -> confirmed frame -> the device skips re-simulated snapshots of confirmed frames | ~1 save per rollback at 100 ms ping; 0 desync over 3 WAN battles |
+
+Tooling: `task_prof` (inclusive cost per game task / per script VM), `op_prof` (per script op), `call_prof` (per jal site),
+headless bench instances (`INST=pcsx2-bench`: Null GS, hidden window) for synctest and 2-peer soaks. Findings:
+chr_main 46.07 = PlayerMgr_CollisionAndHitPass is ~2/3 of script time; inside it SwingPhys (skipped), the per-fighter
+SceneObj_UpdateHierarchyNoAnim (not redundant), Player_ProbeStageWallA (stage query). Resim is now ~93% game JIT.
+
 Next: per game task inclusive cost during re-simulation (`task_prof` harness command: hooks the task dispatcher
 jalr/return, FUC 0x211230/0x211238) and a proof per candidate (skip it while re-simulating in synctest: SIM DESYNC
 must stay 0) before any skip ships; skipping saves of confirmed re-simulated frames needs the bridge to expose a

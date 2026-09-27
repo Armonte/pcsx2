@@ -4094,29 +4094,52 @@ namespace GameRollback
 		return out;
 	}
 	// ---- call-site profiler ----
+	// Sites are jal/jalr pcs; "SITE:v" keys that site's cost by the called object's vtable (the a0 the callee gets: the
+	// delay slot's `move a0,rX` source, else a0) so a virtual dispatch (a scene/task walker) splits per object type.
+	// Reports inclusive and self (minus nested profiled calls) EE cycles.
 	namespace
 	{
-		std::map<u32, TaskCost> s_cs_costs;          // by call site
-		std::vector<TaskOpen> s_cs_stack;
+		struct CsCost
+		{
+			u64 calls[2] = {0, 0}, cycles[2] = {0, 0}, self[2] = {0, 0}, host_ns[2] = {0, 0};
+		};
+		struct CsOpen
+		{
+			u64 key;
+			u64 cycle, child;
+			std::chrono::steady_clock::time_point t;
+		};
+		std::map<u64, CsCost> s_cs_costs;              // (vtable << 32) | call site
+		std::vector<CsOpen> s_cs_stack;
 		std::map<u32, std::pair<bool, bool>> s_cs_pcs; // pc -> (is a call site, is a return point)
+		std::map<u32, int> s_cs_objreg;                // vtable-keyed site -> register holding the callee's a0 (-1 = off)
 		void CallProfPc(u32 pc)
 		{
 			const auto [is_call, is_ret] = s_cs_pcs[pc];
-			if (is_ret && !s_cs_stack.empty() && s_cs_stack.back().key + 8 == pc)
+			if (is_ret && !s_cs_stack.empty() && static_cast<u32>(s_cs_stack.back().key) + 8 == pc)
 			{
-				const TaskOpen o = s_cs_stack.back();
+				const CsOpen o = s_cs_stack.back();
 				s_cs_stack.pop_back();
 				const int r = RollbackDevice::IsResimulating() ? 1 : 0;
-				TaskCost& c = s_cs_costs[static_cast<u32>(o.key)];
+				const u64 incl = cpuRegs.cycle - o.cycle;
+				CsCost& c = s_cs_costs[o.key];
 				c.calls[r]++;
-				c.cycles[r] += cpuRegs.cycle - o.cycle;
+				c.cycles[r] += incl;
+				c.self[r] += incl - std::min(incl, o.child);
 				c.host_ns[r] += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - o.t).count());
+				if (!s_cs_stack.empty())
+					s_cs_stack.back().child += incl;
 			}
 			if (is_call)
-				s_cs_stack.push_back({pc, cpuRegs.cycle, std::chrono::steady_clock::now()});
+			{
+				u64 key = pc;
+				if (const auto it = s_cs_objreg.find(pc); it != s_cs_objreg.end())
+					key |= static_cast<u64>(Rd(cpuRegs.GPR.r[it->second].UL[0])) << 32;
+				s_cs_stack.push_back({key, cpuRegs.cycle, 0, std::chrono::steady_clock::now()});
+			}
 		}
 	}
-	bool CallProfStart(const std::vector<u32>& sites)
+	bool CallProfStart(const std::vector<u32>& sites, const std::vector<u32>& vt_sites)
 	{
 		CallProfStop();
 		s_cs_costs.clear();
@@ -4126,12 +4149,23 @@ namespace GameRollback
 			s_cs_pcs[site].first = true;
 			s_cs_pcs[site + 8].second = true;
 		}
+		for (const u32 site : vt_sites)
+		{
+			s_cs_pcs[site].first = true;
+			s_cs_pcs[site + 8].second = true;
+			// delay slot `addu/daddu/or a0, rs, zero` (move a0, rs) -> the object is in rs at the jump; else a0
+			const u32 ds = Rd(site + 4);
+			const u32 fn = ds & 0x3F, rs = (ds >> 21) & 31, rt = (ds >> 16) & 31, rd = (ds >> 11) & 31;
+			const bool mv = (ds >> 26) == 0 && rd == 4 && rt == 0 && (fn == 0x21 || fn == 0x2D || fn == 0x25);
+			s_cs_objreg[site] = mv ? static_cast<int>(rs) : 4;
+		}
 		for (const auto& [pc, kind] : s_cs_pcs)
 			EeHooks::AddCall(pc, [](u32 hpc) {
 				CallProfPc(hpc);
 				return EeHooks::Action::Continue;
 			}, EeHooks::OWNER_GAME);
-		Console.WriteLn("GameRollback: call-site profiler on (%zu sites, %zu hooks)", sites.size(), s_cs_pcs.size());
+		Console.WriteLn("GameRollback: call-site profiler on (%zu sites, %zu vtable-keyed, %zu hooks)", sites.size(), vt_sites.size(),
+			s_cs_pcs.size());
 		return true;
 	}
 	void CallProfStop()
@@ -4139,23 +4173,28 @@ namespace GameRollback
 		for (const auto& [pc, kind] : s_cs_pcs)
 			EeHooks::Remove(pc);
 		s_cs_pcs.clear();
+		s_cs_objreg.clear();
 		s_cs_stack.clear();
 	}
 	std::string CallProfReport()
 	{
-		std::string out = "# call-site profiler: inclusive per call site\n";
+		std::string out = "# call-site profiler: inclusive and self (minus nested profiled calls) EE cycles per call site [/ object vtable]\n";
 		for (int r = 1; r >= 0; r--)
 		{
-			u64 tot = 0;
-			for (const auto& [site, c] : s_cs_costs)
+			u64 tot = 0, frames_self = 0;
+			for (const auto& [k, c] : s_cs_costs)
+			{
 				tot += c.host_ns[r];
-			std::vector<std::pair<u32, TaskCost>> v(s_cs_costs.begin(), s_cs_costs.end());
-			std::sort(v.begin(), v.end(), [r](const auto& a, const auto& b) { return a.second.cycles[r] > b.second.cycles[r]; });
-			out += fmt::format("\n## {} frames\n  host%    host_ms     calls   us/call   EEcyc/call  site\n", r ? "re-simulated" : "normal");
-			for (const auto& [site, c] : v)
+				frames_self += c.self[r];
+			}
+			std::vector<std::pair<u64, CsCost>> v(s_cs_costs.begin(), s_cs_costs.end());
+			std::sort(v.begin(), v.end(), [r](const auto& a, const auto& b) { return a.second.self[r] > b.second.self[r]; });
+			out += fmt::format("\n## {} frames (sorted by self)\n  self%     calls   incl/call   self/call  self_total    site      vtable\n",
+				r ? "re-simulated" : "normal");
+			for (const auto& [k, c] : v)
 				if (c.calls[r])
-					out += fmt::format("  {:5.1f}  {:9.2f}  {:8}  {:8.2f}  {:10}  {:08X}\n", tot ? 100.0 * c.host_ns[r] / tot : 0.0, c.host_ns[r] / 1e6,
-						c.calls[r], c.host_ns[r] / 1e3 / c.calls[r], c.cycles[r] / c.calls[r], site);
+					out += fmt::format("  {:5.1f}  {:8}  {:10}  {:10}  {:10}  {:08X}  {:08X}\n", frames_self ? 100.0 * c.self[r] / frames_self : 0.0,
+						c.calls[r], c.cycles[r] / c.calls[r], c.self[r] / c.calls[r], c.self[r], static_cast<u32>(k), static_cast<u32>(k >> 32));
 		}
 		return out;
 	}
