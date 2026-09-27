@@ -182,7 +182,8 @@ static void execI()
 			cpuRegs.pc = cpuRegs.GPR.n.ra.UL[0];
 			return;
 		}
-		if (hook == EeHooks::Kind::SkipCallAlways || (hook == EeHooks::Kind::SkipCallResim && *EeHooks::ResimFlag()))
+		if (hook == EeHooks::Kind::SkipCallAlways || (hook == EeHooks::Kind::SkipCallResim && *EeHooks::ResimFlag()) ||
+			(hook == EeHooks::Kind::SkipCallResimNonFinal && *EeHooks::ResimNonFinalFlag()))
 		{
 			cpuRegs.pc += 4; // the delay slot runs next, then execution continues after the call
 			return;

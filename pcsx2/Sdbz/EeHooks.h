@@ -31,6 +31,7 @@ namespace EeHooks
 		Call,
 		SkipCallResim,
 		SkipCallAlways,
+		SkipCallResimNonFinal, // skipped on re-simulated frames except the last one (derived-output recomputes)
 	};
 	enum class Action : u8
 	{
@@ -51,6 +52,7 @@ namespace EeHooks
 	void AddResimGateRet(u32 pc, u32 v0, Owner owner = OWNER_SCRIPT);
 	u32 GateReturnValue(u32 pc);
 	void AddSkipCall(u32 site, bool always, Owner owner = OWNER_SCRIPT);
+	void AddSkipCallNonFinal(u32 site, Owner owner = OWNER_SCRIPT); // skipped on re-simulated frames but the last
 	void AddCall(u32 pc, Handler handler, Owner owner = OWNER_SCRIPT);
 	// Same, but the handler only runs when $ra is one of ra_filter (callers' return addresses): the comparisons are
 	// emitted natively, so other callers of a hot function pay a few compares, not a C++ call.
@@ -63,6 +65,7 @@ namespace EeHooks
 	Action RunCall(u32 pc);       // Kind::Call (applies the $ra filter)
 	std::vector<u32> CallFilter(u32 pc); // empty = no filter
 	const u8* ResimFlag();        // byte the ResimGate tests (nonzero while re-simulating)
+	const u8* ResimNonFinalFlag(); // nonzero on a re-simulated frame that is not the last one of its rollback
 	u64* GateReturnCounter();     // incremented natively each time a ResimGate returns early
 	u64 GateReturns();
 } // namespace EeHooks

@@ -80,6 +80,10 @@ namespace EeHooks
 	{
 		Set(site, {always ? Kind::SkipCallAlways : Kind::SkipCallResim, {}, owner});
 	}
+	void AddSkipCallNonFinal(u32 site, Owner owner)
+	{
+		Set(site, {Kind::SkipCallResimNonFinal, {}, owner});
+	}
 
 	void Remove(u32 pc)
 	{
@@ -155,6 +159,7 @@ namespace EeHooks
 	}
 
 	const u8* ResimFlag() { return RollbackDevice::ResimulatingFlag(); }
+	const u8* ResimNonFinalFlag() { return RollbackDevice::ResimNonFinalFlag(); }
 
 	namespace
 	{
