@@ -1162,6 +1162,8 @@ namespace GameRollback
 		bool LinkPadRead(u32 player, u8* buf);          // menu phases: stream/feed; true = handled
 		void InstallLinkHooks();
 		void RemoveLinkHooks();
+		void DoStop();
+		void DoStart(int mode, u32 frames);
 		NetBridge::Plan s_net_plan;
 		std::vector<s32> s_net_resim_saves; // save index per re-simulated step
 		s32 s_net_fwd_save = -1;
@@ -1521,6 +1523,16 @@ namespace GameRollback
 			if (n < 0)
 			{
 				Console.Error("GameRollback: netcode stopped (%s)", NetBridge::Status().c_str());
+				if (s_lphase != LinkPhase::Off)
+				{
+					// link mode: only this battle's session is lost; the link (menus, next attach) stays up
+					while (NetBridge::Attached() && NetBridge::Detach() == 0)
+						std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					DoStop();
+					s_net = false;
+					s_lphase = LinkPhase::Menu;
+					return false;
+				}
 				NetBridge::Stop();
 				s_net = false;
 				RemoveSessionLocks();
@@ -2432,7 +2444,7 @@ namespace GameRollback
 		template <typename Pred>
 		bool LinkWait(Pred done, const char* what)
 		{
-			for (int ms = 0; ms < 15000; ms++)
+			for (int ms = 0; ms < 600000; ms++) // a human decision: up to 10 minutes, the link keeps pumping
 			{
 				LinkPump();
 				if (done())
