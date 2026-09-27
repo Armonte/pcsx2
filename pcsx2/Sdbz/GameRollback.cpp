@@ -385,6 +385,14 @@ namespace GameRollback
 			};
 			std::vector<ForcedBranch> session_branches;
 			std::vector<InputMask> session_masks;
+			// session.ai_human_skip (FUC notes/COSMETIC_SUBSYSTEMS.md 6): CPU AI script ticks of human-controlled sides are
+			// skipped on both peers in every frame (nothing reads a human side's AI state); `shim_fn` reproduces the AI
+			// tick's one outside effect (a lazy LTM sync of the owner's hierarchy) by tail-calling it
+			struct AiHumanSkip
+			{
+				u32 at = 0, sig_off = 0, shim_fn = 0, shim_bone = 3, pause_addr = 0, level = 1;
+				std::vector<u8> sig;
+			} ai_skip;
 			// load-time data patches of game scripts: at `hook` (a loader entry), file = GPR[file_reg]; a group applies only
 			// when every `expect` matches, so a patch can never land on a different script or version
 			struct ScriptPatch
@@ -1059,6 +1067,17 @@ namespace GameRollback
 							for (const auto& c : Child(om, "css_writes").children())
 								m->link.css_writes.push_back({ParseVal(Child(c, "addr")), ParseVal(Child(c, "value"))});
 					}
+				}
+				if (Has(se, "ai_human_skip"))
+				{
+					const auto ak = Child(se, "ai_human_skip");
+					m->ai_skip.level = Get(ak, "level", 1);
+					m->ai_skip.at = Get(ak, "at", 0);
+					m->ai_skip.sig_off = Get(ak, "sig_off", 0);
+					m->ai_skip.sig = ParseHex(GetStr(ak, "sig"));
+					m->ai_skip.shim_fn = Get(ak, "shim_fn", 0);
+					m->ai_skip.shim_bone = Get(ak, "shim_bone", 3);
+					m->ai_skip.pause_addr = Get(ak, "pause_addr", 0);
 				}
 				if (Has(se, "input_masks"))
 					for (const auto& c : Child(se, "input_masks").children())
@@ -1943,8 +1962,41 @@ namespace GameRollback
 					Console.WriteLn("GameRollback: script patch '%s' applied at %08X", grp.name.c_str(), file);
 			}
 		}
+		u64 s_ai_skipped = 0;
 		void InstallSessionLocks()
 		{
+			if (const auto& A = s_man.ai_skip; A.at && A.level && !A.sig.empty())
+			{
+				// SeqTask_Callback(d, pass) entry: the sim tick (pass 0) of a cpu/*.seq VM whose owner is human-controlled
+				EeHooks::AddCall(A.at, [](u32) {
+					const auto& A = s_man.ai_skip;
+					if (cpuRegs.GPR.n.a1.UL[0] != 0)
+						return EeHooks::Action::Continue;
+					const u32 d = cpuRegs.GPR.n.a0.UL[0], st = Rd(d + 20), base = st ? Rd(st + 92) : 0;
+					if (!base || std::memcmp(&eeMem->Main[(base + A.sig_off) & RAM_MASK], A.sig.data(), A.sig.size()) != 0)
+						return EeHooks::Action::Continue;
+					const u32 p = Rd(st + 40); // s10 = owner player
+					if (!p || !Rd(p + 0x2448) || Rd(p + 0x2440) != 0)
+						return EeHooks::Action::Continue; // AI-controlled (or not yet created): the tick runs
+					s_ai_skipped++;
+					const u32 ai = Rd(p + 0x2448), o = Rd(ai + 12);
+					const bool paused = A.pause_addr && (Rd(A.pause_addr) & 0xFFFF) != 0;
+					if (A.level == 1 && A.shim_fn && !paused && o && Rd(o + 0x2508) && Rd(ai + 384) && !(Rd(o + 0x1DC) & 0x1000) &&
+						Rd(o + 60))
+					{
+						// tail call: the dispatcher ignores this callback's return value, the shim returns through $ra
+						cpuRegs.GPR.n.a0.UD[0] = Rd(o + 60);
+						cpuRegs.GPR.n.a1.UD[0] = A.shim_bone;
+						cpuRegs.pc = A.shim_fn;
+						return EeHooks::Action::Jump;
+					}
+					cpuRegs.GPR.n.v0.UD[0] = 0;
+					cpuRegs.pc = cpuRegs.GPR.n.ra.UL[0];
+					return EeHooks::Action::Jump;
+				}, EeHooks::OWNER_GAME);
+				s_session_hooks.push_back(A.at);
+				Console.WriteLn("GameRollback: human-side AI ticks skipped (level %u)", A.level);
+			}
 			for (const auto& fb : s_man.session_branches)
 			{
 				const u32 to = fb.to;
@@ -3864,7 +3916,7 @@ namespace GameRollback
 		// load_setup starts at, so a session's start state is the savestate itself (replays anchor on it)
 		PollAutoStart();
 	}
-	std::string Status() { return s_status + fmt::format(" | mode {}", s_mode); }
+	std::string Status() { return s_status + fmt::format(" | mode {} | ai skipped {}", s_mode, s_ai_skipped); }
 	void SetFileWatch(bool on) { s_watch = on; }
 	std::string LinkBadge()
 	{
