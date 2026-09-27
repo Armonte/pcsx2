@@ -4,6 +4,7 @@
 #include "ImGui/ScriptHost.h"
 #include "ImGui/ScriptBridge.h"
 #include "Sdbz/GameRollback.h"
+#include "Sdbz/EeBlockProf.h"
 #include "Sdbz/EeHooks.h"
 #include "Sdbz/PcInput.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
@@ -277,6 +278,9 @@ namespace
 			return GameRollback::CallProfStart(sites, vt_sites);
 		});
 		rd.set_function("call_prof_report", []() { return GameRollback::CallProfReport(); });
+		rd.set_function("block_prof_start", []() { EeBlockProf::Start(); });
+		rd.set_function("block_prof_stop", []() { EeBlockProf::Stop(); });
+		rd.set_function("block_prof_dump", [](std::string path) { return EeBlockProf::DumpFile(path); });
 		rd.set_function("task_prof_report", [](sol::optional<uint32_t> top) { return GameRollback::TaskProfReport(top.value_or(40)); });
 		rd.set_function("set_levers", [](bool host_vsync, bool park, bool iop) { RollbackDevice::SetLevers(host_vsync, park, iop); });
 		// Deterministic controller feed (player 1-based; buttons = game layout, see PadFeed.h):

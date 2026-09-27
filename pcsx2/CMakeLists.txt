@@ -863,6 +863,7 @@ set(pcsx2ImGuiSources
 	Sdbz/PcInput.cpp
 	Sdbz/PadFeed.cpp
 	Sdbz/PageSnapshotRing.cpp
+	Sdbz/EeBlockProf.cpp
 	Sdbz/RbProfiler.cpp
 	Sdbz/RollbackDevice.cpp
 	Sdbz/SdbzDeterminism.cpp
@@ -889,6 +890,7 @@ set(pcsx2ImGuiHeaders
 	Sdbz/pc_ps2_bridge.h
 	Sdbz/PadFeed.h
 	Sdbz/PageSnapshotRing.h
+	Sdbz/EeBlockProf.h
 	Sdbz/RbProfiler.h
 	Sdbz/RollbackDevice.h
 	Sdbz/SdbzDeterminism.h

@@ -5,6 +5,7 @@
 #include "CDVD/CDVD.h"
 #include "DebugTools/Breakpoints.h"
 #include "Sdbz/EeHooks.h"
+#include "Sdbz/EeBlockProf.h"
 #include "Elfheader.h"
 #include "GS.h"
 #include "Host.h"
@@ -644,6 +645,7 @@ alignas(16) static u8 manual_counter[Ps2MemSize::TotalRam >> 12];
 ////////////////////////////////////////////////////
 static void recResetRaw()
 {
+	EeBlockProf::OnRecReset();
 	Console.WriteLn(Color_StrongBlack, "EE/iR5900 Recompiler Reset");
 
 	if (CHECK_EXTRAMEM != extraRam)
@@ -2705,6 +2707,12 @@ StartRecomp:
 	{
 		// Finally: Generate x86 recompiled code!
 		g_pCurInstInfo = s_pInstCache;
+		if (EeBlockProf::Enabled())
+		{
+			// block profiler: ++count[resim flag] on every entry (no EE register is live at a block start)
+			xMOVZX(eax, ptr8[EeHooks::ResimFlag()]);
+			xADD(ptr64[xComplexAddress(rcx, EeBlockProf::BlockRec(startpc)->count, rax * 8)], 1);
+		}
 		if (const EeHooks::Kind hook = EeHooks::Lookup(startpc); hook != EeHooks::Kind::None)
 			recEmitEeHook(startpc, hook);
 		while (!g_branch && pc < s_nEndBlock)
@@ -2757,6 +2765,7 @@ StartRecomp:
 
 	pxAssert((pc - startpc) >> 2 <= 0xffff);
 	s_pCurBlockEx->size = (pc - startpc) >> 2;
+	const u32 prof_cycles = DEFAULT_SCALED_BLOCKS();
 
 	if (HWADDR(pc) <= Ps2MemSize::ExposedRam)
 	{
@@ -2841,6 +2850,8 @@ StartRecomp:
 	}
 #endif
 	Perf::ee.RegisterPC((void*)s_pCurBlockEx->fnptr, s_pCurBlockEx->x86size, s_pCurBlockEx->startpc);
+	if (EeBlockProf::Enabled())
+		EeBlockProf::NoteBlock(s_pCurBlockEx->startpc, (void*)s_pCurBlockEx->fnptr, s_pCurBlockEx->x86size, prof_cycles, s_pCurBlockEx->size);
 
 	recPtr = xGetPtr();
 
