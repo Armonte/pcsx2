@@ -449,6 +449,8 @@ namespace GameRollback
 			};
 			bool fx_canon = false;
 			std::vector<FreeList> fx_dlists, fx_slists; // doubly linked FIFO {1, last, first} / singly linked LIFO (top = highest)
+			std::vector<u32> fx_at;                     // also at these pcs (pools empty: the RETRY kill), pre-attach only
+			std::vector<ExprWrite> fx_at_writes;        // ... together with these writes
 			// link.ai_wait_canon: AI-script "wait for FIGHT or N frames" countdowns restarted at the attach
 			struct AiWaitLoop
 			{
@@ -950,6 +952,12 @@ namespace GameRollback
 							if (Has(fx, k))
 								for (const auto& c : Child(fx, k).children())
 									(k[0] == 'd' ? m->fx_dlists : m->fx_slists).push_back({Get(c, "head", 0), Get(c, "stride", 0)});
+						if (Has(fx, "at"))
+							for (const auto& c : Child(fx, "at").children())
+								m->fx_at.push_back(ParseU32(c));
+						if (Has(fx, "at_writes"))
+							for (const auto& c : Child(fx, "at_writes").children())
+								m->fx_at_writes.push_back({ParseVal(Child(c, "addr")), ParseVal(Child(c, "value"))});
 					}
 					if (Has(lk, "ai_wait_canon"))
 					{
@@ -3055,6 +3063,20 @@ namespace GameRollback
 					return EeHooks::Action::Continue;
 				}, EeHooks::OWNER_GAME);
 				s_link_hooks.push_back(L.vload.poll_at);
+			}
+			for (const u32 pc : s_man.fx_at)
+			{
+				// the RETRY kill left every effect pool empty: canonical order now, before the stage re-creates its
+				// emitters and they draw particles, so every allocation up to the attach lands on the same addresses
+				EeHooks::AddCall(pc, [](u32) {
+					if (s_pre_attach_neutral && s_lphase == LinkPhase::Menu)
+					{
+						FxCanon();
+						ApplyWrites(s_man.fx_at_writes);
+					}
+					return EeHooks::Action::Continue;
+				}, EeHooks::OWNER_GAME);
+				s_link_hooks.push_back(pc);
 			}
 			if (const u32 pc = CssMirror::TickHookPc())
 			{
