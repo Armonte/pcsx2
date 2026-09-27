@@ -448,7 +448,11 @@ namespace GameRollback
 			u32 replay_fn = 0, replay_site = 0, replay_len = 32;
 			std::vector<int> replay_player_regs;
 			int replay_buf_reg = 5;
-			u32 rng_float = 0, rng_int = 0;
+			u32 rng_float = 0, rng_int = 0, rng_float01 = 0, rng_u16 = 0;
+			// cosmetic-only draws (particles, wind, blinks, HUD widgets): their own rolled-back stream, so a different
+			// cosmetic population (e.g. after an async menu wait) never moves the simulation's RNG
+			u32 cosmetic_seed = 0;
+			std::unordered_set<u32> cosmetic_sites;
 			u32 sound_seed = 0; // EE word holding the sound-only RNG stream (rolled back; same start on every peer)
 			std::unordered_set<u32> sound_sites;
 			std::unordered_map<u32, u32> trace_ids; // function -> trace id
@@ -1029,6 +1033,12 @@ namespace GameRollback
 				const auto r = Child(root, "rng");
 				m->rng_float = Get(r, "range_float", 0);
 				m->rng_int = Get(r, "range_int", 0);
+				m->rng_float01 = Get(r, "float01", 0);
+				m->rng_u16 = Get(r, "u16", 0);
+				m->cosmetic_seed = Get(r, "cosmetic_seed", 0);
+				if (Has(r, "cosmetic_sites"))
+					for (const u32 x : ParseList(Child(r, "cosmetic_sites")))
+						m->cosmetic_sites.insert(x);
 				m->sound_seed = Get(r, "sound_seed", 0);
 				if (Has(r, "sound_sites"))
 					for (const u32 s : ParseList(Child(r, "sound_sites")))
@@ -1897,9 +1907,41 @@ namespace GameRollback
 			return EeHooks::Action::Continue;
 		}
 
+		// the game's LCG (FUC Rand_*: seed = seed*214013 + 2531011) on a separate seed word, every variant exact
+		void RngOnSeed(u32 pc, u32 seed_addr)
+		{
+			const u32 seed = Rd(seed_addr) * 214013u + 2531011u;
+			Wr(seed_addr, seed);
+			const u32 hi = seed >> 16;
+			if (pc == s_man.rng_float)
+			{
+				float lo, h;
+				std::memcpy(&lo, &fpuRegs.fpr[12].UL, 4);
+				std::memcpy(&h, &fpuRegs.fpr[13].UL, 4);
+				const float r = lo + (static_cast<float>(hi) * (h - lo)) / 65536.0f;
+				std::memcpy(&fpuRegs.fpr[0].UL, &r, 4);
+			}
+			else if (pc == s_man.rng_float01)
+			{
+				const float r = static_cast<float>(hi) / 65536.0f;
+				std::memcpy(&fpuRegs.fpr[0].UL, &r, 4);
+			}
+			else if (pc == s_man.rng_u16)
+				cpuRegs.GPR.n.v0.SD[0] = static_cast<s64>(hi);
+			else
+			{
+				const s32 lo = cpuRegs.GPR.n.a0.SL[0], h = cpuRegs.GPR.n.a1.SL[0];
+				cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(lo + ((hi * static_cast<u32>(h - lo)) >> 16));
+			}
+		}
 		EeHooks::Action OnRng(u32 pc)
 		{
 			const u32 ra = cpuRegs.GPR.n.ra.UL[0];
+			if (s_man.cosmetic_seed && s_man.cosmetic_sites.count(ra - 8))
+			{
+				RngOnSeed(pc, s_man.cosmetic_seed);
+				return EeHooks::Action::Return;
+			}
 			if (s_man.sound_sites.count(ra - 8) && s_man.sound_seed)
 			{
 				// sound-only draw from its own stream in rolled-back EE memory: never g_RandSeed (the sim stream stays
@@ -2195,7 +2237,10 @@ namespace GameRollback
 			std::vector<u32> callers;
 			for (const u32 site : s_man.sound_sites)
 				callers.push_back(site + 8);
-			for (const u32 fn : {s_man.rng_float, s_man.rng_int})
+			if (s_man.cosmetic_seed)
+				for (const u32 site : s_man.cosmetic_sites)
+					callers.push_back(site + 8);
+			for (const u32 fn : {s_man.rng_float, s_man.rng_int, s_man.rng_float01, s_man.rng_u16})
 				if (fn && !callers.empty())
 					ChainAdd(fn, callers, [fn] { return OnRng(fn); });
 			if (RollbackDevice::TraceOn())
@@ -2321,6 +2366,8 @@ namespace GameRollback
 				AddRegion(s_man.vs.state, 0x10 + s_man.vs.channels * 0x30);
 			if (s_man.sound_seed)
 				AddRegion(s_man.sound_seed, 4);
+			if (s_man.cosmetic_seed)
+				AddRegion(s_man.cosmetic_seed, 4);
 			for (const RegionSpec& r : s_man.regions)
 			{
 				s64 len = 0;
@@ -2385,7 +2432,8 @@ namespace GameRollback
 		void DoStop()
 		{
 			RollbackDevice::Stop();
-			RemoveRollbackHooks();
+			if (s_lphase == LinkPhase::Off) // link mode keeps the simulation hooks (virtual audio clock, RNG splits,
+				RemoveRollbackHooks();       // pad feed) through menus: their resim gates are inert outside resims
 			s_mode = 0;
 			s_driving = s_passthrough = false;
 		}
@@ -2860,6 +2908,7 @@ namespace GameRollback
 					s_remote_choice = -1;
 					InstallSessionLocks();
 					InstallLinkHooks();
+					InstallRollbackHooks(); // the simulation hooks run in menus too (see DoStop)
 					for (bool& v : s_live_valid)
 						v = false;
 					Console.WriteLn("GameRollback: link mode: menus local, rollback attached per battle");
