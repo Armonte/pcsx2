@@ -53,6 +53,11 @@ namespace GameRollback
 	// vm_fns: task functions whose data+8 is a Seq VM: their cost is split per script (keyed by the script base).
 	bool TaskProfStart(u32 call_pc, u32 ret_pc, u32 fn_reg, std::vector<u32> vm_fns = {});
 	void TaskProfStop();
+	// Script-op profiler: inclusive cost per (script, opcode, sub-op) at the VM's op dispatch jalr
+	// (FUC Seq_TickThreads 0x222F74 / return 0x222F7C, VM in vm_reg, instruction pointer in ip_reg).
+	bool OpProfStart(u32 call_pc, u32 ret_pc, u32 vm_reg, u32 ip_reg);
+	void OpProfStop();
+	std::string OpProfReport(u32 top_n);
 	std::string TaskProfReport(u32 top_n);
 	void SetFileWatch(bool on);
 } // namespace GameRollback

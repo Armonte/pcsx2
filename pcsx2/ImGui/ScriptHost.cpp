@@ -258,6 +258,8 @@ namespace
 			return GameRollback::TaskProfStart(call_pc, ret_pc, reg, std::move(vm));
 		});
 		rd.set_function("task_prof_stop", []() { GameRollback::TaskProfStop(); });
+		rd.set_function("op_prof_start", [](uint32_t call_pc, uint32_t ret_pc, uint32_t vm_reg, uint32_t ip_reg) { return GameRollback::OpProfStart(call_pc, ret_pc, vm_reg, ip_reg); });
+		rd.set_function("op_prof_report", [](sol::optional<uint32_t> top) { return GameRollback::OpProfReport(top.value_or(60)); });
 		rd.set_function("task_prof_report", [](sol::optional<uint32_t> top) { return GameRollback::TaskProfReport(top.value_or(40)); });
 		rd.set_function("set_levers", [](bool host_vsync, bool park, bool iop) { RollbackDevice::SetLevers(host_vsync, park, iop); });
 		// Deterministic controller feed (player 1-based; buttons = game layout, see PadFeed.h):

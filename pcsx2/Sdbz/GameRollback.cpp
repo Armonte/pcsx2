@@ -3961,4 +3961,81 @@ namespace GameRollback
 		}
 		return out;
 	}
+	// ---- script-op profiler ----
+	namespace
+	{
+		std::unordered_map<u64, TaskCost> s_op_costs; // (script base << 32) | (opcode << 8) | sub-op
+		std::vector<TaskOpen> s_op_stack;
+		u32 s_op_call = 0, s_op_ret = 0, s_op_vm = 4, s_op_ip = 6;
+	}
+	bool OpProfStart(u32 call_pc, u32 ret_pc, u32 vm_reg, u32 ip_reg)
+	{
+		OpProfStop();
+		s_op_costs.clear();
+		s_op_stack.clear();
+		s_op_call = call_pc;
+		s_op_ret = ret_pc;
+		s_op_vm = vm_reg & 31;
+		s_op_ip = ip_reg & 31;
+		EeHooks::AddCall(call_pc, [](u32) {
+			const u32 vm = cpuRegs.GPR.r[s_op_vm].UL[0], ip = cpuRegs.GPR.r[s_op_ip].UL[0];
+			const u32 t0 = Rd(vm + 12);
+			const u64 base = t0 ? Rd(t0 + 92) : 0;
+			const u32 op = eeMem->Main[ip & RAM_MASK], sub = eeMem->Main[(ip + 1) & RAM_MASK];
+			s_op_stack.push_back({(base << 32) | (op << 8) | sub, cpuRegs.cycle, std::chrono::steady_clock::now()});
+			return EeHooks::Action::Continue;
+		}, EeHooks::OWNER_GAME);
+		EeHooks::AddCall(ret_pc, [](u32) {
+			if (s_op_stack.empty())
+				return EeHooks::Action::Continue;
+			const TaskOpen o = s_op_stack.back();
+			s_op_stack.pop_back();
+			const int r = RollbackDevice::IsResimulating() ? 1 : 0;
+			TaskCost& c = s_op_costs[o.key];
+			c.calls[r]++;
+			c.cycles[r] += cpuRegs.cycle - o.cycle;
+			c.host_ns[r] += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - o.t).count());
+			return EeHooks::Action::Continue;
+		}, EeHooks::OWNER_GAME);
+		Console.WriteLn("GameRollback: script-op profiler on (call %08X, return %08X)", call_pc, ret_pc);
+		return true;
+	}
+	void OpProfStop()
+	{
+		if (!s_op_call)
+			return;
+		EeHooks::Remove(s_op_call);
+		EeHooks::Remove(s_op_ret);
+		s_op_call = s_op_ret = 0;
+		s_op_stack.clear();
+	}
+	std::string OpProfReport(u32 top_n)
+	{
+		std::vector<std::pair<u64, TaskCost>> v(s_op_costs.begin(), s_op_costs.end());
+		u64 tot[2] = {0, 0};
+		for (const auto& [k, c] : v)
+			for (int r = 0; r < 2; r++)
+				tot[r] += c.host_ns[r];
+		std::string out = "# script-op profiler: inclusive per (script, opcode.subop); nested dispatch counts in its parent too\n";
+		for (int r = 1; r >= 0; r--)
+		{
+			std::sort(v.begin(), v.end(), [r](const auto& a, const auto& b) { return a.second.host_ns[r] > b.second.host_ns[r]; });
+			out += fmt::format("\n## {} frames\n  host%    host_ms      calls   us/call   EEcyc/call  op     script_base  script[0..32)\n",
+				r ? "re-simulated" : "normal");
+			u32 n = 0;
+			for (const auto& [k, c] : v)
+			{
+				if (!c.calls[r] || n++ >= top_n)
+					continue;
+				const u32 base = static_cast<u32>(k >> 32);
+				std::string head;
+				for (u32 i = 0; base && i < 32; i++)
+					head += fmt::format("{:02x}", eeMem->Main[(base + i) & RAM_MASK]);
+				out += fmt::format("  {:5.1f}  {:9.2f}  {:9}  {:8.2f}  {:10}  {:02X}.{:02X}  {:08X}     {}\n", tot[r] ? 100.0 * c.host_ns[r] / tot[r] : 0.0,
+					c.host_ns[r] / 1e6, c.calls[r], c.host_ns[r] / 1e3 / c.calls[r], c.cycles[r] / c.calls[r], (k >> 8) & 0xFF, k & 0xFF, base,
+					head);
+			}
+		}
+		return out;
+	}
 } // namespace GameRollback
