@@ -1317,6 +1317,11 @@ namespace GameRollback
 		std::array<u8, 6> s_remote_last = {0, 0, 0x80, 0x80, 0x80, 0x80};
 		std::vector<u32> s_remote_pick;          // the peer's resolved selection values (MSG_PICK)
 		bool s_remote_pick_valid = false;
+		std::vector<u32> s_commit_sel;           // our committed picks awaiting the peer's for verification
+		bool s_wait_hold = false;                // hold whole frames (no sim tick, no render) while waiting for the peer
+		bool s_choice_pending = false;           // our one-more choice is sent; the peer's is awaited (held frames)
+		s32 s_choice_mine = -1;
+		u32 s_attach_frames = 0;                 // frames spent at the attach barrier
 		s32 s_remote_choice = -1;                // the peer's one-more choice (MSG_CHOICE)
 		bool s_attach_req = false, s_detach_req = false, s_onemore = false, s_choice_sent = false;
 		// from the battle commit / the agreed one-more choice until the attach: both ports read an identical neutral pad
@@ -2646,6 +2651,8 @@ namespace GameRollback
 					s_remote_pick.assign(m.data.size() / 4, 0);
 					std::memcpy(s_remote_pick.data(), m.data.data(), s_remote_pick.size() * 4);
 					s_remote_pick_valid = true;
+					if (CssMirror::Enabled())
+						LinkVerifyPicks();
 				}
 				else if (m.type == MSG_CHOICE && m.data.size() >= 4)
 					std::memcpy(&s_remote_choice, m.data.data(), 4);
@@ -2685,6 +2692,21 @@ namespace GameRollback
 		}
 		// Selection commit (e.g. FUC Battle_InitPhase(1)): send our resolved picks, wait for the peer's, write the
 		// agreed record so the battle never depends on local menu timing. EE thread, inside the hook.
+		// mirror menus: compare our committed picks with the peer's once both exist (diagnostic; the attach id enforces it)
+		void LinkVerifyPicks()
+		{
+			if (s_commit_sel.empty() || !s_remote_pick_valid)
+				return;
+			bool same = s_remote_pick.size() >= s_commit_sel.size();
+			for (size_t i = 0; same && i < s_commit_sel.size(); i++)
+				same = s_remote_pick[i] == s_commit_sel[i];
+			if (same)
+				Console.WriteLn("GameRollback: link: picks agree with the peer");
+			else
+				Console.Error("GameRollback: link: picks DIFFER from the peer's (the attach will refuse this battle)");
+			s_commit_sel.clear();
+			s_remote_pick_valid = false;
+		}
 		void LinkCommit()
 		{
 			const auto& sel = s_man.link.selection;
@@ -2693,14 +2715,32 @@ namespace GameRollback
 				mine[i] = Rd(sel[i].first);
 			mine[sel.size()] = s_man.link.seed_addr ? Rd(s_man.link.seed_addr) : 0;
 			NetBridge::LinkSend(MSG_PICK, s_menu_frame, mine.data(), static_cast<u32>(mine.size() * 4));
-			if (!LinkWait([] { return s_remote_pick_valid; }, "the peer's picks"))
-				return;
-			for (size_t i = 0; i < sel.size() && i < s_remote_pick.size(); i++)
-				if (sel[i].second != s_local)
-					Wr(sel[i].first, s_remote_pick[i]);
-			if (s_man.link.seed_addr)
-				Wr(s_man.link.seed_addr, s_local == 0 ? mine[sel.size()] : s_remote_pick[sel.size()]);
-			s_remote_pick_valid = false;
+			if (CssMirror::Enabled())
+			{
+				// mirror menus: both PCs already hold the agreed picks (each side's owner drove it on both), so nothing
+				// is awaited here -- the picks travel for verification only (the attach id hashes them, so a mismatch
+				// can never start a wrong battle). The seed comes from what both PCs share: the picks and the battle
+				// number (P1's menu RNG differs between the PCs and would have to be waited for).
+				u64 h = 1469598103934665603ull ^ (0x5EEDull + s_battle_counter);
+				for (size_t i = 0; i < sel.size(); i++)
+					h = (h ^ mine[i]) * 1099511628211ull;
+				mine[sel.size()] = static_cast<u32>(h ^ (h >> 32));
+				if (s_man.link.seed_addr)
+					Wr(s_man.link.seed_addr, mine[sel.size()]);
+				s_commit_sel.assign(mine.begin(), mine.begin() + static_cast<std::ptrdiff_t>(sel.size()));
+				LinkVerifyPicks();
+			}
+			else
+			{
+				if (!LinkWait([] { return s_remote_pick_valid; }, "the peer's picks"))
+					return;
+				for (size_t i = 0; i < sel.size() && i < s_remote_pick.size(); i++)
+					if (sel[i].second != s_local)
+						Wr(sel[i].first, s_remote_pick[i]);
+				if (s_man.link.seed_addr)
+					Wr(s_man.link.seed_addr, s_local == 0 ? mine[sel.size()] : s_remote_pick[sel.size()]);
+				s_remote_pick_valid = false;
+			}
 			s_pre_attach_neutral = true;
 			s_ai_vms.clear(); // a new battle loads new AI scripts
 			VlBegin();
@@ -2947,11 +2987,13 @@ namespace GameRollback
 					if (first)
 					{
 						s_hold_to = to;
-						if (VlOn())
+						if (s_wait_hold)
+							s_hold_frame = true; // waiting for the peer (one-more choice, attach barrier): a still frame
+						else if (VlOn())
 							s_hold_frame = VlDecide(to);
 						else
 							s_hold_frame = s_pre_attach_neutral && LinkPendingLoads() > 0;
-						s_held_frames += s_hold_frame ? 1 : 0;
+						s_held_frames += (s_hold_frame && !s_wait_hold) ? 1 : 0; // load holds only
 					}
 					if (!s_hold_frame)
 						return EeHooks::Action::Continue;
@@ -3077,30 +3119,37 @@ namespace GameRollback
 						s64 d = 0;
 						if (Eval(s_man.link.onemore_decided, 0, &d) && d != 0)
 						{
-							// our player chose: exchange, then both apply the agreed result (RETRY iff both RETRY)
-							const s32 mine = static_cast<s32>(Rd(s_man.link.onemore_choice));
-							NetBridge::LinkSend(MSG_CHOICE, s_menu_frame, &mine, 4);
+							// our player chose: send it, then hold the game's frames (no sim tick, so the menu cannot act on the
+							// choice yet) until the peer's arrives -- the emulator itself keeps running meanwhile
+							s_choice_mine = static_cast<s32>(Rd(s_man.link.onemore_choice));
+							NetBridge::LinkSend(MSG_CHOICE, s_menu_frame, &s_choice_mine, 4);
 							s_choice_sent = true;
-							if (LinkWait([] { return s_remote_choice >= 0; }, "the peer's one-more choice"))
-							{
-								const bool retry = mine == static_cast<s32>(s_man.link.retry_value) &&
-												   s_remote_choice == static_cast<s32>(s_man.link.retry_value);
-								ApplyWrites(retry ? s_man.link.retry_writes : s_man.link.css_writes);
-								s_pre_attach_neutral = retry; // RETRY: straight to the attach point with neutral pads
-								if (retry)
-									VlBegin();
-								if (retry)
-								{
-									ApplyWrites(s_man.link.commit_writes); // the RETRY -> attach window, like a commit
-									if (s_man.vs.state)
-										VsInit();
-								}
-								Console.WriteLn("GameRollback: link: one-more %s (mine %d, peer %d)", retry ? "RETRY" : "CHARACTER SELECT",
-									mine, s_remote_choice);
-							}
-							s_remote_choice = -1;
-							s_onemore = false;
+							s_choice_pending = true;
 						}
+					}
+					if (s_choice_pending)
+					{
+						s_wait_hold = s_remote_choice < 0;
+						if (s_wait_hold)
+							return true;
+						// both chose: both apply the agreed result (RETRY iff both RETRY)
+						s_choice_pending = false;
+						const s32 mine = s_choice_mine;
+						const bool retry = mine == static_cast<s32>(s_man.link.retry_value) &&
+										   s_remote_choice == static_cast<s32>(s_man.link.retry_value);
+						ApplyWrites(retry ? s_man.link.retry_writes : s_man.link.css_writes);
+						s_pre_attach_neutral = retry; // RETRY: straight to the attach point with neutral pads
+						if (retry)
+						{
+							VlBegin();
+							ApplyWrites(s_man.link.commit_writes); // the RETRY -> attach window, like a commit
+							if (s_man.vs.state)
+								VsInit();
+						}
+						Console.WriteLn("GameRollback: link: one-more %s (mine %d, peer %d)", retry ? "RETRY" : "CHARACTER SELECT", mine,
+							s_remote_choice);
+						s_remote_choice = -1;
+						s_onemore = false;
 					}
 					if (!s_attach_req)
 						return true;
@@ -3110,21 +3159,27 @@ namespace GameRollback
 				}
 				case LinkPhase::Attaching:
 				{
+					// the barrier is polled once per frame; until both PCs are in, the game's frames are held (no sim
+					// tick, no render) so the attach frame stays exactly where the attach point left it
 					const u32 id = LinkAttachId();
-					for (int ms = 0;; ms++)
+					const int r = NetBridge::Attach(id);
+					if (r != 1)
 					{
-						const int r = NetBridge::Attach(id);
-						if (r == 1)
-							break;
-						if (r < 0 || ms > 20000)
+						if (r < 0 || ++s_attach_frames > 1200)
 						{
-							Console.Error("GameRollback: link: attach failed (%d): battle runs locally", r);
+							Console.Error("GameRollback: link: attach failed (%d after %u frames): battle runs locally", r, s_attach_frames);
+							s_wait_hold = false;
+							s_attach_frames = 0;
 							s_lphase = LinkPhase::Menu;
 							return true;
 						}
-						LinkPump();
-						std::this_thread::sleep_for(std::chrono::milliseconds(1));
+						s_wait_hold = true;
+						return true;
 					}
+					if (s_attach_frames)
+						Console.WriteLn("GameRollback: link: attach barrier held %u frames", s_attach_frames);
+					s_wait_hold = false;
+					s_attach_frames = 0;
 					VlReport();
 					s_pre_attach_neutral = false;
 					ApplyWrites(s_man.link.attach_writes); // canonical state at every (re-)attach
@@ -3354,6 +3409,9 @@ namespace GameRollback
 					s_net = false;
 					s_battle_counter = 0;
 					s_onemore = s_attach_req = s_detach_req = false;
+					s_wait_hold = s_choice_pending = false;
+					s_attach_frames = 0;
+					s_commit_sel.clear();
 					s_remote_in.clear();
 					s_remote_pick_valid = false;
 					s_remote_choice = -1;
