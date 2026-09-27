@@ -56,6 +56,8 @@ namespace EeHooks
 	// Interleaved A/B: the hook at pc (gate / resim skip) acts only on every other rollback; the rollback device reports
 	// the paired resim-time comparison.
 	void SetAB(u32 pc);
+	// Gates only: act only on re-simulated frames that are not the rollback's last (pure derived outputs)
+	void SetGateNonFinal(u32 pc);
 	// Gates only: act only when GPR[reg] (low word) lies in one of [lo, hi) (native compares; e.g. skip one object
 	// class's instances in a shared per-node callback). Empty = unconditional.
 	void SetGateRanges(u32 pc, u32 reg, std::vector<std::pair<u32, u32>> ranges);
