@@ -36,8 +36,19 @@ extern "C" {
  * compatible and does NOT bump it -- that is what struct_size is for. pcb_create refuses a mismatch. */
 #define PCB_ABI_VERSION 1u
 
+/* Bumped when COMPATIBLE features are added (new exports, new tail members). A host built against an older
+ * revision keeps working unchanged: PCB_ABI_VERSION stays 1, every revision-1 export and behaviour is kept.
+ * A host that wants a newer feature checks pcb_abi_revision() >= the revision that introduced it (or simply
+ * GetProcAddress's the export).
+ *   1  sessions, DEFERRED plans, .pcrep record/playback, schedule journal
+ *   2  the persistent peer link (pcb_link_*): reliable ordered host messages while no rollback session
+ *      exists (async menus), and per-battle pcb_attach / pcb_detach of the rollback session, repeatable on
+ *      one link; one .pcrep per link with one generation per attach (pcb_replay_open_gen). */
+#define PCB_ABI_REVISION 2u
+
 typedef struct pcb_session pcb_session;   /* a netplay / synctest / local session */
 typedef struct pcb_replay  pcb_replay;    /* a .pcrep playback */
+typedef struct pcb_link    pcb_link;      /* revision 2: the persistent peer link (see the link section) */
 
 /* ---- enums (int32_t on the wire; the typedef'd enums are for readability) ------------------------- */
 
@@ -207,6 +218,7 @@ typedef struct pcb_stats {
 } pcb_stats;
 
 PCB_API uint32_t     PCB_CALL pcb_abi_version(void);
+PCB_API uint32_t     PCB_CALL pcb_abi_revision(void);   /* revision 2+: PCB_ABI_REVISION of the DLL */
 /* NULL on failure; pcb_last_error() says why. Only ONE P2P session may exist per process (the UDP channel
  * is a process singleton); SYNCTEST/LOCAL sessions are unrestricted. */
 PCB_API pcb_session* PCB_CALL pcb_create(const pcb_config* config, const pcb_host* host);
@@ -247,9 +259,17 @@ typedef struct pcb_replay_stats {
     int32_t  checks_total, checks_ok, checks_failed;
     int32_t  first_fail_frame;  /* -1 = none */
     int32_t  finished;
+    /* revision 2 (tail) */
+    int32_t  gen_index;         /* the generation being played (0 = the first attach / a pcb_create session) */
+    int32_t  gen_count;         /* generations in the file (one per pcb_attach on a link) */
 } pcb_replay_stats;
 
 PCB_API pcb_replay*  PCB_CALL pcb_replay_open(const char* path, const pcb_config* config, const pcb_host* host);
+/* Revision 2: play generation `gen_index` (0-based; one generation per pcb_attach of a link). Frames in the
+ * plan are GENERATION-LOCAL: the generation's attach frame is frame 0, exactly as the live session numbered
+ * it. pcb_replay_open(path, ...) is pcb_replay_open_gen(path, 0, ...). */
+PCB_API pcb_replay*  PCB_CALL pcb_replay_open_gen(const char* path, int32_t gen_index, const pcb_config* config,
+                                                  const pcb_host* host);
 PCB_API void         PCB_CALL pcb_replay_close(pcb_replay* r);
 /* Returns 1 = a frame was planned, 0 = the recording is finished, < 0 = error. */
 PCB_API int32_t      PCB_CALL pcb_replay_frame(pcb_replay* r, const pcb_plan** out_plan);
@@ -259,6 +279,146 @@ PCB_API int32_t      PCB_CALL pcb_replay_get_stats(const pcb_replay* r, pcb_repl
 
 /* The last error on this thread's most recent failing call ("" when none). */
 PCB_API const char*  PCB_CALL pcb_last_error(void);
+
+/* ==== revision 2: the persistent peer link + per-battle attach / detach ==================================
+ *
+ * ONE LINK PER PROCESS, FOR THE WHOLE NETPLAY SET. The launcher has already paired the peers (handshake,
+ * slot, ports); pcb_link_open binds the local UDP port once and keeps it until pcb_link_close. Over it:
+ *
+ *   MESSAGES (always, attached or not). pcb_link_send / pcb_link_poll carry small host messages (<=
+ *   PCB_LINK_MSG_MAX bytes), RELIABLE and IN ORDER (resent until acknowledged), on the same UDP socket and
+ *   peer as the game traffic (pc::NetChannel's control channel). This is the async-menu channel: only menu
+ *   EVENTS travel, each side runs its own menus at its own pace -- no lockstep, no prediction.
+ *
+ *   ROLLBACK SESSIONS (per battle). pcb_attach starts a barrier; once both peers have attached with the
+ *   same attach_id, a fresh GekkoNet P2P session is created whose FRAME 0 IS THE ATTACH FRAME on both
+ *   peers. pcb_link_session() then returns an ordinary pcb_session: pcb_frame / pcb_resolve_save /
+ *   pcb_get_stats work exactly as for pcb_create (same plan, same DEFERRED contract). pcb_detach ends it on
+ *   one agreed, confirmed frame. Attach / detach repeat any number of times on the same link.
+ *
+ * THREADING. Every pcb_link_* / pcb_attach / pcb_detach call, and every call on the attached session, must
+ * come from ONE thread (the host's emulation / EE thread). Nothing is thread-safe; no call blocks.
+ *
+ * PER-VSYNC CALL ORDER (host):
+ *   detached   : pcb_link_poll until it returns 0 (drains messages, resends, keepalive)
+ *   attaching  : pcb_attach(...) every vsync until it returns PCB_ATTACH_ATTACHED (do not run game frames
+ *                while it returns PCB_ATTACH_PENDING)
+ *   attached   : (resolve the previous plan's saves) -> pcb_frame(pcb_link_session(link), &plan) -> run it;
+ *                pcb_link_poll may be called too (messages keep flowing)
+ *   detaching  : (resolve the previous plan's saves) -> pcb_detach(link); while it returns
+ *                PCB_DETACH_PENDING, keep calling pcb_frame and running its plan exactly as when attached
+ *                (the plan may still carry rollbacks, and forward frames up to the agreed stop frame).
+ *                Once it returns DETACHED/FORCED the session is gone (the pointer is invalid).
+ */
+
+#define PCB_LINK_MSG_MAX 256u   /* largest host message payload, bytes */
+
+typedef enum pcb_link_state {
+    PCB_LINK_DETACHED  = 0,  /* messages only (menus) */
+    PCB_LINK_ATTACHING = 1,  /* pcb_attach called, waiting for the peer's matching attach */
+    PCB_LINK_ATTACHED  = 2,  /* a rollback session exists: pcb_link_session() */
+    PCB_LINK_DETACHING = 3   /* pcb_detach called, agreeing / confirming the stop frame */
+} pcb_link_state;
+
+typedef enum pcb_attach_result {
+    PCB_ATTACH_PENDING  = 0,  /* barrier not cleared yet: call again next vsync, run no game frame */
+    PCB_ATTACH_ATTACHED = 1   /* the session exists; its frame 0 is the next frame the host runs */
+    /* < 0: failed (pcb_last_error says why: timeout, peer aborted, attach_id / geometry mismatch). The link
+       is back in DETACHED and stays usable; attach again to retry (both peers). */
+} pcb_attach_result;
+
+typedef enum pcb_detach_result {
+    PCB_DETACH_PENDING  = 0,  /* keep calling pcb_frame (and running its plan) and pcb_detach */
+    PCB_DETACH_DETACHED = 1,  /* clean: both peers stopped on the same confirmed frame (stats.last_stop_frame)
+                                 with every input through it received -- the game states are identical */
+    PCB_DETACH_FORCED   = 2   /* the peer did not complete the detach inside attach_timeout_ms (it vanished
+                                 or never detached): torn down locally; the final frames are NOT confirmed */
+} pcb_detach_result;
+
+typedef struct pcb_link_config {
+    uint32_t    struct_size;        /* sizeof(pcb_link_config) */
+    uint32_t    abi_version;        /* PCB_ABI_VERSION */
+    int32_t     local_player;       /* 0 or 1 (the launcher's handshake: host = 0, joiner = 1) */
+    const char* remote_addr;        /* "ip:port" of the peer (copied) */
+    uint16_t    local_port;         /* UDP port to bind for the life of the link */
+    uint16_t    reserved0;
+    uint32_t    input_size;         /* bytes per player per frame for EVERY attach (0 -> 6 = pcb_ps2_input) */
+    const char* replay_path;        /* one .pcrep for the whole link, one generation per attach; NULL/"" = off */
+    const char* game_id;            /* <= 15 chars, written into the .pcrep header */
+    uint32_t    attach_timeout_ms;  /* budget for the attach barrier and for the detach agreement; 0 -> 15000 */
+    void*       user;               /* handed to `log` */
+    void (PCB_CALL* log)(void* user, int32_t level, const char* line);   /* OPTIONAL diagnostics */
+} pcb_link_config;
+
+typedef struct pcb_link_msg {
+    uint32_t struct_size;           /* in: sizeof(pcb_link_msg) the caller allocated; out: bytes written */
+    uint16_t type;                  /* host-defined, carried verbatim */
+    uint16_t len;                   /* payload bytes in data[] */
+    int32_t  frame;                 /* host-defined frame tag (e.g. the sender's menu frame), carried verbatim */
+    uint32_t seq;                   /* 1-based index of this message in the peer's host-message stream; equals
+                                       the value pcb_link_send returned on the sender. Gap-free and ordered. */
+    uint8_t  data[PCB_LINK_MSG_MAX];
+} pcb_link_msg;
+
+typedef struct pcb_link_stats {
+    uint32_t struct_size;
+    int32_t  state;                 /* pcb_link_state */
+    int32_t  connected;             /* 1 = a datagram from the peer arrived within the last 2 s */
+    uint32_t ping_ms;               /* link round trip (keepalive echo, smoothed); 0 = no sample yet */
+    uint32_t silent_ms;             /* ms since the peer was last heard; 0xFFFFFFFF = never */
+    uint32_t generation;            /* attaches begun on this link (the current / last attach's number) */
+    uint32_t attaches_completed;    /* barriers that cleared */
+    uint32_t detaches_clean, detaches_forced;
+    uint32_t msgs_sent, msgs_received;  /* host messages */
+    uint32_t unacked;               /* reliable messages (host + internal) not yet acknowledged */
+    uint32_t resends;               /* reliable retransmissions, cumulative */
+    int32_t  remote_detach_requested;  /* 1 = the peer has called pcb_detach (or abandoned the attach) for the
+                                          current session. The host MUST then call pcb_detach too: the peer has
+                                          parked its session, so this one would only stall in the prediction
+                                          window and never reach its own battle-end condition. */
+    int32_t  last_stop_frame;       /* the session frame the last clean detach stopped on (-1 = none yet) */
+    int32_t  input_delay;           /* the current / last attach's local input delay */
+} pcb_link_stats;
+
+/* NULL on failure (pcb_last_error). Refused while a pcb_create P2P session exists, and vice versa: both use the
+ * process's one UDP channel. */
+PCB_API pcb_link*    PCB_CALL pcb_link_open(const pcb_link_config* config);
+/* Tears down an attached session without the detach handshake (FORCED), finalises the .pcrep, unbinds. */
+PCB_API void         PCB_CALL pcb_link_close(pcb_link* link);
+
+/* Queue one reliable, ordered message. len <= PCB_LINK_MSG_MAX. Returns its sequence index (> 0, what the peer
+ * sees in pcb_link_msg.seq), or < 0 on error (bad length, backlog of unacknowledged messages full). The first
+ * transmission goes out inside this call. */
+PCB_API int32_t      PCB_CALL pcb_link_send(pcb_link* link, uint16_t type, int32_t frame, const void* data,
+                                            uint32_t len);
+/* Pump the link (receive, acknowledge, resend, keepalive) and pop the next host message in order.
+ * Returns 1 = *out holds a message, 0 = none pending, < 0 = error. out may be NULL: pump only. */
+PCB_API int32_t      PCB_CALL pcb_link_poll(pcb_link* link, pcb_link_msg* out);
+PCB_API int32_t      PCB_CALL pcb_link_get_stats(const pcb_link* link, pcb_link_stats* out);   /* 1 = ok */
+
+/* Attach a rollback session (non-blocking, poll style: call every vsync until it stops returning PENDING).
+ * The FIRST call (link DETACHED) begins generation N with these arguments; later calls while ATTACHING only
+ * poll (attach_id must repeat; config/host are not re-read). Once ATTACHED it returns PCB_ATTACH_ATTACHED.
+ *   attach_id  host-chosen, must be identical on both peers (a battle counter, a hash of the stage/characters
+ *              the menus agreed on): a mismatch fails both sides instead of starting a wrong battle.
+ *   config     the session settings for THIS attach: dispatch, input_delay (the per-battle delay),
+ *              prediction_window / check_distance (8 or 0), state_size, sched_journal. mode, local_player,
+ *              remote_addr, local_port are taken from the link; input_size must be 0 or the link's;
+ *              replay_path must be NULL (the link records). abi_version as for pcb_create.
+ *   host       as for pcb_create, except `scene` is IGNORED: an attached session is a battle, it rolls back
+ *              on every frame (menus are the link's messages, never a lockstep session).
+ * Returns PCB_ATTACH_PENDING / PCB_ATTACH_ATTACHED, or < 0 (failed; see pcb_attach_result). */
+PCB_API int32_t      PCB_CALL pcb_attach(pcb_link* link, uint32_t attach_id, const pcb_config* config,
+                                         const pcb_host* host);
+/* The attached session (ATTACHED or DETACHING), else NULL. Use it with pcb_frame / pcb_resolve_save /
+ * pcb_get_stats / pcb_sched_journal_dump / pcb_set_desync_inject. NEVER pcb_destroy it: the link owns it. */
+PCB_API pcb_session* PCB_CALL pcb_link_session(pcb_link* link);
+/* End the attached session (non-blocking, poll style). The peers propose the last frame each can stop on
+ * without another local input and agree on the larger; both then run to exactly that frame, wait until every
+ * input through it has arrived (so all rollbacks are applied) and tear the session down together. Called while
+ * ATTACHING it cancels the attach (the peer's attach fails) and returns PCB_DETACH_DETACHED at once. Called
+ * while DETACHED it returns PCB_DETACH_DETACHED. Returns pcb_detach_result, < 0 on error. */
+PCB_API int32_t      PCB_CALL pcb_detach(pcb_link* link);
 
 /* Maps a raw hash off the reserved "no opinion" value 0 (same rule as pc::finalizeChecksum). */
 static inline uint32_t pcb_finalize_checksum(uint32_t h) { return h == 0u ? 1u : h; }

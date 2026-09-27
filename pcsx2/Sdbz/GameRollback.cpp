@@ -21,6 +21,8 @@
 #include "fmt/format.h"
 
 #include <algorithm>
+#include <array>
+#include <deque>
 #include <cctype>
 #include <functional>
 #include <map>
@@ -393,6 +395,30 @@ namespace GameRollback
 				std::string name;
 				std::vector<ScriptPatch> patches;
 			};
+			// Async menus + per-battle rollback (session.link; bridge link mode). Menus run locally, only menu events travel.
+			struct LinkHook
+			{
+				u32 at = 0;
+				int reg = 5;
+				std::string match; // string prefix at GPR[reg] (empty = none)
+				bool has_value = false;
+				u32 value = 0;     // or: GPR[reg] == value
+			};
+			struct ExprWrite
+			{
+				Val addr, value;
+			};
+			struct LinkSpec
+			{
+				bool on = false;
+				LinkHook attach, detach, commit;          // battle attach point, match end (one-more open), selection commit
+				std::vector<std::pair<u32, int>> selection; // resolved picks: address, owning player (0/1)
+				u32 seed_addr = 0;                          // written from player 0's value at commit
+				std::vector<ExprWrite> attach_writes;       // canonicalization at every (re-)attach
+				Val onemore_decided;                        // the local one-more choice has been made
+				u32 onemore_choice = 0, retry_value = 1;    // choice word, its RETRY value
+				std::vector<ExprWrite> retry_writes, css_writes; // apply the agreed choice
+			} link;
 			u32 script_hook = 0;
 			int script_file_reg = 5; // a1
 			std::vector<ScriptPatchGroup> script_patches;
@@ -808,6 +834,50 @@ namespace GameRollback
 							m->script_patches.push_back(std::move(grp));
 						}
 				}
+				if (Has(se, "link"))
+				{
+					const auto lk = Child(se, "link");
+					auto hook = [&](const char* k, Manifest::LinkHook& h) {
+						if (!Has(lk, k))
+							return;
+						const auto n = Child(lk, k);
+						h.at = Get(n, "at", 0);
+						const std::string rg = GetStr(n, "reg");
+						for (int i = 1; i < 32; i++)
+							if (rg == rn[i])
+								h.reg = i;
+						h.match = GetStr(n, "match");
+						h.has_value = Has(n, "value");
+						h.value = Get(n, "value", 0);
+					};
+					auto writes = [&](const char* k, std::vector<Manifest::ExprWrite>& v) {
+						if (Has(lk, k))
+							for (const auto& c : Child(lk, k).children())
+								v.push_back({ParseVal(Child(c, "addr")), ParseVal(Child(c, "value"))});
+					};
+					m->link.on = true;
+					hook("attach", m->link.attach);
+					hook("detach", m->link.detach);
+					hook("commit", m->link.commit);
+					if (Has(lk, "selection"))
+						for (const auto& c : Child(lk, "selection").children())
+							m->link.selection.emplace_back(Get(c, "addr", 0), static_cast<int>(Get(c, "owner", 0)));
+					m->link.seed_addr = Get(lk, "seed", 0);
+					writes("attach_writes", m->link.attach_writes);
+					if (Has(lk, "onemore"))
+					{
+						const auto om = Child(lk, "onemore");
+						m->link.onemore_decided = ParseVal(Child(om, "decided"));
+						m->link.onemore_choice = Get(om, "choice", 0);
+						m->link.retry_value = Get(om, "retry_value", 1);
+						if (Has(om, "retry_writes"))
+							for (const auto& c : Child(om, "retry_writes").children())
+								m->link.retry_writes.push_back({ParseVal(Child(c, "addr")), ParseVal(Child(c, "value"))});
+						if (Has(om, "css_writes"))
+							for (const auto& c : Child(om, "css_writes").children())
+								m->link.css_writes.push_back({ParseVal(Child(c, "addr")), ParseVal(Child(c, "value"))});
+					}
+				}
 				if (Has(se, "input_masks"))
 					for (const auto& c : Child(se, "input_masks").children())
 					{
@@ -1085,6 +1155,13 @@ namespace GameRollback
 		// netplay (NetBridge): every player's report is rebuilt from the 6-byte wire input, identically on every peer
 		bool s_net = false;
 		void RemoveSessionLocks();
+		// ---- link mode (async menus, per-battle rollback) ----
+		enum class LinkPhase : u8 { Off, Menu, Attaching, Battle, Detaching };
+		LinkPhase s_lphase = LinkPhase::Off;
+		bool LinkTick();                                // frame boundary: true = this frame runs without netcode
+		bool LinkPadRead(u32 player, u8* buf);          // menu phases: stream/feed; true = handled
+		void InstallLinkHooks();
+		void RemoveLinkHooks();
 		NetBridge::Plan s_net_plan;
 		std::vector<s32> s_net_resim_saves; // save index per re-simulated step
 		s32 s_net_fwd_save = -1;
@@ -1498,6 +1575,8 @@ namespace GameRollback
 			}
 			PcInput::Poll(); // creamybinder: this frame's local input, before netcode and the game read it
 			ApplyRequests();
+			if (s_lphase != LinkPhase::Off && LinkTick())
+				return EeHooks::Action::Continue; // menus: the frame runs locally, no netcode
 			if (s_mode == 0)
 				return EeHooks::Action::Continue;
 			RefreshDynamic(false);
@@ -1654,6 +1733,14 @@ namespace GameRollback
 			s_pad_pending = false;
 			const u32 player = s_pad_player % PAD_PLAYERS;
 			u8* buf = &eeMem->Main[s_pad_buf & RAM_MASK];
+			if (s_lphase != LinkPhase::Off && s_lphase != LinkPhase::Battle && s_lphase != LinkPhase::Detaching)
+			{
+				cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(RollbackDevice::HandleSyscall(
+					RollbackDevice::CMD_PAD_FEED, s_pad_player, s_pad_buf, cpuRegs.GPR.n.v0.UL[0]));
+				if (LinkPadRead(player, buf))
+					cpuRegs.GPR.n.v0.SD[0] = 1;
+				return EeHooks::Action::Continue;
+			}
 			if ((s_net || (s_man.pad_record_replay && !s_man.replay_fn)) && s_driving)
 			{
 				// re-simulated frame: the report this player's read returned when the frame ran for real
@@ -2298,6 +2385,277 @@ namespace GameRollback
 			return true;
 		}
 
+		// ================= link mode runtime =================
+		enum : u16 { MSG_INPUT = 1, MSG_PICK = 2, MSG_CHOICE = 3 };
+		int s_local = 0;                         // local player (0/1)
+		std::deque<std::array<u8, 6>> s_remote_in; // remote player's streamed menu inputs, applied one per read
+		std::array<u8, 6> s_remote_last = {0, 0, 0x80, 0x80, 0x80, 0x80};
+		std::vector<u32> s_remote_pick;          // the peer's resolved selection values (MSG_PICK)
+		bool s_remote_pick_valid = false;
+		s32 s_remote_choice = -1;                // the peer's one-more choice (MSG_CHOICE)
+		bool s_attach_req = false, s_detach_req = false, s_onemore = false, s_choice_sent = false;
+		s32 s_menu_frame = 0;
+		u32 s_battle_counter = 0;
+		std::vector<u32> s_link_hooks;
+
+		void LinkPump()
+		{
+			NetBridge::Message m;
+			while (NetBridge::LinkPoll(&m))
+			{
+				if (m.type == MSG_INPUT && m.data.size() == 6)
+				{
+					std::array<u8, 6> in;
+					std::memcpy(in.data(), m.data.data(), 6);
+					s_remote_in.push_back(in);
+				}
+				else if (m.type == MSG_PICK)
+				{
+					s_remote_pick.assign(m.data.size() / 4, 0);
+					std::memcpy(s_remote_pick.data(), m.data.data(), s_remote_pick.size() * 4);
+					s_remote_pick_valid = true;
+				}
+				else if (m.type == MSG_CHOICE && m.data.size() >= 4)
+					std::memcpy(&s_remote_choice, m.data.data(), 4);
+			}
+		}
+		void ApplyWrites(const std::vector<Manifest::ExprWrite>& ws)
+		{
+			for (const auto& w : ws)
+			{
+				s64 a = 0, v = 0;
+				if (Eval(w.addr, 0, &a) && Eval(w.value, 0, &v) && a != 0)
+					Wr(static_cast<u32>(a), static_cast<u32>(v));
+			}
+		}
+		template <typename Pred>
+		bool LinkWait(Pred done, const char* what)
+		{
+			for (int ms = 0; ms < 15000; ms++)
+			{
+				LinkPump();
+				if (done())
+					return true;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			Console.Error("GameRollback: link: timed out waiting for %s", what);
+			return false;
+		}
+		bool LinkHookMatches(const Manifest::LinkHook& h)
+		{
+			if (h.has_value)
+				return cpuRegs.GPR.r[h.reg].UL[0] == h.value;
+			const u32 p = cpuRegs.GPR.r[h.reg].UL[0] & RAM_MASK;
+			return !h.match.empty() && p + h.match.size() < Ps2MemSize::MainRam &&
+				   std::memcmp(&eeMem->Main[p], h.match.data(), h.match.size()) == 0;
+		}
+		// Selection commit (e.g. FUC Battle_InitPhase(1)): send our resolved picks, wait for the peer's, write the
+		// agreed record so the battle never depends on local menu timing. EE thread, inside the hook.
+		void LinkCommit()
+		{
+			const auto& sel = s_man.link.selection;
+			std::vector<u32> mine(sel.size() + 1, 0);
+			for (size_t i = 0; i < sel.size(); i++)
+				mine[i] = Rd(sel[i].first);
+			mine[sel.size()] = s_man.link.seed_addr ? Rd(s_man.link.seed_addr) : 0;
+			NetBridge::LinkSend(MSG_PICK, s_menu_frame, mine.data(), static_cast<u32>(mine.size() * 4));
+			if (!LinkWait([] { return s_remote_pick_valid; }, "the peer's picks"))
+				return;
+			for (size_t i = 0; i < sel.size() && i < s_remote_pick.size(); i++)
+				if (sel[i].second != s_local)
+					Wr(sel[i].first, s_remote_pick[i]);
+			if (s_man.link.seed_addr)
+				Wr(s_man.link.seed_addr, s_local == 0 ? mine[sel.size()] : s_remote_pick[sel.size()]);
+			s_remote_pick_valid = false;
+			Console.WriteLn("GameRollback: link: selections committed (%zu values)", sel.size());
+		}
+		void InstallLinkHooks()
+		{
+			const auto& L = s_man.link;
+			// attach and detach may share one pc (FUC: Seq_DebugPrint with different strings)
+			std::map<u32, int> at;
+			if (L.attach.at)
+				at[L.attach.at] |= 1;
+			if (L.detach.at)
+				at[L.detach.at] |= 2;
+			for (const auto& [pc, which] : at)
+			{
+				EeHooks::AddCall(pc, [which](u32) {
+					if ((which & 1) && LinkHookMatches(s_man.link.attach))
+						s_attach_req = true;
+					if ((which & 2) && LinkHookMatches(s_man.link.detach))
+						s_detach_req = true;
+					return EeHooks::Action::Continue;
+				}, EeHooks::OWNER_GAME);
+				s_link_hooks.push_back(pc);
+			}
+			if (L.commit.at)
+			{
+				EeHooks::AddCall(L.commit.at, [](u32) {
+					if (!RollbackDevice::ResimulatingFlag() || !*RollbackDevice::ResimulatingFlag())
+						if (LinkHookMatches(s_man.link.commit))
+							LinkCommit();
+					return EeHooks::Action::Continue;
+				}, EeHooks::OWNER_GAME);
+				s_link_hooks.push_back(L.commit.at);
+			}
+		}
+		void RemoveLinkHooks()
+		{
+			for (const u32 a : s_link_hooks)
+				EeHooks::Remove(a);
+			s_link_hooks.clear();
+		}
+		u32 LinkAttachId()
+		{
+			u64 h = 1469598103934665603ull ^ s_battle_counter;
+			for (const auto& [a, owner] : s_man.link.selection)
+				h = (h ^ Rd(a)) * 1099511628211ull;
+			return static_cast<u32>(h ^ (h >> 32));
+		}
+		// Frame boundary. Returns true when this frame runs locally (menus / waiting).
+		bool LinkTick()
+		{
+			LinkPump();
+			switch (s_lphase)
+			{
+				case LinkPhase::Menu:
+				{
+					s_menu_frame++;
+					if (s_onemore && !s_choice_sent)
+					{
+						s64 d = 0;
+						if (Eval(s_man.link.onemore_decided, 0, &d) && d != 0)
+						{
+							// our player chose: exchange, then both apply the agreed result (RETRY iff both RETRY)
+							const s32 mine = static_cast<s32>(Rd(s_man.link.onemore_choice));
+							NetBridge::LinkSend(MSG_CHOICE, s_menu_frame, &mine, 4);
+							s_choice_sent = true;
+							if (LinkWait([] { return s_remote_choice >= 0; }, "the peer's one-more choice"))
+							{
+								const bool retry = mine == static_cast<s32>(s_man.link.retry_value) &&
+												   s_remote_choice == static_cast<s32>(s_man.link.retry_value);
+								ApplyWrites(retry ? s_man.link.retry_writes : s_man.link.css_writes);
+								Console.WriteLn("GameRollback: link: one-more %s (mine %d, peer %d)", retry ? "RETRY" : "CHARACTER SELECT",
+									mine, s_remote_choice);
+							}
+							s_remote_choice = -1;
+							s_onemore = false;
+						}
+					}
+					if (!s_attach_req)
+						return true;
+					s_attach_req = false;
+					s_lphase = LinkPhase::Attaching;
+					[[fallthrough]];
+				}
+				case LinkPhase::Attaching:
+				{
+					const u32 id = LinkAttachId();
+					for (int ms = 0;; ms++)
+					{
+						const int r = NetBridge::Attach(id);
+						if (r == 1)
+							break;
+						if (r < 0 || ms > 20000)
+						{
+							Console.Error("GameRollback: link: attach failed (%d): battle runs locally", r);
+							s_lphase = LinkPhase::Menu;
+							return true;
+						}
+						LinkPump();
+						std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					}
+					ApplyWrites(s_man.link.attach_writes); // canonical state at every (re-)attach
+					DoStart(static_cast<int>(RollbackDevice::Mode::Netplay), 8);
+					s_net = true;
+					s_net_fwd_save = -1;
+					s_net_base_set = false;
+					s_net_frame_base = 0;
+					s_battle_counter++;
+					s_detach_req = false;
+					s_lphase = LinkPhase::Battle;
+					Console.WriteLn("GameRollback: link: battle %u attached", s_battle_counter);
+					return false; // this frame is the session's frame 0
+				}
+				case LinkPhase::Battle:
+					if (s_detach_req || NetBridge::RemoteDetachRequested())
+						s_lphase = LinkPhase::Detaching;
+					return false;
+				case LinkPhase::Detaching:
+				{
+					const int d = NetBridge::Detach();
+					if (d == 1 || d == 2 || d < 0)
+					{
+						DoStop();
+						s_net = false;
+						s_detach_req = false;
+						s_onemore = true; // match end: the one-more menu follows
+						s_choice_sent = false;
+						s_remote_in.clear();
+						s_lphase = LinkPhase::Menu;
+						return true;
+					}
+					return false; // keep running the session's frames until the agreed stop frame
+				}
+				default:
+					return true;
+			}
+		}
+		// Menu phases: the local player's port streams out, the remote player's port is fed from the stream (holding
+		// the last input on underrun keeps autorepeat identical). The one-more menu reads port 0 only: there every peer
+		// feeds its LOCAL player into port 0, so both drive their own cursor.
+		bool LinkPadRead(u32 player, u8* buf)
+		{
+			if (player > 1)
+				return false;
+			const u32 local_port = s_onemore ? 0u : static_cast<u32>(s_local);
+			u8 in[6];
+			if (s_onemore)
+			{
+				if (player != 0)
+				{
+					// the local player's own port is still read: keep its latest report for port 0
+					if (static_cast<int>(player) == s_local)
+					{
+						std::memcpy(s_live_report[player], buf, PAD_REPORT);
+						s_live_valid[player] = true;
+					}
+					return false;
+				}
+				if (PcInput::Active())
+				{
+					const u16 b = PcInput::Buttons(s_local);
+					const u8 x[6] = {static_cast<u8>(b >> 8), static_cast<u8>(b), 0x80, 0x80, 0x80, 0x80};
+					BuildReport(x, buf);
+				}
+				else if (s_local != 0 && s_live_valid[s_local])
+					std::memcpy(buf, s_live_report[s_local], PAD_REPORT);
+				return true;
+			}
+			if (player == local_port)
+			{
+				if (PcInput::Active())
+				{
+					const u16 b = PcInput::Buttons(s_local);
+					const u8 x[6] = {static_cast<u8>(b >> 8), static_cast<u8>(b), 0x80, 0x80, 0x80, 0x80};
+					BuildReport(x, buf);
+				}
+				ReportToInput(buf, in);
+				std::memcpy(s_live_report[player], buf, PAD_REPORT);
+				s_live_valid[player] = true;
+				NetBridge::LinkSend(MSG_INPUT, s_menu_frame, in, 6);
+				return true;
+			}
+			if (!s_remote_in.empty())
+			{
+				std::memcpy(s_remote_last.data(), s_remote_in.front().data(), 6);
+				s_remote_in.pop_front();
+			}
+			BuildReport(s_remote_last.data(), buf);
+			return true;
+		}
+
 		void ApplyRequests()
 		{
 			// hot reload: poll the manifest's modification time about twice a second
@@ -2339,10 +2697,12 @@ namespace GameRollback
 				if (r.locks_on)
 					InstallSessionLocks();
 			}
-			if (r.net_stop && s_net)
+			if (r.net_stop && (s_net || s_lphase != LinkPhase::Off))
 			{
 				NetBridge::Stop();
 				s_net = false;
+				s_lphase = LinkPhase::Off;
+				RemoveLinkHooks();
 				RemoveSessionLocks();
 				DoStop();
 			}
@@ -2379,6 +2739,23 @@ namespace GameRollback
 					}
 				if (!NetBridge::Start(r.net, host, &err))
 					Console.Error("GameRollback: netplay start failed: %s", err.c_str());
+				else if (r.net.mode == NetBridge::Mode::Link)
+				{
+					// async menus: no netcode until the first battle attach
+					s_local = r.net.local_player;
+					s_lphase = LinkPhase::Menu;
+					s_net = false;
+					s_battle_counter = 0;
+					s_onemore = s_attach_req = s_detach_req = false;
+					s_remote_in.clear();
+					s_remote_pick_valid = false;
+					s_remote_choice = -1;
+					InstallSessionLocks();
+					InstallLinkHooks();
+					for (bool& v : s_live_valid)
+						v = false;
+					Console.WriteLn("GameRollback: link mode: menus local, rollback attached per battle");
+				}
 				else
 				{
 					DoStart(static_cast<int>(RollbackDevice::Mode::Netplay), 8); // rollback depth fixed at 8
@@ -2528,7 +2905,7 @@ namespace GameRollback
 			ip.profile = stem;
 			if (const char* d = std::getenv("PS2RB_CB_DIR"); d && *d)
 				ip.config_dir = d;
-			if (net && std::string(net) == "p2p")
+			if (net && (std::string(net) == "p2p" || std::string(net) == "link"))
 				if (const char* lp = std::getenv("PS2RB_LOCAL"); lp && *lp)
 					ip.online_seat = std::atoi(lp);
 			PcInput::Start(ip);
@@ -2540,7 +2917,7 @@ namespace GameRollback
 			return std::string(v && *v ? v : def);
 		};
 		const std::string m = net;
-		const int mode = m == "p2p" ? 2 : m == "local" ? 1 : m == "replay" ? 3 : m == "journal" ? 4 : 0;
+		const int mode = m == "p2p" ? 2 : m == "local" ? 1 : m == "replay" ? 3 : m == "journal" ? 4 : m == "link" ? 5 : 0;
 		if (!NetStart(mode, std::atoi(env("PS2RB_LOCAL", "0").c_str()), env("PS2RB_REMOTE", ""),
 				static_cast<u16>(std::atoi(env("PS2RB_PORT", "7000").c_str())),
 				static_cast<u8>(std::atoi(env("PS2RB_DELAY", "2").c_str())), env("PS2RB_REPLAY", ""),
