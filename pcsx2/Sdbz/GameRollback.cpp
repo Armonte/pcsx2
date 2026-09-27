@@ -3880,17 +3880,19 @@ namespace GameRollback
 		};
 		struct TaskOpen
 		{
-			u32 fn;
+			u64 key;
 			u64 cycle;
 			std::chrono::steady_clock::time_point t;
 		};
-		std::unordered_map<u32, TaskCost> s_tp_costs;
+		std::unordered_map<u64, TaskCost> s_tp_costs; // (script base << 32) | fn
+		std::vector<u32> s_tp_vm_fns;
 		std::vector<TaskOpen> s_tp_stack;
 		u32 s_tp_call = 0, s_tp_ret = 0, s_tp_reg = 3;
 		u64 s_tp_frames[2] = {0, 0};
 	}
-	bool TaskProfStart(u32 call_pc, u32 ret_pc, u32 fn_reg)
+	bool TaskProfStart(u32 call_pc, u32 ret_pc, u32 fn_reg, std::vector<u32> vm_fns)
 	{
+		s_tp_vm_fns = std::move(vm_fns);
 		TaskProfStop();
 		s_tp_costs.clear();
 		s_tp_stack.clear();
@@ -3899,7 +3901,12 @@ namespace GameRollback
 		s_tp_ret = ret_pc;
 		s_tp_reg = fn_reg & 31;
 		EeHooks::AddCall(call_pc, [](u32) {
-			s_tp_stack.push_back({cpuRegs.GPR.r[s_tp_reg].UL[0], cpuRegs.cycle, std::chrono::steady_clock::now()});
+			const u32 fn = cpuRegs.GPR.r[s_tp_reg].UL[0];
+			u64 key = fn;
+			if (std::find(s_tp_vm_fns.begin(), s_tp_vm_fns.end(), fn) != s_tp_vm_fns.end())
+				if (const u32 t0 = Rd(cpuRegs.GPR.n.a0.UL[0] + 8 + 12))
+					key |= static_cast<u64>(Rd(t0 + 92)) << 32; // the VM's script base
+			s_tp_stack.push_back({key, cpuRegs.cycle, std::chrono::steady_clock::now()});
 			return EeHooks::Action::Continue;
 		}, EeHooks::OWNER_GAME);
 		EeHooks::AddCall(ret_pc, [](u32) {
@@ -3908,12 +3915,10 @@ namespace GameRollback
 			const TaskOpen o = s_tp_stack.back();
 			s_tp_stack.pop_back();
 			const int r = RollbackDevice::IsResimulating() ? 1 : 0;
-			TaskCost& c = s_tp_costs[o.fn];
+			TaskCost& c = s_tp_costs[o.key];
 			c.calls[r]++;
 			c.cycles[r] += cpuRegs.cycle - o.cycle;
 			c.host_ns[r] += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - o.t).count());
-			if (s_tp_stack.empty() && o.fn != 0)
-				s_tp_frames[r] += 0; // (frame counts come from the outermost list below)
 			return EeHooks::Action::Continue;
 		}, EeHooks::OWNER_GAME);
 		Console.WriteLn("GameRollback: task profiler on (call %08X, return %08X, fn in r%u)", call_pc, ret_pc, s_tp_reg);
@@ -3930,7 +3935,7 @@ namespace GameRollback
 	}
 	std::string TaskProfReport(u32 top_n)
 	{
-		std::vector<std::pair<u32, TaskCost>> v(s_tp_costs.begin(), s_tp_costs.end());
+		std::vector<std::pair<u64, TaskCost>> v(s_tp_costs.begin(), s_tp_costs.end());
 		u64 tot[2] = {0, 0};
 		for (const auto& [fn, c] : v)
 			for (int r = 0; r < 2; r++)
@@ -3939,14 +3944,19 @@ namespace GameRollback
 		for (int r = 1; r >= 0; r--)
 		{
 			std::sort(v.begin(), v.end(), [r](const auto& a, const auto& b) { return a.second.host_ns[r] > b.second.host_ns[r]; });
-			out += fmt::format("\n## {} frames\n  host%    host_ms     calls   us/call    EEcyc/call  fn\n", r ? "re-simulated" : "normal");
+			out += fmt::format("\n## {} frames\n  host%    host_ms     calls   us/call    EEcyc/call  fn        script_base  script[0..32)\n",
+				r ? "re-simulated" : "normal");
 			u32 n = 0;
 			for (const auto& [fn, c] : v)
 			{
 				if (!c.calls[r] || n++ >= top_n)
 					continue;
-				out += fmt::format("  {:5.1f}  {:9.2f}  {:8}  {:8.1f}  {:12}  {:08X}\n", tot[r] ? 100.0 * c.host_ns[r] / tot[r] : 0.0,
-					c.host_ns[r] / 1e6, c.calls[r], c.host_ns[r] / 1e3 / c.calls[r], c.cycles[r] / c.calls[r], fn);
+				const u32 base = static_cast<u32>(fn >> 32);
+				std::string head;
+				for (u32 k = 0; base && k < 32; k++)
+					head += fmt::format("{:02x}", eeMem->Main[(base + k) & RAM_MASK]);
+				out += fmt::format("  {:5.1f}  {:9.2f}  {:8}  {:8.1f}  {:12}  {:08X}  {:08X}     {}\n", tot[r] ? 100.0 * c.host_ns[r] / tot[r] : 0.0,
+					c.host_ns[r] / 1e6, c.calls[r], c.host_ns[r] / 1e3 / c.calls[r], c.cycles[r] / c.calls[r], static_cast<u32>(fn), base, head);
 			}
 		}
 		return out;

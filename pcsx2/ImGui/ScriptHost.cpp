@@ -251,7 +251,12 @@ namespace
 		rd.set_function("set_resim_flag", [](uint32_t a) { RollbackDevice::SetResimFlagAddr(a); });
 		rd.set_function("set_dma_sink", [](bool on) { RollbackDevice::SetDmaSink(on); });
 		rd.set_function("set_quiet_iop", [](bool on) { RollbackDevice::SetQuietIop(on); });
-		rd.set_function("task_prof_start", [](uint32_t call_pc, uint32_t ret_pc, uint32_t reg) { return GameRollback::TaskProfStart(call_pc, ret_pc, reg); });
+		rd.set_function("task_prof_start", [](uint32_t call_pc, uint32_t ret_pc, uint32_t reg, sol::optional<uint32_t> vm1, sol::optional<uint32_t> vm2) {
+			std::vector<u32> vm;
+			if (vm1) vm.push_back(*vm1);
+			if (vm2) vm.push_back(*vm2);
+			return GameRollback::TaskProfStart(call_pc, ret_pc, reg, std::move(vm));
+		});
 		rd.set_function("task_prof_stop", []() { GameRollback::TaskProfStop(); });
 		rd.set_function("task_prof_report", [](sol::optional<uint32_t> top) { return GameRollback::TaskProfReport(top.value_or(40)); });
 		rd.set_function("set_levers", [](bool host_vsync, bool park, bool iop) { RollbackDevice::SetLevers(host_vsync, park, iop); });
