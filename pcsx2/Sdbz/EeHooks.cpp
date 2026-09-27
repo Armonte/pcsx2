@@ -27,6 +27,8 @@ namespace EeHooks
 			std::vector<u32> ra_filter;
 			u32 v0 = 0; // ResimGateRet
 			bool ab = false; // interleaved A/B: acts only on the rollback device's A/B "on" rollbacks
+			u32 range_reg = 0;                         // gates: also require GPR[range_reg] (low word) in one of ranges
+			std::vector<std::pair<u32, u32>> ranges; //   [lo, hi); empty = unconditional
 		};
 		std::mutex s_mtx;
 		std::unordered_map<u32, Hook> s_hooks;
@@ -66,6 +68,39 @@ namespace EeHooks
 
 	void AddResimGate(u32 pc, Owner owner) { Set(pc, {Kind::ResimGate, {}, owner}); }
 	void AddResimGateRet(u32 pc, u32 v0, Owner owner) { Set(pc, {Kind::ResimGateRet, {}, owner, {}, v0}); }
+	void SetGateRanges(u32 pc, u32 reg, std::vector<std::pair<u32, u32>> ranges)
+	{
+		{
+			std::lock_guard lk(s_mtx);
+			const auto it = s_hooks.find(Key(pc));
+			if (it == s_hooks.end())
+				return;
+			it->second.range_reg = reg & 31;
+			it->second.ranges = std::move(ranges);
+		}
+		Invalidate(pc);
+	}
+	std::vector<std::pair<u32, u32>> GateRanges(u32 pc, u32* reg)
+	{
+		std::lock_guard lk(s_mtx);
+		const auto it = s_hooks.find(Key(pc));
+		if (it == s_hooks.end())
+			return {};
+		*reg = it->second.range_reg;
+		return it->second.ranges;
+	}
+	bool GateRangeHit(u32 pc)
+	{
+		u32 reg = 0;
+		const std::vector<std::pair<u32, u32>> r = GateRanges(pc, &reg);
+		if (r.empty())
+			return true;
+		const u32 v = cpuRegs.GPR.r[reg].UL[0];
+		for (const auto& [lo, hi] : r)
+			if (v - lo < hi - lo)
+				return true;
+		return false;
+	}
 	void SetAB(u32 pc)
 	{
 		{

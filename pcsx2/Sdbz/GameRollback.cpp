@@ -493,6 +493,12 @@ namespace GameRollback
 			std::vector<u32> resim_gates, resim_skips, always_skips;
 			std::vector<u32> resim_skips_nonfinal; // skipped on re-simulated frames but the last (pure derived outputs)
 			std::vector<u32> ab_hooks;             // gate/skip entries marked `ab: true` (interleaved A/B experiment)
+			struct GateRange
+			{
+				u32 reg = 4;
+				std::vector<std::pair<u32, u32>> ranges;
+			};
+			std::map<u32, GateRange> gate_ranges;  // gate -> act only when reg (default a0) is in one of [lo, hi)
 			std::vector<EntryAction> entry_actions;
 			u32 pad_read_fn = 0, pad_site = 0;
 			u32 pad_mode = 0x73; // report mode byte every netplay peer builds reports with (the game's configured pad mode)
@@ -845,6 +851,22 @@ namespace GameRollback
 							m->gate_values[a] = Get(c, "v0", 0);
 						if (IsAB(c))
 							m->ab_hooks.push_back(a);
+						if (c.is_map() && Has(c, "in"))
+						{
+							static const char* regs[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4",
+								"t5", "t6", "t7", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
+							Manifest::GateRange gr;
+							if (Has(c, "reg"))
+							{
+								const ryml::csubstr rv = c["reg"].val();
+								for (u32 i = 0; i < 32; i++)
+									if (rv == regs[i])
+										gr.reg = i;
+							}
+							for (const auto& r : Child(c, "in").children())
+								gr.ranges.push_back({ParseU32(r[0]), ParseU32(r[1])});
+							m->gate_ranges[a] = std::move(gr);
+						}
 					}
 				}
 				if (Has(h, "resim_skip_call"))
@@ -2608,6 +2630,8 @@ namespace GameRollback
 						EeHooks::AddResimGateRet(pc, c.gate_v0, EeHooks::OWNER_GAME);
 					else
 						EeHooks::AddResimGate(pc, EeHooks::OWNER_GAME);
+					if (const auto gr = s_man.gate_ranges.find(pc); gr != s_man.gate_ranges.end())
+						EeHooks::SetGateRanges(pc, gr->second.reg, gr->second.ranges);
 				}
 				else if (c.actions.size() == 1 && !c.gate && !c.actions[0].ra.empty())
 				{
