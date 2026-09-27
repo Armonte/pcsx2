@@ -472,10 +472,10 @@ namespace NetBridge
 		if (!s_link)
 			return -1;
 		const int32_t r = p_detach(s_link);
-		if (r == PCB_DETACH_CLEAN || r == PCB_DETACH_FORCED)
+		if (r == PCB_DETACH_DETACHED || r == PCB_DETACH_FORCED)
 		{
 			s_session = nullptr;
-			Console.WriteLn("NetBridge: detached (%s)", r == PCB_DETACH_CLEAN ? "clean" : "forced");
+			Console.WriteLn("NetBridge: detached (%s)", r == PCB_DETACH_DETACHED ? "clean" : "forced");
 			return r;
 		}
 		return r < 0 ? r : 0;
