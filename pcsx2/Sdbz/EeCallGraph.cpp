@@ -36,8 +36,15 @@ namespace EeCallGraph
 		{
 			u64 calls[2] = {0, 0}, incl[2] = {0, 0}, self[2] = {0, 0}, host_incl[2] = {0, 0}, host_self[2] = {0, 0};
 		};
-		std::mutex s_mtx; // stats (EE thread writes, sampler writes host_*, dump reads)
+		std::mutex s_mtx; // s_stats: EE thread + dump only. The sampler NEVER takes it: it suspends the EE thread,
+		                  // which may hold it (deadlock) -- host samples go to s_host under s_host_mtx instead.
 		std::unordered_map<u32, Stat> s_stats;
+		struct HostStat
+		{
+			u64 incl[2] = {0, 0}, self[2] = {0, 0};
+		};
+		std::mutex s_host_mtx;
+		std::unordered_map<u32, HostStat> s_host;
 		u64 s_unmatched = 0, s_unwound = 0;
 
 		void ResetRecompiler()
@@ -53,6 +60,10 @@ namespace EeCallGraph
 			std::lock_guard lk(s_mtx);
 			s_stats.clear();
 			s_unmatched = s_unwound = 0;
+		}
+		{
+			std::lock_guard lk(s_host_mtx);
+			s_host.clear();
 		}
 		s_depth = 0;
 		s_overflow = 0;
@@ -126,7 +137,10 @@ namespace EeCallGraph
 		const int r = resim ? 1 : 0;
 		u32 seen[MAX_DEPTH];
 		u32 n = 0;
-		std::lock_guard lk(s_mtx);
+		// the EE thread is suspended: never block on a lock it might hold (Dump runs on it) -- drop the sample instead
+		std::unique_lock lk(s_host_mtx, std::try_to_lock);
+		if (!lk.owns_lock())
+			return;
 		for (u32 i = 0; i < d; i++)
 		{
 			const u32 fn = s_stack[i].fn;
@@ -136,14 +150,21 @@ namespace EeCallGraph
 			if (dup)
 				continue; // recursion: count a function once per sample
 			seen[n++] = fn;
-			s_stats[fn].host_incl[r]++;
+			s_host[fn].incl[r]++;
 		}
-		s_stats[s_stack[d - 1].fn].host_self[r]++;
+		s_host[s_stack[d - 1].fn].self[r]++;
 	}
 
 	std::string Dump()
 	{
 		std::lock_guard lk(s_mtx);
+		std::lock_guard lk2(s_host_mtx);
+		for (const auto& [fn, h] : s_host)
+			for (int r = 0; r < 2; r++)
+			{
+				s_stats[fn].host_incl[r] = h.incl[r];
+				s_stats[fn].host_self[r] = h.self[r];
+			}
 		std::string out = fmt::format("# EeCallGraph: fn calls_resim calls_normal incl_resim self_resim incl_normal self_normal host_incl_resim "
 									  "host_self_resim host_incl_normal host_self_normal (unmatched returns {}, unwound frames {}, overflow {})\n",
 			s_unmatched, s_unwound, s_overflow);
