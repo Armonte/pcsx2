@@ -265,8 +265,19 @@ namespace CssMirror
 				if (t.phase == BROWSE || ((t.phase == COLOUR || t.phase == LOCKED) && t.chr != chr))
 					return s_cfg.btn_back;
 				const s32 colour = Var(s_cfg.var_colour[s]);
+				// a colour press that changed nothing (a skip rule the patch did not cover): place the colour directly
+				static s32 s_last_colour[2] = {-1, -1};
+				static u32 s_same[2] = {0, 0};
 				if (t.colour != colour)
 				{
+					s_same[s] = (colour == s_last_colour[s]) ? s_same[s] + 1 : 0;
+					s_last_colour[s] = colour;
+					if (s_same[s] >= 8)
+					{
+						WVar(s_cfg.var_colour[s], t.colour);
+						s_same[s] = 0;
+						return 0;
+					}
 					const u32 n = ColourCount(chr);
 					const u32 fwd = (static_cast<u32>(t.colour) + n - static_cast<u32>(colour)) % n;
 					return (fwd <= n - fwd) ? s_cfg.btn_right : s_cfg.btn_left;

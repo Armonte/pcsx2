@@ -1902,6 +1902,33 @@ namespace GameRollback
 		std::vector<u32> s_session_hooks;
 		std::map<std::string, u32> s_script_patch_count;
 		bool ScriptPatchLogSuppressed(const std::string& name) { return s_script_patch_count[name]++ >= 4; } // log the first few
+		// load-time script patches on one script image (Seq_Init), or on a script that was already running when the session
+		// started (seen from the VM tick hook): a group applies only while all its expected bytes match, i.e. once
+		void ApplyScriptPatches(u32 file)
+		{
+			if (!file)
+				return;
+			for (const auto& grp : s_man.script_patches)
+			{
+				bool all = !grp.patches.empty();
+				for (const auto& pt : grp.patches)
+				{
+					const u32 a = file + pt.off;
+					if ((a & RAM_MASK) + pt.expect.size() > Ps2MemSize::MainRam ||
+						std::memcmp(&eeMem->Main[a & RAM_MASK], pt.expect.data(), pt.expect.size()) != 0)
+					{
+						all = false;
+						break;
+					}
+				}
+				if (!all)
+					continue;
+				for (const auto& pt : grp.patches)
+					std::memcpy(&eeMem->Main[(file + pt.off) & RAM_MASK], pt.write.data(), pt.write.size());
+				if (!ScriptPatchLogSuppressed(grp.name))
+					Console.WriteLn("GameRollback: script patch '%s' applied at %08X", grp.name.c_str(), file);
+			}
+		}
 		void InstallSessionLocks()
 		{
 			for (const auto& fb : s_man.session_branches)
@@ -1921,26 +1948,7 @@ namespace GameRollback
 				EeHooks::AddCall(s_man.script_hook, [](u32) {
 					const u32 file = cpuRegs.GPR.r[s_man.script_file_reg].UL[0];
 					AiWaitRecordVm(cpuRegs.GPR.n.a0.UL[0], file);
-					for (const auto& grp : s_man.script_patches)
-					{
-						bool all = !grp.patches.empty();
-						for (const auto& pt : grp.patches)
-						{
-							const u32 a = file + pt.off;
-							if ((a & RAM_MASK) + pt.expect.size() > Ps2MemSize::MainRam ||
-								std::memcmp(&eeMem->Main[a & RAM_MASK], pt.expect.data(), pt.expect.size()) != 0)
-							{
-								all = false;
-								break;
-							}
-						}
-						if (!all)
-							continue;
-						for (const auto& pt : grp.patches)
-							std::memcpy(&eeMem->Main[(file + pt.off) & RAM_MASK], pt.write.data(), pt.write.size());
-						if (!ScriptPatchLogSuppressed(grp.name))
-							Console.WriteLn("GameRollback: script patch '%s' applied at %08X", grp.name.c_str(), file);
-					}
+					ApplyScriptPatches(file);
 					return EeHooks::Action::Continue;
 				}, EeHooks::OWNER_GAME);
 				s_session_hooks.push_back(s_man.script_hook);
@@ -3132,8 +3140,11 @@ namespace GameRollback
 			if (const u32 pc = CssMirror::TickHookPc())
 			{
 				EeHooks::AddCall(pc, [](u32) {
-					CssMirror::OnScriptTick(cpuRegs.GPR.n.a0.UL[0]);
-					OneMoreOnTick(cpuRegs.GPR.n.a0.UL[0]);
+					const u32 vm = cpuRegs.GPR.n.a0.UL[0];
+					CssMirror::OnScriptTick(vm);
+					OneMoreOnTick(vm);
+					if (const u32 t0 = Rd(vm + 12))
+						ApplyScriptPatches(Rd(t0 + 92)); // scripts that were already running when the session started
 					return EeHooks::Action::Continue;
 				}, EeHooks::OWNER_GAME);
 				s_link_hooks.push_back(pc);
