@@ -4114,12 +4114,12 @@ namespace GameRollback
 	{
 		struct CsCost
 		{
-			u64 calls[2] = {0, 0}, cycles[2] = {0, 0}, self[2] = {0, 0}, host_ns[2] = {0, 0};
+			u64 calls[2] = {0, 0}, cycles[2] = {0, 0}, self[2] = {0, 0}, host_ns[2] = {0, 0}, host_self_ns[2] = {0, 0};
 		};
 		struct CsOpen
 		{
 			u64 key;
-			u64 cycle, child;
+			u64 cycle, child, child_ns;
 			std::chrono::steady_clock::time_point t;
 		};
 		std::map<u64, CsCost> s_cs_costs;              // (vtable << 32) | call site
@@ -4139,16 +4139,21 @@ namespace GameRollback
 				c.calls[r]++;
 				c.cycles[r] += incl;
 				c.self[r] += incl - std::min(incl, o.child);
-				c.host_ns[r] += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - o.t).count());
+				const u64 ns = static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - o.t).count());
+				c.host_ns[r] += ns;
+				c.host_self_ns[r] += ns - std::min(ns, o.child_ns);
 				if (!s_cs_stack.empty())
+				{
 					s_cs_stack.back().child += incl;
+					s_cs_stack.back().child_ns += ns;
+				}
 			}
 			if (is_call)
 			{
 				u64 key = pc;
 				if (const auto it = s_cs_objreg.find(pc); it != s_cs_objreg.end())
 					key |= static_cast<u64>(Rd(cpuRegs.GPR.r[it->second].UL[0])) << 32;
-				s_cs_stack.push_back({key, cpuRegs.cycle, 0, std::chrono::steady_clock::now()});
+				s_cs_stack.push_back({key, cpuRegs.cycle, 0, 0, std::chrono::steady_clock::now()});
 			}
 		}
 	}
@@ -4194,20 +4199,22 @@ namespace GameRollback
 		std::string out = "# call-site profiler: inclusive and self (minus nested profiled calls) EE cycles per call site [/ object vtable]\n";
 		for (int r = 1; r >= 0; r--)
 		{
-			u64 tot = 0, frames_self = 0;
+			u64 host_self = 0, frames_self = 0;
 			for (const auto& [k, c] : s_cs_costs)
 			{
-				tot += c.host_ns[r];
+				host_self += c.host_self_ns[r];
 				frames_self += c.self[r];
 			}
 			std::vector<std::pair<u64, CsCost>> v(s_cs_costs.begin(), s_cs_costs.end());
 			std::sort(v.begin(), v.end(), [r](const auto& a, const auto& b) { return a.second.self[r] > b.second.self[r]; });
-			out += fmt::format("\n## {} frames (sorted by self)\n  self%     calls   incl/call   self/call  self_total    site      vtable\n",
+			out += fmt::format("\n## {} frames (sorted by EE self)\n  self%     calls   incl/call   self/call  self_total  hself%  h_incl_us h_self_us  site      vtable\n",
 				r ? "re-simulated" : "normal");
 			for (const auto& [k, c] : v)
 				if (c.calls[r])
-					out += fmt::format("  {:5.1f}  {:8}  {:10}  {:10}  {:10}  {:08X}  {:08X}\n", frames_self ? 100.0 * c.self[r] / frames_self : 0.0,
-						c.calls[r], c.cycles[r] / c.calls[r], c.self[r] / c.calls[r], c.self[r], static_cast<u32>(k), static_cast<u32>(k >> 32));
+					out += fmt::format("  {:5.1f}  {:8}  {:10}  {:10}  {:10}  {:5.1f}  {:9.2f} {:9.2f}  {:08X}  {:08X}\n",
+						frames_self ? 100.0 * c.self[r] / frames_self : 0.0, c.calls[r], c.cycles[r] / c.calls[r], c.self[r] / c.calls[r], c.self[r],
+						host_self ? 100.0 * c.host_self_ns[r] / host_self : 0.0, c.host_ns[r] / 1e3 / c.calls[r], c.host_self_ns[r] / 1e3 / c.calls[r],
+						static_cast<u32>(k), static_cast<u32>(k >> 32));
 		}
 		return out;
 	}
