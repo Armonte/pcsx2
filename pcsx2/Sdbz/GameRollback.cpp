@@ -4,6 +4,7 @@
 #include "Sdbz/GameRollback.h"
 #include "Sdbz/CssMirror.h"
 #include "Sdbz/EeHooks.h"
+#include "Sdbz/EeNative.h"
 #include "Sdbz/NetBridge.h"
 #include "Sdbz/PcInput.h"
 #include "Sdbz/RollbackDevice.h"
@@ -500,6 +501,13 @@ namespace GameRollback
 				std::vector<std::pair<u32, u32>> ranges;
 			};
 			std::map<u32, GateRange> gate_ranges;  // gate -> act only when reg (default a0) is in one of [lo, hi)
+			struct NativeDef
+			{
+				u32 addr;
+				std::string impl;
+				u8 mode; // EeNative::Mode
+			};
+			std::vector<NativeDef> natives;        // native (C++) implementations of EE leaf functions
 			std::vector<EntryAction> entry_actions;
 			u32 pad_read_fn = 0, pad_site = 0;
 			u32 pad_mode = 0x73; // report mode byte every netplay peer builds reports with (the game's configured pad mode)
@@ -882,6 +890,16 @@ namespace GameRollback
 				}
 				if (Has(h, "skip_call"))
 					m->always_skips = ParseList(Child(h, "skip_call"));
+				if (Has(h, "native"))
+					for (const auto& c : Child(h, "native").children())
+					{
+						Manifest::NativeDef nd;
+						nd.addr = Get(c, "addr", 0);
+						nd.impl = GetStr(c, "impl");
+						const std::string mode = Has(c, "mode") ? GetStr(c, "mode") : "always";
+						nd.mode = mode == "resim" ? 1 : mode == "ab" ? 2 : 0;
+						m->natives.push_back(std::move(nd));
+					}
 				if (Has(h, "entry_actions"))
 				{
 					for (const auto& c : Child(h, "entry_actions").children())
@@ -2667,6 +2685,19 @@ namespace GameRollback
 			{
 				EeHooks::AddSkipCall(a, true, EeHooks::OWNER_GAME);
 				s_installed.push_back(a);
+			}
+			for (const Manifest::NativeDef& nd : s_man.natives)
+			{
+				std::string err;
+				if (s_chains.count(nd.addr))
+					Console.Error("GameRollback: %08X is both a native and a hook: native ignored", nd.addr);
+				else if (!EeNative::Install(nd.addr, nd.impl, static_cast<EeNative::Mode>(nd.mode), &err))
+					Console.Error("GameRollback: native %08X: %s", nd.addr, err.c_str());
+				else
+				{
+					s_installed.push_back(nd.addr);
+					Console.WriteLn("GameRollback: native %08X = %s (mode %u)", nd.addr, nd.impl.c_str(), nd.mode);
+				}
 			}
 			for (const u32 a : s_man.ab_hooks)
 			{

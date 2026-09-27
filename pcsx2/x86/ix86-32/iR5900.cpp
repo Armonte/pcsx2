@@ -1636,6 +1636,20 @@ static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
 		if (run)
 			run->SetTarget();
 	}
+	else if (kind == EeHooks::Kind::Native)
+	{
+		// direct native call: if (fn()) { pc = ra; exit block } else run the EE code
+		if (const EeHooks::NativeFn fn = EeHooks::GetNative(startpc))
+		{
+			xFastCall((void*)fn);
+			xTEST(al, al);
+			xForwardJZ32 run;
+			xMOV(eax, ptr32[&cpuRegs.GPR.n.ra.UL[0]]);
+			xMOV(ptr32[&cpuRegs.pc], eax);
+			iBranchTest();
+			run.SetTarget();
+		}
+	}
 	else if (kind == EeHooks::Kind::Call)
 	{
 		// optional native $ra filter: only listed callers reach the C++ handler
