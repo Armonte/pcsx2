@@ -146,11 +146,16 @@ namespace RbProfiler
 #endif
 	} // namespace
 
+	std::atomic<u32> s_pending_hz{0}; // Start() before the EE thread was seen: begin at its first SetPhase
 	void SetPhase(Phase p)
 	{
 #ifdef _WIN32
 		if (!s_ee_tid.load(std::memory_order_relaxed))
+		{
 			s_ee_tid = GetCurrentThreadId();
+			if (const u32 hz = s_pending_hz.exchange(0))
+				Start(hz);
+		}
 #endif
 		s_phase.store(p, std::memory_order_relaxed);
 	}
@@ -161,9 +166,11 @@ namespace RbProfiler
 		Stop();
 		if (!s_ee_tid.load())
 		{
-			Console.Error("RbProfiler: EE thread unknown (no rollback command seen yet)");
+			s_pending_hz = hz ? hz : 2000;
+			Console.WriteLn("RbProfiler: waiting for the EE thread (starts with the first rollback phase)");
 			return;
 		}
+		s_pending_hz = 0;
 		{
 			std::lock_guard lk(s_mtx);
 			s_hits.clear();
