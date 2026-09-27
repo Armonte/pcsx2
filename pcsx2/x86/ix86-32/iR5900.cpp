@@ -1579,6 +1579,23 @@ static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
 		// if (resimulating) { [v0 = value;] pc = ra; exit block } -- one byte compare on the fast path
 		xCMP(ptr8[EeHooks::ResimFlagFor(startpc)], 0);
 		xForwardJZ32 run;
+		std::optional<xForwardJump32> miss;
+		u32 range_reg = 0;
+		if (const std::vector<std::pair<u32, u32>> ranges = EeHooks::GateRanges(startpc, &range_reg); !ranges.empty())
+		{
+			// range condition: GPR[reg] - lo < hi - lo (unsigned) for any range, else run the function normally
+			std::deque<xForwardJB32> hits;
+			xMOV(eax, ptr32[&cpuRegs.GPR.r[range_reg].UL[0]]);
+			for (const auto& [lo, hi] : ranges)
+			{
+				xLEA(ecx, ptr[rax - static_cast<s32>(lo)]);
+				xCMP(ecx, hi - lo);
+				hits.emplace_back();
+			}
+			miss.emplace();
+			for (xForwardJB32& h : hits)
+				h.SetTarget();
+		}
 		xADD(ptr64[EeHooks::GateReturnCounter()], 1);
 		if (kind == EeHooks::Kind::ResimGateRet)
 		{
@@ -1590,6 +1607,8 @@ static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
 		xMOV(ptr32[&cpuRegs.pc], eax);
 		iBranchTest();
 		run.SetTarget();
+		if (miss)
+			miss->SetTarget();
 	}
 	else if (kind == EeHooks::Kind::SkipCallResim || kind == EeHooks::Kind::SkipCallAlways || kind == EeHooks::Kind::SkipCallResimNonFinal)
 	{

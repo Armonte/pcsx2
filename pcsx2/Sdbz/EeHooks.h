@@ -6,6 +6,7 @@
 #include "common/Pcsx2Defs.h"
 
 #include <functional>
+#include <utility>
 #include <vector>
 
 // Emulator-level EE code hooks: game instrumentation without patching game memory (no code caves, nothing in
@@ -54,6 +55,11 @@ namespace EeHooks
 	// Interleaved A/B: the hook at pc (gate / resim skip) acts only on every other rollback; the rollback device reports
 	// the paired resim-time comparison.
 	void SetAB(u32 pc);
+	// Gates only: act only when GPR[reg] (low word) lies in one of [lo, hi) (native compares; e.g. skip one object
+	// class's instances in a shared per-node callback). Empty = unconditional.
+	void SetGateRanges(u32 pc, u32 reg, std::vector<std::pair<u32, u32>> ranges);
+	std::vector<std::pair<u32, u32>> GateRanges(u32 pc, u32* reg);
+	bool GateRangeHit(u32 pc); // interpreter: current registers satisfy the gate's range condition
 	void AddSkipCall(u32 site, bool always, Owner owner = OWNER_SCRIPT);
 	void AddSkipCallNonFinal(u32 site, Owner owner = OWNER_SCRIPT); // skipped on re-simulated frames but the last
 	void AddCall(u32 pc, Handler handler, Owner owner = OWNER_SCRIPT);

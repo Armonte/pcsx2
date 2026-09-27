@@ -175,7 +175,8 @@ static void execI()
 	// EE hooks (Sdbz/EeHooks.h), same semantics as the recompiler's block-entry hooks
 	if (const EeHooks::Kind hook = EeHooks::Lookup(cpuRegs.pc); hook != EeHooks::Kind::None) [[unlikely]]
 	{
-		if ((hook == EeHooks::Kind::ResimGate || hook == EeHooks::Kind::ResimGateRet) && *EeHooks::ResimFlagFor(cpuRegs.pc))
+		if ((hook == EeHooks::Kind::ResimGate || hook == EeHooks::Kind::ResimGateRet) && *EeHooks::ResimFlagFor(cpuRegs.pc) &&
+			EeHooks::GateRangeHit(cpuRegs.pc))
 		{
 			if (hook == EeHooks::Kind::ResimGateRet)
 				cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(EeHooks::GateReturnValue(cpuRegs.pc));
