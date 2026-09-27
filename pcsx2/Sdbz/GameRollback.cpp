@@ -425,6 +425,20 @@ namespace GameRollback
 				// same number of simulation ticks on every peer regardless of disc timing
 				u32 pend_list = 0, pend_pool = 0, pend_done_bit = 0x100, pend_next_off = 8, pend_sentinel = 1;
 				std::vector<std::pair<u32, u32>> hold_jumps;
+				// virtual load clock (pre-attach window): the game's loader sees each read complete a FIXED number of
+				// loader ticks after it was issued (base + sectors / sectors_per_tick), identical on both peers, so the
+				// VS screen keeps animating while the disc works. A frame is held only when the virtual deadline has
+				// come and the real read is still running (stall_to skips the sim tick AND the loader tick).
+				struct VirtualLoad
+				{
+					u32 poll_at = 0;    // return site of the loader's single "read finished?" poll (v0 = real answer)
+					u32 req_reg = 17;   // register holding the request there
+					u32 state_off = 32, poll_state = 5; // request loader state while polling
+					u32 handle_off = 44, stat_off = 1, ready = 3; // ADXF handle, its status byte, "ready" value
+					u32 sectors_off = 52;
+					u32 base = 2, sectors_per_tick = 64;
+					u32 stall_to = 0;   // first hold jump's target on a stall frame
+				} vload;
 			} link;
 			u32 script_hook = 0;
 			int script_file_reg = 5; // a1
@@ -887,6 +901,22 @@ namespace GameRollback
 						if (Has(hd, "jumps"))
 							for (const auto& c : Child(hd, "jumps").children())
 								m->link.hold_jumps.emplace_back(Get(c, "at", 0), Get(c, "to", 0));
+						if (Has(hd, "virtual"))
+						{
+							const auto vl = Child(hd, "virtual");
+							auto& V = m->link.vload;
+							V.poll_at = Get(vl, "poll_at", 0);
+							V.req_reg = static_cast<u32>(Get(vl, "req_reg", 17));
+							V.state_off = Get(vl, "state_off", 32);
+							V.poll_state = Get(vl, "poll_state", 5);
+							V.handle_off = Get(vl, "handle_off", 44);
+							V.stat_off = Get(vl, "stat_off", 1);
+							V.ready = Get(vl, "ready", 3);
+							V.sectors_off = Get(vl, "sectors_off", 52);
+							V.base = Get(vl, "base", 2);
+							V.sectors_per_tick = std::max<u32>(1, Get(vl, "sectors_per_tick", 64));
+							V.stall_to = Get(vl, "stall_to", 0);
+						}
 					}
 					if (Has(lk, "onemore"))
 					{
@@ -1205,6 +1235,7 @@ namespace GameRollback
 		std::string s_link_dump_prefix; // desync forensics: EE RAM at every attach (after the canonical writes)
 		bool LinkTick();                                // frame boundary: true = this frame runs without netcode
 		bool LinkPadRead(u32 player, u8* buf);          // menu phases: stream/feed; true = handled
+		void VlBegin();                                 // virtual load clock: open the pre-attach window
 		void InstallLinkHooks();
 		void RemoveLinkHooks();
 		void DoStop();
@@ -2568,6 +2599,7 @@ namespace GameRollback
 				Wr(s_man.link.seed_addr, s_local == 0 ? mine[sel.size()] : s_remote_pick[sel.size()]);
 			s_remote_pick_valid = false;
 			s_pre_attach_neutral = true;
+			VlBegin();
 			// the commit -> attach window must run identically: reset what the async menus let drift (the virtual
 			// audio clock restarts from its canonical empty state, like at every rollback start)
 			ApplyWrites(s_man.link.commit_writes);
@@ -2595,6 +2627,107 @@ namespace GameRollback
 		}
 		bool s_hold_frame = false; // decided at the first hold jump of the frame, reused by the others
 		u64 s_held_frames = 0;
+
+		// ---- virtual load clock (manifest link.hold.virtual) ----
+		struct VlReq
+		{
+			u32 first = 0, deadline = 0, sectors = 0;
+			s32 real_ready = -1; // loader ticks from the first poll until the real read reported ready
+		};
+		std::unordered_map<u32, VlReq> s_vl_reqs;
+		std::vector<u32> s_vl_pre;  // requests already in flight when the window opened: they finish on real time
+		u32 s_vl_tick = 0;          // loader ticks run in the window (= sim ticks: one each per unheld frame)
+		u32 s_vl_frame_tick = 0;    // this frame's tick, as the loader's poll sees it
+		u64 s_vl_stalls = 0, s_vl_drain = 0, s_vl_late = 0;
+		u32 s_hold_to = 0;          // this frame's first hold jump target
+		bool VlOn() { return s_man.link.vload.poll_at != 0 && s_pre_attach_neutral; }
+		template <typename F>
+		void ForEachLoadReq(F f)
+		{
+			const auto& L = s_man.link;
+			if (!L.pend_list || (L.pend_pool && Rd(L.pend_pool) == 0))
+				return;
+			u32 node = Rd(L.pend_list);
+			for (int guard = 0; guard < 4096 && node; guard++)
+			{
+				const u32 req = Rd(node);
+				if (req == L.pend_sentinel)
+					break;
+				f(req);
+				node = Rd(node + L.pend_next_off);
+			}
+		}
+		bool VlRealReady(u32 req)
+		{
+			const auto& V = s_man.link.vload;
+			const u32 h = Rd(req + V.handle_off);
+			return h != 0 && static_cast<u32>(static_cast<s8>(eeMem->Main[(h + V.stat_off) & RAM_MASK])) == V.ready;
+		}
+		// the commit / agreed RETRY opens the window: the loader's clock starts at 0 on both peers
+		void VlBegin()
+		{
+			s_vl_reqs.clear();
+			s_vl_pre.clear();
+			s_vl_tick = s_vl_frame_tick = 0;
+			s_vl_stalls = s_vl_drain = s_vl_late = 0;
+			ForEachLoadReq([](u32 req) {
+				if ((Rd(req) & s_man.link.pend_done_bit) == 0)
+					s_vl_pre.push_back(req);
+			});
+		}
+		void VlReport()
+		{
+			if (!s_man.link.vload.poll_at)
+				return;
+			u32 sectors = 0;
+			s32 worst = -1;
+			for (const auto& [req, r] : s_vl_reqs)
+			{
+				sectors += r.sectors;
+				worst = std::max(worst, r.real_ready);
+				Console.WriteLn("GameRollback: vload: req %08x %u sectors: virtual %u ticks, real %d", req, r.sectors,
+					r.deadline - r.first, r.real_ready);
+			}
+			Console.WriteLn("GameRollback: vload: %zu reads, %u sectors, %u ticks; worst real %d ticks; stall frames %llu, "
+							"drain frames %llu (in flight at the commit: %zu), late polls %llu",
+				s_vl_reqs.size(), sectors, s_vl_tick, worst, static_cast<unsigned long long>(s_vl_stalls),
+				static_cast<unsigned long long>(s_vl_drain), s_vl_pre.size(), static_cast<unsigned long long>(s_vl_late));
+		}
+		// frame start (first hold jump): hold or run this frame
+		bool VlDecide(u32 normal_to)
+		{
+			const auto& V = s_man.link.vload;
+			bool pre = false;
+			ForEachLoadReq([&pre](u32 req) {
+				if ((Rd(req) & s_man.link.pend_done_bit) == 0 &&
+					std::find(s_vl_pre.begin(), s_vl_pre.end(), req) != s_vl_pre.end())
+					pre = true;
+			});
+			if (pre)
+			{
+				// a read started before the window: let it finish with the sim held (loader running), as option B did
+				s_vl_drain++;
+				s_hold_to = normal_to;
+				return true;
+			}
+			bool stall = false;
+			ForEachLoadReq([&stall, &V](u32 req) {
+				if (Rd(req + V.state_off) != V.poll_state)
+					return;
+				const auto it = s_vl_reqs.find(req);
+				if (it != s_vl_reqs.end() && s_vl_tick >= it->second.deadline && !VlRealReady(req))
+					stall = true;
+			});
+			if (stall)
+			{
+				// the virtual read is due and the disc isn't done: hold sim AND loader (no tick passes)
+				s_vl_stalls++;
+				s_hold_to = V.stall_to ? V.stall_to : normal_to;
+				return true;
+			}
+			s_vl_frame_tick = s_vl_tick++;
+			return false;
+		}
 		void InstallLinkHooks()
 		{
 			const auto& L = s_man.link;
@@ -2605,15 +2738,50 @@ namespace GameRollback
 				EeHooks::AddCall(at, [to, first](u32) {
 					if (first)
 					{
-						s_hold_frame = s_pre_attach_neutral && LinkPendingLoads() > 0;
+						s_hold_to = to;
+						if (VlOn())
+							s_hold_frame = VlDecide(to);
+						else
+							s_hold_frame = s_pre_attach_neutral && LinkPendingLoads() > 0;
 						s_held_frames += s_hold_frame ? 1 : 0;
 					}
 					if (!s_hold_frame)
 						return EeHooks::Action::Continue;
-					cpuRegs.pc = to;
+					cpuRegs.pc = first ? s_hold_to : to;
 					return EeHooks::Action::Jump;
 				}, EeHooks::OWNER_GAME);
 				s_link_hooks.push_back(at);
+			}
+			if (L.vload.poll_at)
+			{
+				// the loader's "read finished?" poll: answer from the virtual clock (never earlier than the real disc)
+				EeHooks::AddCall(L.vload.poll_at, [](u32) {
+					if (!VlOn())
+						return EeHooks::Action::Continue;
+					const auto& V = s_man.link.vload;
+					const u32 req = cpuRegs.GPR.r[V.req_reg].UL[0];
+					const bool real = cpuRegs.GPR.r[2].UL[0] != 0;
+					if (std::find(s_vl_pre.begin(), s_vl_pre.end(), req) != s_vl_pre.end())
+						return EeHooks::Action::Continue; // started before the window: real time (drained)
+					auto it = s_vl_reqs.find(req);
+					if (it == s_vl_reqs.end())
+					{
+						VlReq r;
+						r.first = s_vl_frame_tick;
+						r.sectors = Rd(req + V.sectors_off);
+						r.deadline = r.first + std::max<u32>(1, V.base) + (r.sectors + V.sectors_per_tick - 1) / V.sectors_per_tick;
+						it = s_vl_reqs.emplace(req, r).first;
+					}
+					VlReq& r = it->second;
+					if (real && r.real_ready < 0)
+						r.real_ready = static_cast<s32>(s_vl_frame_tick - r.first);
+					const bool due = !s_hold_frame && s_vl_frame_tick >= r.deadline;
+					if (due && !real)
+						s_vl_late++; // the frame-start stall check should have held this frame
+					cpuRegs.GPR.r[2].UD[0] = (due && real) ? 1 : 0;
+					return EeHooks::Action::Continue;
+				}, EeHooks::OWNER_GAME);
+				s_link_hooks.push_back(L.vload.poll_at);
 			}
 			// attach and detach may share one pc (FUC: Seq_DebugPrint with different strings)
 			std::map<u32, int> at;
@@ -2681,6 +2849,8 @@ namespace GameRollback
 								ApplyWrites(retry ? s_man.link.retry_writes : s_man.link.css_writes);
 								s_pre_attach_neutral = retry; // RETRY: straight to the attach point with neutral pads
 								if (retry)
+									VlBegin();
+								if (retry)
 								{
 									ApplyWrites(s_man.link.commit_writes); // the RETRY -> attach window, like a commit
 									if (s_man.vs.state)
@@ -2716,6 +2886,7 @@ namespace GameRollback
 						LinkPump();
 						std::this_thread::sleep_for(std::chrono::milliseconds(1));
 					}
+					VlReport();
 					s_pre_attach_neutral = false;
 					ApplyWrites(s_man.link.attach_writes); // canonical state at every (re-)attach
 					if (!s_link_dump_prefix.empty())
