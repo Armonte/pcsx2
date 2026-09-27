@@ -2631,10 +2631,11 @@ namespace GameRollback
 		// ---- virtual load clock (manifest link.hold.virtual) ----
 		struct VlReq
 		{
-			u32 first = 0, deadline = 0, sectors = 0;
+			u32 first = 0, deadline = 0, sectors = 0, last = 0; // last = tick of the latest poll
 			s32 real_ready = -1; // loader ticks from the first poll until the real read reported ready
 		};
-		std::unordered_map<u32, VlReq> s_vl_reqs;
+		std::unordered_map<u32, VlReq> s_vl_reqs;  // reads in flight, by request slot (the pool recycles slots)
+		std::vector<VlReq> s_vl_done;              // finished reads this window (report)
 		std::vector<u32> s_vl_pre;  // requests already in flight when the window opened: they finish on real time
 		u32 s_vl_tick = 0;          // loader ticks run in the window (= sim ticks: one each per unheld frame)
 		u32 s_vl_frame_tick = 0;    // this frame's tick, as the loader's poll sees it
@@ -2667,6 +2668,7 @@ namespace GameRollback
 		void VlBegin()
 		{
 			s_vl_reqs.clear();
+			s_vl_done.clear();
 			s_vl_pre.clear();
 			s_vl_tick = s_vl_frame_tick = 0;
 			s_vl_stalls = s_vl_drain = s_vl_late = 0;
@@ -2681,16 +2683,18 @@ namespace GameRollback
 				return;
 			u32 sectors = 0;
 			s32 worst = -1;
-			for (const auto& [req, r] : s_vl_reqs)
+			for (const auto& r : s_vl_done)
 			{
 				sectors += r.sectors;
 				worst = std::max(worst, r.real_ready);
-				Console.WriteLn("GameRollback: vload: req %08x %u sectors: virtual %u ticks, real %d", req, r.sectors,
+				Console.WriteLn("GameRollback: vload: read at tick %u, %u sectors: virtual %u ticks, real %d", r.first, r.sectors,
 					r.deadline - r.first, r.real_ready);
 			}
+			if (!s_vl_reqs.empty())
+				Console.Error("GameRollback: vload: %zu reads still in flight at attach", s_vl_reqs.size());
 			Console.WriteLn("GameRollback: vload: %zu reads, %u sectors, %u ticks; worst real %d ticks; stall frames %llu, "
 							"drain frames %llu (in flight at the commit: %zu), late polls %llu",
-				s_vl_reqs.size(), sectors, s_vl_tick, worst, static_cast<unsigned long long>(s_vl_stalls),
+				s_vl_done.size(), sectors, s_vl_tick, worst, static_cast<unsigned long long>(s_vl_stalls),
 				static_cast<unsigned long long>(s_vl_drain), s_vl_pre.size(), static_cast<unsigned long long>(s_vl_late));
 		}
 		// frame start (first hold jump): hold or run this frame
@@ -2774,15 +2778,25 @@ namespace GameRollback
 					if (std::find(s_vl_pre.begin(), s_vl_pre.end(), req) != s_vl_pre.end())
 						return EeHooks::Action::Continue; // started before the window: real time (drained)
 					auto it = s_vl_reqs.find(req);
+					// a slot polled every unheld tick while its read runs: a gap means an earlier read in this slot ended
+					// without our answer (error path) and this is a new read
+					if (it != s_vl_reqs.end() && !s_hold_frame && s_vl_frame_tick > it->second.last + 1)
+					{
+						s_vl_reqs.erase(it);
+						it = s_vl_reqs.end();
+					}
 					if (it == s_vl_reqs.end())
 					{
 						VlReq r;
 						r.first = s_vl_frame_tick;
 						r.sectors = Rd(req + V.sectors_off);
+						r.last = r.first;
 						r.deadline = r.first + std::max<u32>(1, V.base) + (r.sectors + V.sectors_per_tick - 1) / V.sectors_per_tick;
 						it = s_vl_reqs.emplace(req, r).first;
 					}
 					VlReq& r = it->second;
+					if (!s_hold_frame)
+						r.last = s_vl_frame_tick;
 					if (real && r.real_ready < 0)
 						r.real_ready = static_cast<s32>(s_vl_frame_tick - r.first);
 					const bool due = !s_hold_frame && s_vl_frame_tick >= r.deadline;
@@ -2795,6 +2809,12 @@ namespace GameRollback
 							s_vl_frame_tick, r.deadline);
 					}
 					cpuRegs.GPR.r[2].UD[0] = (due && real) ? 1 : 0;
+					if (due && real)
+					{
+						// this read is finished for the game (state 6 next): the slot's next read starts a new entry
+						s_vl_done.push_back(r);
+						s_vl_reqs.erase(it);
+					}
 					return EeHooks::Action::Continue;
 				}, EeHooks::OWNER_GAME);
 				s_link_hooks.push_back(L.vload.poll_at);
