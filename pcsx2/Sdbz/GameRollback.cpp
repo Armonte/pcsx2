@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "Sdbz/GameRollback.h"
+#include "Sdbz/CssMirror.h"
 #include "Sdbz/EeHooks.h"
 #include "Sdbz/NetBridge.h"
 #include "Sdbz/PcInput.h"
@@ -440,6 +441,7 @@ namespace GameRollback
 					u32 stall_to = 0;   // first hold jump's target on a stall frame
 				} vload;
 			} link;
+			CssMirror::Config css_mirror; // link.css_mirror
 			u32 script_hook = 0;
 			int script_file_reg = 5; // a1
 			std::vector<ScriptPatchGroup> script_patches;
@@ -918,6 +920,56 @@ namespace GameRollback
 							V.stall_to = Get(vl, "stall_to", 0);
 						}
 					}
+					if (Has(lk, "css_mirror"))
+					{
+						// async mirror character select (CssMirror.h; FUC notes/CSS_MIRROR_RE.md)
+						const auto cm = Child(lk, "css_mirror");
+						auto& C = m->css_mirror;
+						C.enabled = Get(cm, "enabled", 1) != 0;
+						C.tick_hook = Get(cm, "tick_hook", 0);
+						C.sig_off = Get(cm, "sig_off", 0);
+						C.sig = GetStr(cm, "sig");
+						C.scene_addr = Get(cm, "scene_addr", 0);
+						C.scene_value = Get(cm, "scene_value", 5);
+						auto pair = [&cm](const char* k, std::array<u32, 2>& out) {
+							if (Has(cm, k))
+							{
+								u32 i = 0;
+								for (const auto& c : Child(cm, k).children())
+									if (i < 2)
+										out[i++] = ParseU32(c);
+							}
+						};
+						pair("side_rec", C.side_rec);
+						pair("var_col", C.var_col);
+						pair("var_row", C.var_row);
+						pair("var_chr", C.var_chr);
+						pair("var_colour", C.var_colour);
+						pair("side_thread", C.side_thread);
+						pair("pc_browse", C.pc_browse);
+						pair("pc_colour", C.pc_colour);
+						pair("pc_locked", C.pc_locked);
+						pair("pc_confirm", C.pc_confirm);
+						pair("pc_colour_confirm", C.pc_colour_confirm);
+						C.var_stage = Get(cm, "var_stage", 0);
+						C.var_bgm = Get(cm, "var_bgm", 0);
+						C.var_bgm_ok = Get(cm, "var_bgm_ok", 0);
+						C.var_diarmuid = Get(cm, "var_grid_b", 0);
+						C.var_count_a = Get(cm, "var_colour_count_a", 0);
+						C.var_count_b = Get(cm, "var_colour_count_b", 0);
+						C.var_stage_avail = Get(cm, "var_stage_avail", 0);
+						C.main_thread = Get(cm, "main_thread", 1);
+						C.pc_stage = Get(cm, "pc_stage", 0);
+						C.grid_table = Get(cm, "grid_table", 0);
+						C.grid_table_b = Get(cm, "grid_table_b", 0);
+						C.grid_cols = Get(cm, "grid_cols", 9);
+						C.grid_rows = Get(cm, "grid_rows", 2);
+						C.random_col = Get(cm, "random_col", 4);
+						C.unlock_bits = Get(cm, "unlock_bits", 0);
+						C.unlock_base = Get(cm, "unlock_base", 511);
+						C.stage_entries = Get(cm, "stage_entries", 10);
+						C.bgm_count = Get(cm, "bgm_count", 29);
+					}
 					if (Has(lk, "onemore"))
 					{
 						const auto om = Child(lk, "onemore");
@@ -1218,7 +1270,7 @@ namespace GameRollback
 		// ---- link mode (async menus, per-battle rollback) ----
 		enum class LinkPhase : u8 { Off, Menu, Attaching, Battle, Detaching };
 		LinkPhase s_lphase = LinkPhase::Off;
-		enum : u16 { MSG_INPUT = 1, MSG_PICK = 2, MSG_CHOICE = 3 };
+		enum : u16 { MSG_INPUT = 1, MSG_PICK = 2, MSG_CHOICE = 3, MSG_CSS = 4 };
 		int s_local = 0;                         // local player (0/1)
 		std::deque<std::array<u8, 6>> s_remote_in; // remote player's streamed menu inputs, applied one per read
 		std::array<u8, 6> s_remote_last = {0, 0, 0x80, 0x80, 0x80, 0x80};
@@ -2548,6 +2600,8 @@ namespace GameRollback
 				}
 				else if (m.type == MSG_CHOICE && m.data.size() >= 4)
 					std::memcpy(&s_remote_choice, m.data.data(), 4);
+				else if (m.type == MSG_CSS)
+					CssMirror::OnMessage(m.data.data(), static_cast<u32>(m.data.size()));
 			}
 		}
 		void ApplyWrites(const std::vector<Manifest::ExprWrite>& ws)
@@ -2819,6 +2873,14 @@ namespace GameRollback
 				}, EeHooks::OWNER_GAME);
 				s_link_hooks.push_back(L.vload.poll_at);
 			}
+			if (const u32 pc = CssMirror::TickHookPc())
+			{
+				EeHooks::AddCall(pc, [](u32) {
+					CssMirror::OnScriptTick(cpuRegs.GPR.n.a0.UL[0]);
+					return EeHooks::Action::Continue;
+				}, EeHooks::OWNER_GAME);
+				s_link_hooks.push_back(pc);
+			}
 			// attach and detach may share one pc (FUC: Seq_DebugPrint with different strings)
 			std::map<u32, int> at;
 			if (L.attach.at)
@@ -2869,6 +2931,7 @@ namespace GameRollback
 				case LinkPhase::Menu:
 				{
 					s_menu_frame++;
+					CssMirror::Frame(s_menu_frame, [](const void* d, u32 n) { NetBridge::LinkSend(MSG_CSS, s_menu_frame, d, n); });
 					if (s_onemore && !s_choice_sent)
 					{
 						s64 d = 0;
@@ -2988,6 +3051,27 @@ namespace GameRollback
 			{
 				static constexpr u8 NEUTRAL[6] = {0, 0, 0x80, 0x80, 0x80, 0x80};
 				BuildReport(NEUTRAL, buf);
+				return true;
+			}
+			if (CssMirror::Enabled() && !s_onemore)
+			{
+				// async mirror menus: our own port is ours (0 latency), the other port is driven from the peer's
+				// character-select record; nothing else is streamed
+				u16 b = 0;
+				if (static_cast<int>(player) == s_local)
+				{
+					if (PcInput::Active())
+						b = PcInput::Buttons(s_local);
+					else
+					{
+						u8 raw[6];
+						ReportToInput(buf, raw);
+						b = static_cast<u16>((raw[0] << 8) | raw[1]);
+					}
+				}
+				b = CssMirror::Pad(player, b);
+				const u8 x[6] = {static_cast<u8>(b >> 8), static_cast<u8>(b), 0x80, 0x80, 0x80, 0x80};
+				BuildReport(x, buf);
 				return true;
 			}
 			const u32 local_port = s_onemore ? 0u : static_cast<u32>(s_local);
@@ -3131,6 +3215,8 @@ namespace GameRollback
 					s_remote_in.clear();
 					s_remote_pick_valid = false;
 					s_remote_choice = -1;
+					CssMirror::Configure(s_man.css_mirror);
+					CssMirror::Reset(s_local, 0xC55u);
 					InstallSessionLocks();
 					InstallLinkHooks();
 					InstallRollbackHooks(); // the simulation hooks run in menus too (see DoStop)
