@@ -9,6 +9,7 @@
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
 #include "GS/GS.h"
 #include "R5900.h"
+#include "Memory.h"
 #include "MTGS.h"
 #include "Sdbz/SnapshotBench.h" // snap.* Lua table (incremental page-snapshot ring)
 #include "Sdbz/RollbackDevice.h"
@@ -440,6 +441,18 @@ namespace
 				return;
 			EeHooks::AddCall(a, [reg, value](u32) {
 				cpuRegs.GPR.r[reg].UD[0] = static_cast<u64>(static_cast<s64>(static_cast<s32>(value)));
+				return EeHooks::Action::Continue;
+			});
+		});
+		// hook_store(pc, reg, offset, value): before the instruction at pc, u32[GPR[reg] + offset] = value (every pass,
+		// forward and re-simulation: simulation state -- install it identically on every peer)
+		eng.set_function("hook_store", [](uint32_t a, uint32_t reg, int32_t offset, uint32_t value) {
+			if (reg > 31)
+				return;
+			EeHooks::AddCall(a, [reg, offset, value](u32) {
+				const u32 addr = cpuRegs.GPR.r[reg].UL[0] + static_cast<u32>(offset);
+				if ((addr & 3) == 0 && (addr & 0x1FFFFFFF) < Ps2MemSize::MainRam)
+					*reinterpret_cast<u32*>(&eeMem->Main[addr & 0x1FFFFFFF]) = value;
 				return EeHooks::Action::Continue;
 			});
 		});
