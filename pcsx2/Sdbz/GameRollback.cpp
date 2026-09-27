@@ -4159,6 +4159,92 @@ namespace GameRollback
 		}
 		return out;
 	}
+	// ---- memo probe ----
+	// How often a function sees bit-identical inputs for the same object as its previous call (the ceiling of an exact
+	// memoization lever). Spec: "reg:off:len,..." byte ranges relative to a register at entry (a1 falls back to the
+	// key object's ancestor when 0 is not handled: the range is skipped). Key = the first spec's register value.
+	namespace
+	{
+		struct MemoSpan
+		{
+			u32 reg, off, len;
+		};
+		std::vector<MemoSpan> s_mp_spans;
+		u32 s_mp_pc = 0;
+		std::unordered_map<u32, u64> s_mp_last;
+		u64 s_mp_calls[2] = {0, 0}, s_mp_hits[2] = {0, 0}, s_mp_new[2] = {0, 0};
+		u64 HashSpans()
+		{
+			u64 h = 1469598103934665603ull;
+			for (const MemoSpan& s : s_mp_spans)
+			{
+				const u32 base = cpuRegs.GPR.r[s.reg].UL[0];
+				h = (h ^ (base ? 1 : 0)) * 1099511628211ull;
+				if (!base)
+					continue;
+				for (u32 i = 0; i < s.len; i++)
+					h = (h ^ eeMem->Main[(base + s.off + i) & RAM_MASK]) * 1099511628211ull;
+			}
+			return h;
+		}
+	}
+	bool MemoProbeStart(u32 pc, const std::string& spec)
+	{
+		MemoProbeStop();
+		s_mp_spans.clear();
+		for (const std::string_view v : StringUtil::SplitString(spec, ','))
+		{
+			const std::vector<std::string_view> f = StringUtil::SplitString(v, ':');
+			if (f.size() != 3)
+				return false;
+			static const char* regs[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "s0",
+				"s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
+			u32 r = 32;
+			for (u32 i = 0; i < 32; i++)
+				if (f[0] == regs[i])
+					r = i;
+			if (r == 32)
+				return false;
+			s_mp_spans.push_back({r, static_cast<u32>(std::strtoul(std::string(f[1]).c_str(), nullptr, 0)),
+				static_cast<u32>(std::strtoul(std::string(f[2]).c_str(), nullptr, 0))});
+		}
+		if (s_mp_spans.empty())
+			return false;
+		s_mp_last.clear();
+		for (int r = 0; r < 2; r++)
+			s_mp_calls[r] = s_mp_hits[r] = s_mp_new[r] = 0;
+		s_mp_pc = pc;
+		EeHooks::AddCall(pc, [](u32) {
+			const int r = RollbackDevice::IsResimulating() ? 1 : 0;
+			const u32 key = cpuRegs.GPR.r[s_mp_spans[0].reg].UL[0];
+			const u64 h = HashSpans();
+			s_mp_calls[r]++;
+			const auto [it, fresh] = s_mp_last.try_emplace(key, h);
+			if (fresh)
+				s_mp_new[r]++;
+			else
+			{
+				if (it->second == h)
+					s_mp_hits[r]++;
+				it->second = h;
+			}
+			return EeHooks::Action::Continue;
+		}, EeHooks::OWNER_GAME);
+		Console.WriteLn("GameRollback: memo probe at %08X (%zu spans)", pc, s_mp_spans.size());
+		return true;
+	}
+	void MemoProbeStop()
+	{
+		if (s_mp_pc)
+			EeHooks::Remove(s_mp_pc);
+		s_mp_pc = 0;
+	}
+	std::string MemoProbeReport()
+	{
+		return fmt::format("memo probe {:08X}: resim calls {} same-inputs {} ({:.1f}%) first-seen {} | normal calls {} same-inputs {} ({:.1f}%) | objects {}\n",
+			s_mp_pc, s_mp_calls[1], s_mp_hits[1], s_mp_calls[1] ? 100.0 * s_mp_hits[1] / s_mp_calls[1] : 0.0, s_mp_new[1], s_mp_calls[0], s_mp_hits[0],
+			s_mp_calls[0] ? 100.0 * s_mp_hits[0] / s_mp_calls[0] : 0.0, s_mp_last.size());
+	}
 	// ---- call-site profiler ----
 	// Sites are jal/jalr pcs; "SITE:v" keys that site's cost by the called object's vtable (the a0 the callee gets: the
 	// delay slot's `move a0,rX` source, else a0) so a virtual dispatch (a scene/task walker) splits per object type.
