@@ -9,6 +9,7 @@
 #include "Sdbz/RollbackDevice.h"
 
 #include "DebugTools/BiosDebugData.h"
+#include "Host.h"
 #include "Memory.h"
 #include "R5900.h"
 #include "ps2/BiosTools.h"
@@ -3158,9 +3159,29 @@ namespace GameRollback
 			return static_cast<u32>(h ^ (h >> 32));
 		}
 		// Frame boundary. Returns true when this frame runs locally (menus / waiting).
+		void LinkWaitOsd()
+		{
+			static bool shown = false;
+			static u32 refresh = 0;
+			if (s_wait_hold)
+			{
+				if (!shown || ++refresh >= 30)
+				{
+					Host::AddKeyedOSDMessage("pcrb_link_wait", "Waiting for the other player...", 1.0f);
+					refresh = 0;
+				}
+				shown = true;
+			}
+			else if (shown)
+			{
+				Host::RemoveKeyedOSDMessage("pcrb_link_wait");
+				shown = false;
+			}
+		}
 		bool LinkTick()
 		{
 			LinkPump();
+			LinkWaitOsd();
 			switch (s_lphase)
 			{
 				case LinkPhase::Menu:
