@@ -4,6 +4,7 @@
 #include "Common.h"
 #include "R5900OpcodeTables.h"
 #include "x86/iR5900.h"
+#include "Sdbz/EeCallGraph.h"
 
 using namespace x86Emitter;
 
@@ -24,6 +25,29 @@ REC_SYS(JR);
 REC_SYS_DEL(JALR, _Rd_);
 
 #else
+
+// EeCallGraph (Sdbz/EeCallGraph.h): shadow call stack push/pop at calls and `jr $ra`; target in eax for reg jumps
+static void recCallGraphPushImm(u32 target, u32 ret)
+{
+	iFlushCall(FLUSH_EVERYTHING);
+	xMOV(ecx, target);
+	xMOV(edx, ret);
+	xFastCall((void*)EeCallGraph::Push, ecx, edx);
+}
+static void recCallGraphReg(bool push, u32 ret)
+{
+	xMOV(ptr32[&cpuRegs.pcWriteback], eax);
+	iFlushCall(FLUSH_EVERYTHING);
+	xMOV(ecx, ptr32[&cpuRegs.pcWriteback]);
+	if (push)
+	{
+		xMOV(edx, ret);
+		xFastCall((void*)EeCallGraph::Push, ecx, edx);
+	}
+	else
+		xFastCall((void*)EeCallGraph::Pop, ecx);
+	xMOV(eax, ptr32[&cpuRegs.pcWriteback]);
+}
 
 ////////////////////////////////////////////////////
 void recJ()
@@ -58,7 +82,10 @@ void recJAL()
 		xMOV(ptr32[&cpuRegs.GPR.r[31].UL[1]], 0);
 	}
 
+	const u32 ret = pc + 4;
 	recompileNextInstruction(true, false);
+	if (EeCallGraph::Enabled())
+		recCallGraphPushImm(newpc, ret);
 	if (EmuConfig.Gamefixes.GoemonTlbHack)
 		SetBranchImm(vtlb_V2P(newpc));
 	else
@@ -115,6 +142,8 @@ void recJR()
 	}
 
 
+	if (EeCallGraph::Enabled() && _Rs_ == 31)
+		recCallGraphReg(false, 0);
 	// Target passed in eax
 	SetBranchReg();
 }
@@ -184,6 +213,8 @@ void recJALR()
 		}
 	}
 
+	if (EeCallGraph::Enabled())
+		recCallGraphReg(true, newpc);
 	// Target passed in eax
 	SetBranchReg();
 }
