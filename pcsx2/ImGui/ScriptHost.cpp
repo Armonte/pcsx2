@@ -463,7 +463,7 @@ namespace
 			if (reg > 31)
 				return;
 			auto hits = std::make_shared<int>(0);
-			EeHooks::AddCall(a, [reg, prefix, path, hits](u32) {
+			EeHooks::AddCall(a, [a, reg, prefix, path, hits](u32) {
 				const u32 p = cpuRegs.GPR.r[reg].UL[0] & 0x1FFFFFFF;
 				if (p + prefix.size() < Ps2MemSize::MainRam && std::memcmp(&eeMem->Main[p], prefix.data(), prefix.size()) == 0)
 				{
