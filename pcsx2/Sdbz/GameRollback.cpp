@@ -288,9 +288,23 @@ namespace GameRollback
 			Exclude,
 			ExcludeResimRestore,
 		};
+		// tree: walk scene-node subtrees (roots = expression per i < count; first child at root+child_off, siblings at
+		// +next_off, children at +child_off); each node's heap block ([n, n + (u32[n-4] & ~7) - 8), the allocator header
+		// precedes it) plus, for nodes whose vtable matches, an owned array (u32[n+ptr_off], len)
+		struct TreeSpec
+		{
+			Val roots, count;
+			u32 child_off = 16, next_off = 8, max_nodes = 4096;
+			struct Extra
+			{
+				u32 vt, ptr_off, len;
+			};
+			std::vector<Extra> extra;
+		};
 		struct Dynamic
 		{
 			DynKind kind = DynKind::Exclude;
+			std::optional<TreeSpec> tree;
 			std::optional<TableSpec> table;
 			std::optional<ListSpec> list;
 			std::optional<AddrSpec> chain;
@@ -502,6 +516,7 @@ namespace GameRollback
 			};
 			std::map<u32, GateRange> gate_ranges;  // gate -> act only when reg (default a0) is in one of [lo, hi)
 			std::vector<u32> nonfinal_gates;       // gates acting only on non-final re-simulated frames
+			std::vector<u32> host_rand_sites;      // `jal rand` sites served from a per-peer host stream (never rolled back)
 			struct NativeDef
 			{
 				u32 addr;
@@ -782,6 +797,20 @@ namespace GameRollback
 						}
 						if (Has(c, "chain"))
 							d.chain = ParseChain(Child(c, "chain"));
+						if (Has(c, "tree"))
+						{
+							const auto t = Child(c, "tree");
+							TreeSpec ts;
+							ts.roots = ParseVal(Child(t, "roots"));
+							ts.count = ParseVal(Child(t, "count"));
+							ts.child_off = Get(t, "child_off", 16);
+							ts.next_off = Get(t, "next_off", 8);
+							ts.max_nodes = Get(t, "max_nodes", 4096);
+							if (Has(t, "extra"))
+								for (const auto& e : Child(t, "extra").children())
+									ts.extra.push_back({Get(e, "vt", 0), Get(e, "ptr_off", 0), Get(e, "len", 0)});
+							d.tree = std::move(ts);
+						}
 						if (Has(c, "expr"))
 						{
 							d.expr = ParseVal(Child(c, "expr"));
@@ -897,6 +926,8 @@ namespace GameRollback
 				}
 				if (Has(h, "skip_call"))
 					m->always_skips = ParseList(Child(h, "skip_call"));
+				if (Has(h, "host_rand"))
+					m->host_rand_sites = ParseList(Child(h, "host_rand"));
 				if (Has(h, "native"))
 					for (const auto& c : Child(h, "native").children())
 					{
@@ -1713,6 +1744,52 @@ namespace GameRollback
 						}
 					}
 				}
+				else if (d.tree)
+				{
+					const TreeSpec& t = *d.tree;
+					s64 n = 0;
+					if (Eval(t.count, 0, &n))
+					{
+						std::vector<u32> stack;
+						u32 visited = 0;
+						for (s64 i = 0; i < n && i < 4096; i++)
+						{
+							s64 root = 0;
+							if (!Eval(t.roots, i, &root) || root <= 0 || !PtrOk(static_cast<u32>(root)))
+								continue;
+							mix(static_cast<u32>(root));
+							stack.clear();
+							if (const u32 c = Rd(static_cast<u32>(root) + t.child_off); PtrOk(c))
+								stack.push_back(c);
+							while (!stack.empty() && visited < t.max_nodes)
+							{
+								const u32 node = stack.back();
+								stack.pop_back();
+								visited++;
+								const u32 blk = (Rd(node - 4) & ~7u);
+								mix(node);
+								mix(blk);
+								if (blk > 8 && blk < 0x100000)
+									out.emplace_back(node, blk - 8);
+								const u32 vt = Rd(node);
+								for (const TreeSpec::Extra& e : t.extra)
+									if (vt == e.vt)
+									{
+										const u32 p = Rd(node + e.ptr_off);
+										if (PtrOk(p))
+										{
+											mix(p);
+											out.emplace_back(p, e.len);
+										}
+									}
+								if (const u32 nx = Rd(node + t.next_off); PtrOk(nx))
+									stack.push_back(nx);
+								if (const u32 ch = Rd(node + t.child_off); PtrOk(ch))
+									stack.push_back(ch);
+							}
+						}
+					}
+				}
 				else if (d.chain)
 				{
 					if (const std::optional<u32> a = Resolve(*d.chain))
@@ -2507,7 +2584,9 @@ namespace GameRollback
 			u32 gate_v0 = 0;
 		};
 		std::map<u32, Chain> s_chains;
-		std::vector<u32> s_installed; // every address the rollback hooks own (removed on stop)
+		std::vector<u32> s_installed;
+		u64 s_host_rand = 0x2545F4914F6CDD1Dull; // cosmetic host rand stream (per peer, never rolled back)
+		u64 s_host_rand_draws = 0; // every address the rollback hooks own (removed on stop)
 
 		void ChainAdd(u32 pc, std::vector<u32> ra, std::function<EeHooks::Action()> fn)
 		{
@@ -2694,6 +2773,25 @@ namespace GameRollback
 			{
 				EeHooks::AddSkipCall(a, true, EeHooks::OWNER_GAME);
 				s_installed.push_back(a);
+			}
+			// cosmetic rand: a `jal rand` site answered from a host-side stream that rollback never touches (libc rand's
+			// MMIX LCG, own seed), so a subsystem that is not rolled back can draw without consuming the game's stream
+			for (const u32 site : s_man.host_rand_sites)
+			{
+				if (s_chains.count(site))
+				{
+					Console.Error("GameRollback: host_rand %08X is also a hook: ignored", site);
+					continue;
+				}
+				EeHooks::AddCall(site, [](u32 pc) {
+					s_host_rand = s_host_rand * 6364136223846793005ull + 1;
+					cpuRegs.GPR.n.v0.UD[0] = static_cast<u32>((s_host_rand >> 32) & 0x7FFFFFFFu);
+					cpuRegs.GPR.n.v0.UD[1] = 0;
+					s_host_rand_draws++;
+					cpuRegs.pc = pc + 4; // the delay slot runs, then execution continues after the call
+					return EeHooks::Action::Jump;
+				}, EeHooks::OWNER_GAME);
+				s_installed.push_back(site);
 			}
 			for (const Manifest::NativeDef& nd : s_man.natives)
 			{
@@ -4025,7 +4123,7 @@ namespace GameRollback
 		// load_setup starts at, so a session's start state is the savestate itself (replays anchor on it)
 		PollAutoStart();
 	}
-	std::string Status() { return s_status + fmt::format(" | mode {} | ai skipped {}", s_mode, s_ai_skipped); }
+	std::string Status() { return s_status + fmt::format(" | mode {} | ai skipped {} | host rand draws {}", s_mode, s_ai_skipped, s_host_rand_draws); }
 	void SetFileWatch(bool on) { s_watch = on; }
 	std::string LinkBadge()
 	{
