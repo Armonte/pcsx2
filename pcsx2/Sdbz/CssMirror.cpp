@@ -72,8 +72,6 @@ namespace CssMirror
 		std::array<Pulse, 2> s_pulse{};
 		bool s_auto = false;        // owner-side RANDOM: driving our own side to a concrete pick
 		s8 s_auto_chr = -1, s_auto_colour = 0;
-		bool s_prev_stage_loop[2] = {false, false};
-		u8 s_local_entries = 0;     // stage-select entries seen on this PC this visit
 
 		u32 R32(u32 a)
 		{
@@ -116,6 +114,16 @@ namespace CssMirror
 			if (c >= 16 && c <= 19)
 				return static_cast<u32>(std::max(1, Var(s_cfg.var_count_b + static_cast<u32>(c - 16))));
 			return 1;
+		}
+		void WVar(u32 i, s32 v)
+		{
+			if (const u32 t = Vars())
+				std::memcpy(&eeMem->Main[(t + 4 * i) & RAM_MASK], &v, 4);
+		}
+		// stage select is live: both sides locked on this PC and the stage not confirmed yet (memory, not thread pcs)
+		bool StageSelect()
+		{
+			return Locked(0) != -1 && Locked(1) != -1 && R32(s_cfg.side_rec[0]) != s_cfg.confirmed_value;
 		}
 		bool StageAvail(s32 k) { return k == 0 || Var(s_cfg.var_stage_avail + static_cast<u32>(k)) == 1; }
 
@@ -278,17 +286,22 @@ namespace CssMirror
 			return 0;
 		}
 
+		// P1 owns the stage: on P2's PC drive port 0 to P1's confirmed stage, then confirm. Presses that land outside the
+		// stage read loop (the transition waits) are simply not read; the pulse repeats until the confirm lands.
 		u16 DriveStage(const Rec& t)
 		{
-			if (Pc(s_cfg.main_thread) != s_cfg.pc_stage)
+			if (t.phase != LOCKED)
+				return s_cfg.btn_back; // P1 cancelled out of stage select (both picks reset on P1's PC): same here
+			if (t.stage_final <= 0)
 				return 0;
-			if (t.cancel_entry != 0 && t.cancel_entry == s_local_entries)
-				return s_cfg.btn_back;
-			const bool final = t.stage_final >= 0 && t.stage_entry == s_local_entries;
-			const s32 want = final ? t.stage_final : t.stage;
-			const s32 cur = Var(s_cfg.var_stage);
-			if (want != cur && StageAvail(want))
+			const s32 want = t.stage_final, cur = Var(s_cfg.var_stage);
+			if (cur != want)
 			{
+				if (!StageAvail(want))
+				{
+					WVar(s_cfg.var_stage, want); // unreachable by the cursor (RANDOM quirk): place it directly
+					return 0;
+				}
 				const s32 n = static_cast<s32>(s_cfg.stage_entries) + 1;
 				s32 r = 0, l = 0, c = cur;
 				for (; c != want && r <= n; r++)
@@ -308,8 +321,7 @@ namespace CssMirror
 				const s32 fwd = (t.bgm - Var(s_cfg.var_bgm) + n) % n;
 				return (fwd <= n - fwd) ? s_cfg.btn_r1 : s_cfg.btn_l1;
 			}
-			// confirm: the battle uses the agreed stage from the commit even if the owner's random result is unreachable
-			return final ? s_cfg.btn_ok : 0;
+			return s_cfg.btn_ok;
 		}
 
 		// one press per two frames on a port: press this frame, release the next, then re-evaluate from fresh state
@@ -343,10 +355,6 @@ namespace CssMirror
 				s_intent = s_fire_ok = s_auto = false;
 				s_lock_ctr += 1;
 				s_mine.lock_id = s_mine.echo = 0;
-				s_local_entries = 0;
-				s_prev_stage_loop[0] = s_prev_stage_loop[1] = false;
-				s_mine.stage_entry = 0;
-				s_mine.cancel_entry = 0;
 				s_mine.stage_final = -1;
 			}
 			s_prev_scene = scene;
@@ -376,7 +384,6 @@ namespace CssMirror
 		s_intent = s_fire_ok = s_auto = false;
 		s_prev_local = 0;
 		s_pulse = {};
-		s_local_entries = 0;
 	}
 
 	void OnScriptTick(u32 vm)
@@ -417,14 +424,9 @@ namespace CssMirror
 			return;
 		const int x = s_local, r = s_local ^ 1;
 		const u32 keep_id = s_mine.lock_id, keep_echo = s_mine.echo;
-		const u8 keep_entry = s_mine.stage_entry, keep_cancel = s_mine.cancel_entry;
-		const s8 keep_final = s_mine.stage_final;
 		ReadSide(x, s_mine);
 		s_mine.lock_id = keep_id;
 		s_mine.echo = keep_echo;
-		s_mine.stage_entry = keep_entry;
-		s_mine.cancel_entry = keep_cancel;
-		s_mine.stage_final = keep_final;
 
 		// our lock id lives while we are locking/locked or hold an intent; back in the grid it is gone
 		if (s_mine.phase == BROWSE && !s_intent && !s_auto)
@@ -436,24 +438,16 @@ namespace CssMirror
 		const bool remote_live = s_have_remote && s_remote.visit == s_visit;
 		s_mine.echo = (s_mine.lock_id != 0 && remote_live && s_remote.lock_id != 0) ? s_remote.lock_id : 0;
 
-		// stage select (the side-0 owner's record carries it; every PC counts its own entries)
-		const bool stage_loop = Pc(s_cfg.main_thread) == s_cfg.pc_stage;
-		if (stage_loop && !s_prev_stage_loop[0])
-			s_local_entries++;
+		// stage select (P1 owns it): its record carries the live cursor/BGM and, once confirmed, the stage id
 		if (x == 0)
 		{
-			s_mine.stage_loop = stage_loop ? 1 : 0;
+			s_mine.stage_loop = StageSelect() ? 1 : 0;
 			s_mine.stage = static_cast<s8>(Var(s_cfg.var_stage));
 			s_mine.bgm = static_cast<s8>(Var(s_cfg.var_bgm));
-			if (stage_loop && !s_prev_stage_loop[0])
-			{
-				s_mine.stage_entry = s_local_entries;
-				s_mine.stage_final = -1;
-			}
-			if (!stage_loop && s_prev_stage_loop[0] && s_mine.cancel_entry != s_local_entries)
-				s_mine.stage_final = static_cast<s8>(Var(s_cfg.var_stage)); // left the loop by ○: the resolved id
+			s_mine.stage_final = (R32(s_cfg.side_rec[0]) == s_cfg.confirmed_value && s_cfg.stage_id_addr) ?
+									 static_cast<s8>(R32(s_cfg.stage_id_addr)) :
+									 static_cast<s8>(-1);
 		}
-		s_prev_stage_loop[0] = stage_loop;
 
 		static u8 s_log_mine = 0xFF, s_log_remote = 0xFF;
 		if (s_mine.phase != s_log_mine || (remote_live && s_remote.phase != s_log_remote))
@@ -485,7 +479,7 @@ namespace CssMirror
 			if (!s_in_css || !remote_live)
 				return PulseOut(port, 0);
 			u16 want = 0;
-			if (r == 0 && Pc(s_cfg.main_thread) == s_cfg.pc_stage)
+			if (r == 0 && StageSelect())
 				want = DriveStage(s_remote);
 			else if (Pc(s_cfg.side_thread[r]) != 0xFFFFFFFFu)
 				want = DriveSide(r, s_remote, s_mine.lock_id);
@@ -498,12 +492,8 @@ namespace CssMirror
 		const Phase p = SidePhase(x);
 
 		// stage select (P1 owns it): × there cancels both picks on both PCs; remember which entry it cancelled
-		if (x == 0 && Pc(s_cfg.main_thread) == s_cfg.pc_stage)
-		{
-			if (pressed & s_cfg.btn_back)
-				s_mine.cancel_entry = s_local_entries;
-			return buttons;
-		}
+		if (StageSelect())
+			return buttons; // P1's own stage select (× there cancels both picks; the record shows it)
 		// owner-side RANDOM: drive our own side to a concrete pick drawn here (the pick travels as a normal one)
 		if (s_auto)
 		{
