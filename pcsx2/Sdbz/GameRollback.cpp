@@ -4038,4 +4038,70 @@ namespace GameRollback
 		}
 		return out;
 	}
+	// ---- call-site profiler ----
+	namespace
+	{
+		std::map<u32, TaskCost> s_cs_costs;          // by call site
+		std::vector<TaskOpen> s_cs_stack;
+		std::map<u32, std::pair<bool, bool>> s_cs_pcs; // pc -> (is a call site, is a return point)
+		void CallProfPc(u32 pc)
+		{
+			const auto [is_call, is_ret] = s_cs_pcs[pc];
+			if (is_ret && !s_cs_stack.empty() && s_cs_stack.back().key + 8 == pc)
+			{
+				const TaskOpen o = s_cs_stack.back();
+				s_cs_stack.pop_back();
+				const int r = RollbackDevice::IsResimulating() ? 1 : 0;
+				TaskCost& c = s_cs_costs[static_cast<u32>(o.key)];
+				c.calls[r]++;
+				c.cycles[r] += cpuRegs.cycle - o.cycle;
+				c.host_ns[r] += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - o.t).count());
+			}
+			if (is_call)
+				s_cs_stack.push_back({pc, cpuRegs.cycle, std::chrono::steady_clock::now()});
+		}
+	}
+	bool CallProfStart(const std::vector<u32>& sites)
+	{
+		CallProfStop();
+		s_cs_costs.clear();
+		s_cs_stack.clear();
+		for (const u32 site : sites)
+		{
+			s_cs_pcs[site].first = true;
+			s_cs_pcs[site + 8].second = true;
+		}
+		for (const auto& [pc, kind] : s_cs_pcs)
+			EeHooks::AddCall(pc, [](u32 hpc) {
+				CallProfPc(hpc);
+				return EeHooks::Action::Continue;
+			}, EeHooks::OWNER_GAME);
+		Console.WriteLn("GameRollback: call-site profiler on (%zu sites, %zu hooks)", sites.size(), s_cs_pcs.size());
+		return true;
+	}
+	void CallProfStop()
+	{
+		for (const auto& [pc, kind] : s_cs_pcs)
+			EeHooks::Remove(pc);
+		s_cs_pcs.clear();
+		s_cs_stack.clear();
+	}
+	std::string CallProfReport()
+	{
+		std::string out = "# call-site profiler: inclusive per call site\n";
+		for (int r = 1; r >= 0; r--)
+		{
+			u64 tot = 0;
+			for (const auto& [site, c] : s_cs_costs)
+				tot += c.host_ns[r];
+			std::vector<std::pair<u32, TaskCost>> v(s_cs_costs.begin(), s_cs_costs.end());
+			std::sort(v.begin(), v.end(), [r](const auto& a, const auto& b) { return a.second.cycles[r] > b.second.cycles[r]; });
+			out += fmt::format("\n## {} frames\n  host%    host_ms     calls   us/call   EEcyc/call  site\n", r ? "re-simulated" : "normal");
+			for (const auto& [site, c] : v)
+				if (c.calls[r])
+					out += fmt::format("  {:5.1f}  {:9.2f}  {:8}  {:8.2f}  {:10}  {:08X}\n", tot ? 100.0 * c.host_ns[r] / tot : 0.0, c.host_ns[r] / 1e6,
+						c.calls[r], c.host_ns[r] / 1e3 / c.calls[r], c.cycles[r] / c.calls[r], site);
+		}
+		return out;
+	}
 } // namespace GameRollback

@@ -58,6 +58,10 @@ namespace GameRollback
 	bool OpProfStart(u32 call_pc, u32 ret_pc, u32 vm_reg, u32 ip_reg);
 	void OpProfStop();
 	std::string OpProfReport(u32 top_n);
+	// Call-site profiler: inclusive cost of each listed jal/jalr site (hooked at the site and at site+8).
+	bool CallProfStart(const std::vector<u32>& sites);
+	void CallProfStop();
+	std::string CallProfReport();
 	std::string TaskProfReport(u32 top_n);
 	void SetFileWatch(bool on);
 } // namespace GameRollback
