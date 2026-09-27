@@ -247,6 +247,8 @@ namespace RollbackDevice
 		// judged by the locations it ADDS against a baseline run, not only by the named watches.
 		std::unordered_map<u32, u32> s_diff_hist;
 		u32 s_diff_hist_last = 0xFFFFFFFFu;
+		u32 s_diff_hist_limit = 0, s_diff_hist_compares = 0; // limit: only the first N compares (deterministic runs compare)
+		bool s_diff_hist_on = true;
 		void DiffRange(u32 a, const u8* live, const u8* ref, u32 len, u64& diff_bytes)
 		{
 			const Range r{a, a + len};
@@ -265,7 +267,7 @@ namespace RollbackDevice
 								continue;
 							diff_bytes++;
 							const u32 addr = r.a + j;
-							if ((addr >> 4) != s_diff_hist_last)
+							if (s_diff_hist_on && (addr >> 4) != s_diff_hist_last)
 							{
 								s_diff_hist_last = addr >> 4;
 								s_diff_hist[addr >> 4]++;
@@ -295,6 +297,8 @@ namespace RollbackDevice
 		{
 			s_last_runs.clear();
 			s_diff_hist_last = 0xFFFFFFFFu;
+			s_diff_hist_compares++;
+			s_diff_hist_on = !s_diff_hist_limit || s_diff_hist_compares <= s_diff_hist_limit;
 			u64 diff_bytes = 0;
 			if (!s_ref_pages.empty() && s_ring && s_ring->NewestPages(s_frame, s_new_pages) &&
 				s_new_pages.size() == s_ref_pages.size())
@@ -403,6 +407,7 @@ namespace RollbackDevice
 			s_resimulating.store(false, std::memory_order_relaxed);
 			s_resim_nonfinal = s_resim_nonfinal_ab = s_resim_ab = 0;
 			s_diff_hist.clear();
+			s_diff_hist_compares = 0;
 			s_ab_sum_us[0] = s_ab_sum_us[1] = s_ab_sum_sq[0] = s_ab_sum_sq[1] = s_ab_n[0] = s_ab_n[1] = 0;
 			s_frame = -1;
 			s_dyn_rebuilds = 0;
@@ -708,12 +713,14 @@ namespace RollbackDevice
 	void SetFrameGateCondition(bool ok) { s_gate_condition.store(ok, std::memory_order_relaxed); }
 
 	const u8* ResimNonFinalFlag() { return &s_resim_nonfinal; }
+	void SetDiffHistLimit(u32 compares) { s_diff_hist_limit = compares; }
 	bool DumpDiffHistogram(const std::string& path)
 	{
 		// merged runs of adjacent granules: "addr len max_frames"
 		std::vector<std::pair<u32, u32>> v(s_diff_hist.begin(), s_diff_hist.end());
 		std::sort(v.begin(), v.end());
-		std::string out = fmt::format("# sync-test diff locations: addr len frames(max over the run's granules) | {} granules\n", v.size());
+		std::string out = fmt::format("# sync-test diff locations: addr len frames(max over the run's granules) | {} granules | compares {} limit {}\n",
+			v.size(), s_diff_hist_compares, s_diff_hist_limit);
 		for (size_t i = 0; i < v.size();)
 		{
 			size_t j = i;
