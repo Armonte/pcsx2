@@ -426,6 +426,7 @@ namespace GameRollback
 				// same number of simulation ticks on every peer regardless of disc timing
 				u32 pend_list = 0, pend_pool = 0, pend_done_bit = 0x100, pend_next_off = 8, pend_sentinel = 1;
 				std::vector<std::pair<u32, u32>> hold_jumps;
+				std::vector<u32> hold_wait_to;              // per jump: target while waiting for the peer (0 = same as `to`)
 				// virtual load clock (pre-attach window): the game's loader sees each read complete a FIXED number of
 				// loader ticks after it was issued (base + sectors / sectors_per_tick), identical on both peers, so the
 				// VS screen keeps animating while the disc works. A frame is held only when the virtual deadline has
@@ -926,7 +927,10 @@ namespace GameRollback
 						m->link.pend_sentinel = Get(hd, "sentinel", 1);
 						if (Has(hd, "jumps"))
 							for (const auto& c : Child(hd, "jumps").children())
-								m->link.hold_jumps.emplace_back(Get(c, "at", 0), Get(c, "to", 0));
+								{
+									m->link.hold_jumps.emplace_back(Get(c, "at", 0), Get(c, "to", 0));
+									m->link.hold_wait_to.push_back(Get(c, "wait_to", 0));
+								}
 						if (Has(hd, "virtual"))
 						{
 							const auto vl = Child(hd, "virtual");
@@ -1330,6 +1334,7 @@ namespace GameRollback
 		bool s_choice_pending = false;           // our one-more choice is sent; the peer's is awaited (held frames)
 		s32 s_choice_mine = -1;
 		u32 s_attach_frames = 0;                 // frames spent at the attach barrier
+		u32 s_wait_frames = 0;                   // held frames while waiting for the peer (diagnostics)
 		s32 s_remote_choice = -1;                // the peer's one-more choice (MSG_CHOICE)
 		bool s_attach_req = false, s_detach_req = false, s_onemore = false, s_choice_sent = false;
 		// from the battle commit / the agreed one-more choice until the attach: both ports read an identical neutral pad
@@ -2991,8 +2996,9 @@ namespace GameRollback
 			for (size_t k = 0; k < L.hold_jumps.size(); k++)
 			{
 				const auto [at, to] = L.hold_jumps[k];
+				const u32 wait_to = k < L.hold_wait_to.size() ? L.hold_wait_to[k] : 0;
 				const bool first = (k == 0);
-				EeHooks::AddCall(at, [to, first](u32) {
+				EeHooks::AddCall(at, [to, wait_to, first](u32) {
 					if (first)
 					{
 						s_hold_to = to;
@@ -3006,7 +3012,14 @@ namespace GameRollback
 					}
 					if (!s_hold_frame)
 						return EeHooks::Action::Continue;
-					cpuRegs.pc = first ? s_hold_to : to;
+					// waiting for the peer: the scene is still drawn (a held frame that skips drawing re-presents a stale back
+					// buffer -> flicker); load holds skip drawing, the pre-attach window must stay identical
+					const u32 target = (s_wait_hold && wait_to) ? wait_to : (first ? s_hold_to : to);
+					if (s_wait_hold && first)
+						s_wait_frames++;
+					if (target == cpuRegs.pc)
+						return EeHooks::Action::Continue;
+					cpuRegs.pc = target;
 					return EeHooks::Action::Jump;
 				}, EeHooks::OWNER_GAME);
 				s_link_hooks.push_back(at);
@@ -3169,8 +3182,9 @@ namespace GameRollback
 							if (s_man.vs.state)
 								VsInit();
 						}
-						Console.WriteLn("GameRollback: link: one-more %s (mine %d, peer %d)", retry ? "RETRY" : "CHARACTER SELECT", mine,
-							s_remote_choice);
+						Console.WriteLn("GameRollback: link: one-more %s (mine %d, peer %d; waited %u frames for the peer)",
+							retry ? "RETRY" : "CHARACTER SELECT", mine, s_remote_choice, s_wait_frames);
+						s_wait_frames = 0;
 						s_remote_choice = -1;
 						s_onemore = false;
 					}
