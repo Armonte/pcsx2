@@ -39,6 +39,11 @@ namespace EeCallGraph
 		std::mutex s_mtx; // s_stats: EE thread + dump only. The sampler NEVER takes it: it suspends the EE thread,
 		                  // which may hold it (deadlock) -- host samples go to s_host under s_host_mtx instead.
 		std::unordered_map<u32, Stat> s_stats;
+		struct EdgeStat
+		{
+			u64 calls[2] = {0, 0}, incl[2] = {0, 0};
+		};
+		std::unordered_map<u64, EdgeStat> s_edges; // (caller << 32) | callee
 		struct HostStat
 		{
 			u64 incl[2] = {0, 0}, self[2] = {0, 0};
@@ -59,6 +64,7 @@ namespace EeCallGraph
 		{
 			std::lock_guard lk(s_mtx);
 			s_stats.clear();
+			s_edges.clear();
 			s_unmatched = s_unwound = 0;
 		}
 		{
@@ -124,7 +130,12 @@ namespace EeCallGraph
 			if (d > k)
 				s_unwound++;
 			if (d > 0)
+			{
 				s_stack[d - 1].child += incl;
+				EdgeStat& e = s_edges[(static_cast<u64>(s_stack[d - 1].fn) << 32) | f.fn];
+				e.calls[r]++;
+				e.incl[r] += incl;
+			}
 		}
 		s_depth.store(d, std::memory_order_release);
 	}
@@ -174,6 +185,9 @@ namespace EeCallGraph
 		for (const auto& [fn, s] : sorted)
 			out += fmt::format("{:08X} {} {} {} {} {} {} {} {} {} {}\n", fn, s->calls[1], s->calls[0], s->incl[1], s->self[1], s->incl[0], s->self[0],
 				s->host_incl[1], s->host_self[1], s->host_incl[0], s->host_self[0]);
+		out += "# edges: E caller callee calls_resim incl_resim calls_normal incl_normal\n";
+		for (const auto& [k, e] : s_edges)
+			out += fmt::format("E {:08X} {:08X} {} {} {} {}\n", static_cast<u32>(k >> 32), static_cast<u32>(k), e.calls[1], e.incl[1], e.calls[0], e.incl[0]);
 		return out;
 	}
 
