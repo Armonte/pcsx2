@@ -85,6 +85,7 @@ namespace RollbackDevice
 	const u8* ResimNonFinalABFlag(); // byte: ResimNonFinalFlag && A/B "on" rollback
 	void MarkABUsed();               // report the interleaved A/B resim comparison
 	bool DumpDiffHistogram(const std::string& path); // sync test: every differing location over the run
+	void SetDiffHistLimit(u32 compares);             // 0 = all; else only the first N compares
 	bool ProbeLogDump(const std::string& path); // every probe call (trace on): frame, gate value, phase, fn, ra, a0..a3
 
 	// Call tracing from host-side hooks (EeHooks): id as CMD_RNG_TRACE ids, the caller's return address and a0..a3.
