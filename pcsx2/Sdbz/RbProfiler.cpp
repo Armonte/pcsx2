@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "Sdbz/RbProfiler.h"
+#include "Sdbz/EeBlockProf.h"
 
 #include "Memory.h"
 #include "R5900.h"
@@ -113,7 +114,11 @@ namespace RbProfiler
 				s_phase_samples[ph]++;
 				s_total++;
 				if (ctx.Rip >= s_ee_rec_a && ctx.Rip < s_ee_rec_b)
+				{
 					s_ee_pc[(static_cast<u64>(ph) << 32) | ee_pc]++;
+					if (EeBlockProf::Enabled())
+						EeBlockProf::HostSample(ctx.Rip, ph == PH_RESIM); // exact block the host RIP is in
+				}
 			}
 			timeEndPeriod(1);
 			CloseHandle(th);
