@@ -3871,4 +3871,84 @@ namespace GameRollback
 		std::lock_guard lk(s_badge_mtx);
 		return s_badge;
 	}
+	// ---- game task profiler ----
+	namespace
+	{
+		struct TaskCost
+		{
+			u64 calls[2] = {0, 0}, cycles[2] = {0, 0}, host_ns[2] = {0, 0}; // [0] normal, [1] re-simulated
+		};
+		struct TaskOpen
+		{
+			u32 fn;
+			u64 cycle;
+			std::chrono::steady_clock::time_point t;
+		};
+		std::unordered_map<u32, TaskCost> s_tp_costs;
+		std::vector<TaskOpen> s_tp_stack;
+		u32 s_tp_call = 0, s_tp_ret = 0, s_tp_reg = 3;
+		u64 s_tp_frames[2] = {0, 0};
+	}
+	bool TaskProfStart(u32 call_pc, u32 ret_pc, u32 fn_reg)
+	{
+		TaskProfStop();
+		s_tp_costs.clear();
+		s_tp_stack.clear();
+		s_tp_frames[0] = s_tp_frames[1] = 0;
+		s_tp_call = call_pc;
+		s_tp_ret = ret_pc;
+		s_tp_reg = fn_reg & 31;
+		EeHooks::AddCall(call_pc, [](u32) {
+			s_tp_stack.push_back({cpuRegs.GPR.r[s_tp_reg].UL[0], cpuRegs.cycle, std::chrono::steady_clock::now()});
+			return EeHooks::Action::Continue;
+		}, EeHooks::OWNER_GAME);
+		EeHooks::AddCall(ret_pc, [](u32) {
+			if (s_tp_stack.empty())
+				return EeHooks::Action::Continue;
+			const TaskOpen o = s_tp_stack.back();
+			s_tp_stack.pop_back();
+			const int r = RollbackDevice::IsResimulating() ? 1 : 0;
+			TaskCost& c = s_tp_costs[o.fn];
+			c.calls[r]++;
+			c.cycles[r] += cpuRegs.cycle - o.cycle;
+			c.host_ns[r] += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - o.t).count());
+			if (s_tp_stack.empty() && o.fn != 0)
+				s_tp_frames[r] += 0; // (frame counts come from the outermost list below)
+			return EeHooks::Action::Continue;
+		}, EeHooks::OWNER_GAME);
+		Console.WriteLn("GameRollback: task profiler on (call %08X, return %08X, fn in r%u)", call_pc, ret_pc, s_tp_reg);
+		return true;
+	}
+	void TaskProfStop()
+	{
+		if (!s_tp_call)
+			return;
+		EeHooks::Remove(s_tp_call);
+		EeHooks::Remove(s_tp_ret);
+		s_tp_call = s_tp_ret = 0;
+		s_tp_stack.clear();
+	}
+	std::string TaskProfReport(u32 top_n)
+	{
+		std::vector<std::pair<u32, TaskCost>> v(s_tp_costs.begin(), s_tp_costs.end());
+		u64 tot[2] = {0, 0};
+		for (const auto& [fn, c] : v)
+			for (int r = 0; r < 2; r++)
+				tot[r] += c.host_ns[r];
+		std::string out = "# game task profiler: inclusive per task function (nested lists count in their parent too)\n";
+		for (int r = 1; r >= 0; r--)
+		{
+			std::sort(v.begin(), v.end(), [r](const auto& a, const auto& b) { return a.second.host_ns[r] > b.second.host_ns[r]; });
+			out += fmt::format("\n## {} frames\n  host%    host_ms     calls   us/call    EEcyc/call  fn\n", r ? "re-simulated" : "normal");
+			u32 n = 0;
+			for (const auto& [fn, c] : v)
+			{
+				if (!c.calls[r] || n++ >= top_n)
+					continue;
+				out += fmt::format("  {:5.1f}  {:9.2f}  {:8}  {:8.1f}  {:12}  {:08X}\n", tot[r] ? 100.0 * c.host_ns[r] / tot[r] : 0.0,
+					c.host_ns[r] / 1e6, c.calls[r], c.host_ns[r] / 1e3 / c.calls[r], c.cycles[r] / c.calls[r], fn);
+			}
+		}
+		return out;
+	}
 } // namespace GameRollback

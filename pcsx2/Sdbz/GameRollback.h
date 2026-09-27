@@ -47,5 +47,10 @@ namespace GameRollback
 	std::string Status();
 	// netplay session badge for the on-screen overlay ("P1 | battle 3 | ping 105 ms"), empty outside a session. Any thread.
 	std::string LinkBadge();
+	// Game task profiler: inclusive EE cycles + host time per task function, split normal / re-simulated frames.
+	// call_pc = the dispatcher's jalr (task fn in fn_reg), ret_pc = the instruction after it (FUC 0x211230/0x211238, $v1).
+	bool TaskProfStart(u32 call_pc, u32 ret_pc, u32 fn_reg);
+	void TaskProfStop();
+	std::string TaskProfReport(u32 top_n);
 	void SetFileWatch(bool on);
 } // namespace GameRollback
