@@ -513,6 +513,8 @@ namespace GameRollback
 			{
 				u32 reg = 4;
 				std::vector<std::pair<u32, u32>> ranges;
+				std::vector<Val> ptrs;   // in_ptrs: object pointers (expressions) -> [p, p+1), re-evaluated per frame
+				std::vector<u32> ptr_vt; //   a pointer counts only if u32[p] is one of these (empty: any)
 			};
 			std::map<u32, GateRange> gate_ranges;  // gate -> act only when reg (default a0) is in one of [lo, hi)
 			std::vector<u32> nonfinal_gates;       // gates acting only on non-final re-simulated frames
@@ -911,6 +913,23 @@ namespace GameRollback
 							for (const auto& r : Child(c, "in").children())
 								gr.ranges.push_back({ParseU32(r[0]), ParseU32(r[1])});
 							m->gate_ranges[a] = std::move(gr);
+						}
+						if (c.is_map() && Has(c, "in_ptrs"))
+						{
+							static const char* regs2[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4",
+								"t5", "t6", "t7", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
+							Manifest::GateRange& gr = m->gate_ranges[a];
+							if (Has(c, "reg"))
+							{
+								const ryml::csubstr rv = c["reg"].val();
+								for (u32 i = 0; i < 32; i++)
+									if (rv == regs2[i])
+										gr.reg = i;
+							}
+							for (const auto& e : Child(c, "in_ptrs").children())
+								gr.ptrs.push_back(ParseVal(e));
+							if (Has(c, "ptr_vt"))
+								gr.ptr_vt = ParseList(Child(c, "ptr_vt"));
 						}
 					}
 				}
@@ -1681,6 +1700,38 @@ namespace GameRollback
 			return out;
 		}
 
+		// in_ptrs gates: the object set is re-evaluated at every frame boundary; the recompiled gate is rebuilt only when
+		// it changes. An empty set disables the gate (an impossible range), never "unconditional".
+		std::map<u32, std::vector<std::pair<u32, u32>>> s_gate_ptr_sets;
+		void RefreshGatePtrs(bool force)
+		{
+			for (const auto& [pc, gr] : s_man.gate_ranges)
+			{
+				if (gr.ptrs.empty())
+					continue;
+				std::vector<std::pair<u32, u32>> set;
+				for (const Val& v : gr.ptrs)
+				{
+					s64 p = 0;
+					if (!Eval(v, 0, &p) || p <= 0 || (p & 15) || !PtrOk(static_cast<u32>(p)))
+						continue;
+					if (!gr.ptr_vt.empty() && std::find(gr.ptr_vt.begin(), gr.ptr_vt.end(), Rd(static_cast<u32>(p))) == gr.ptr_vt.end())
+						continue;
+					set.emplace_back(static_cast<u32>(p), static_cast<u32>(p) + 1);
+				}
+				set.insert(set.end(), gr.ranges.begin(), gr.ranges.end());
+				std::sort(set.begin(), set.end());
+				set.erase(std::unique(set.begin(), set.end()), set.end());
+				if (set.empty())
+					set.emplace_back(0xFFFFFFF0u, 0xFFFFFFF0u); // matches nothing
+				auto& cur = s_gate_ptr_sets[pc];
+				if (!force && cur == set)
+					continue;
+				cur = set;
+				EeHooks::SetGateRanges(pc, gr.reg, set);
+			}
+		}
+
 		// ---------------------------------------------------------------------------------------------------------
 		// dynamic ranges (pointer walks), applied at the frame boundary when the objects moved
 		// ---------------------------------------------------------------------------------------------------------
@@ -2018,6 +2069,7 @@ namespace GameRollback
 			if (s_mode == 0)
 				return EeHooks::Action::Continue;
 			RefreshDynamic(false);
+			RefreshGatePtrs(false);
 			if (s_man.gate_when)
 			{
 				s64 v = 0;
@@ -2873,6 +2925,7 @@ namespace GameRollback
 				}
 			s_dyn_sig = 0;
 			RefreshDynamic(true);
+			RefreshGatePtrs(true);
 		}
 
 		bool LoadFile(const std::string& path, Manifest* m, std::string* error)
