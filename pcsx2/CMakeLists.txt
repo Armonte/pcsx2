@@ -856,6 +856,7 @@ set(pcsx2ImGuiSources
 	ImGui/ImGuiOverlays.cpp
 	ImGui/ScriptOverlay.cpp
 	ImGui/ScriptHost.cpp
+	Sdbz/CssMirror.cpp
 	Sdbz/EeHooks.cpp
 	Sdbz/GameRollback.cpp
 	Sdbz/NetBridge.cpp
@@ -880,6 +881,7 @@ set(pcsx2ImGuiHeaders
 	ImGui/ScriptBridge.h
 	ImGui/ScriptHost.h
 	Sdbz/CpuTimer.h
+	Sdbz/CssMirror.h
 	Sdbz/EeHooks.h
 	Sdbz/GameRollback.h
 	Sdbz/NetBridge.h
