@@ -1330,6 +1330,12 @@ namespace GameRollback
 		bool LinkPadRead(u32 player, u8* buf);          // menu phases: stream/feed; true = handled
 		void VlBegin();                                 // virtual load clock: open the pre-attach window
 		void AiWaitRecordVm(u32 vm, u32 file);         // RETRY canon: remember AI script VMs (Seq_Init)
+		struct AiVm
+		{
+			u32 vm = 0, file = 0;
+			std::vector<const Manifest::AiWaitLoop*> loops;
+		};
+		std::vector<AiVm> s_ai_vms; // AI script VMs started since the last commit (recorded at Seq_Init)
 		void InstallLinkHooks();
 		void RemoveLinkHooks();
 		void DoStop();
@@ -1863,7 +1869,7 @@ namespace GameRollback
 				}, EeHooks::OWNER_GAME);
 				s_session_hooks.push_back(fb.at);
 			}
-			if (s_man.script_hook && (!s_man.script_patches.empty() || s_man.link.ai_wait_canon))
+			if (s_man.script_hook && (!s_man.script_patches.empty() || s_man.ai_wait_canon))
 			{
 				EeHooks::AddCall(s_man.script_hook, [](u32) {
 					const u32 file = cpuRegs.GPR.r[s_man.script_file_reg].UL[0];
@@ -2724,15 +2730,9 @@ namespace GameRollback
 			return n;
 		}
 		// ---- RETRY re-attach canonicalization (FUC notes/RETRY_CANON.md) ----
-		struct AiVm
-		{
-			u32 vm = 0, file = 0;
-			std::vector<const Manifest::AiWaitLoop*> loops;
-		};
-		std::vector<AiVm> s_ai_vms; // AI script VMs started since the last commit (recorded at Seq_Init)
 		void AiWaitRecordVm(u32 vm, u32 file)
 		{
-			const auto& L = s_man.link;
+			const auto& L = s_man;
 			if (!L.ai_wait_canon || !vm || !file || L.ai_wait_set_sig.empty() || L.ai_wait_yield_sig.empty())
 				return;
 			AiVm rec{vm, file, {}};
@@ -2752,7 +2752,7 @@ namespace GameRollback
 		// every thread of a recorded AI VM parked in a "wait for FIGHT or N frames" loop restarts its countdown now
 		void AiWaitCanon()
 		{
-			if (!s_man.link.ai_wait_canon)
+			if (!s_man.ai_wait_canon)
 				return;
 			u32 n_written = 0;
 			for (const AiVm& v : s_ai_vms)
@@ -2776,7 +2776,7 @@ namespace GameRollback
 		// effect pools: free nodes relinked in pool-init order and zeroed; live nodes untouched
 		void FxCanon()
 		{
-			const auto& L = s_man.link;
+			const auto& L = s_man;
 			if (!L.fx_canon)
 				return;
 			std::string log;
