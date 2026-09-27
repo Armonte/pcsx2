@@ -456,6 +456,28 @@ namespace
 				return EeHooks::Action::Continue;
 			});
 		});
+		// hook_dump_on_string(pc, reg, prefix, path): when the instruction at pc executes with GPR[reg] pointing at a
+		// string starting with `prefix`, write EE RAM (32 MiB) to path.N (N = hit count) -- frame-exact experiment dumps
+		// (e.g. FUC Seq_DebugPrint 0x223860, a1 = "  ** main_restart_point" = the battle-attach point)
+		eng.set_function("hook_dump_on_string", [](uint32_t a, uint32_t reg, std::string prefix, std::string path) {
+			if (reg > 31)
+				return;
+			auto hits = std::make_shared<int>(0);
+			EeHooks::AddCall(a, [reg, prefix, path, hits](u32) {
+				const u32 p = cpuRegs.GPR.r[reg].UL[0] & 0x1FFFFFFF;
+				if (p + prefix.size() < Ps2MemSize::MainRam && std::memcmp(&eeMem->Main[p], prefix.data(), prefix.size()) == 0)
+				{
+					const std::string out = fmt::format("{}.{}", path, (*hits)++);
+					if (std::FILE* f = FileSystem::OpenCFile(out.c_str(), "wb"))
+					{
+						std::fwrite(eeMem->Main, 1, Ps2MemSize::MainRam, f);
+						std::fclose(f);
+						Console.WriteLn("[Script] EE RAM dump at %08X (%s) -> %s", a, prefix.c_str(), out.c_str());
+					}
+				}
+				return EeHooks::Action::Continue;
+			});
+		});
 		eng.set_function("hook_remove", [](uint32_t a) { EeHooks::Remove(a); });
 		eng.set_function("hook_clear", []() { EeHooks::Clear(); });
 		eng.set_function("hook_gate_returns", []() { return static_cast<double>(EeHooks::GateReturns()); });

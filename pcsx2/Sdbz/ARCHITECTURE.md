@@ -257,3 +257,39 @@ Every new mechanism is A/B-tested against the previous one (interleaved pairs, m
     | SDBZ | ~95 ms | 123 on peer A | 0 | 47/47, 48/48 | 1773 / 1637, 0 mismatches |
 
     Up to 3-deep rollbacks and ~190 dropped packets per direction per run. A real two-PC match is still worth running when convenient (`FUC/dist/netplay_bundle.zip`, `netplay.cmd host|join`).
+
+## 9. Session loop, rulesets, input (2026-09-26, FUC first)
+
+- **Session lock-down** (manifest `session:`, installed on every peer for netplay sessions):
+  - forced branches with delay-slot effects (every battle exit -> character select; pause menu never opens);
+  - state-conditioned input masks (CSS x before a pick cannot exit to the title);
+  - `script_patches`: byte-verified, load-time data patches of game scripts at the loader (`Seq_Init`). FUC's
+    one-more menu is RETRY / CHARACTER SELECT only (both layouts).
+
+  Canonical start state: `FUC/states/fuc_session_start.p2s` (VS-2P CSS, 99 s, 2 rounds, autosave off, fixed seed).
+- **Phases.** Rollback prediction only in FIGHT inside a live battle (`gate_when`); in netplay the device refuses a
+  netcode rollback only for async I/O (anything else would leave a misprediction uncorrected). Full-match 8f sync
+  tests: 0 desync through KOs/reset/intro.
+- **Menus: decided direction** (user, 2026-09-26): no rollback outside battle and no lockstep delay in menus.
+  Menus run locally per peer (async); only menu EVENTS travel (cursor moves, picks, confirms, the one-more choice)
+  and each peer applies the remote side's events into its own game at the matching step. NO state is ever sent over
+  the network. The rollback session ATTACHES at an RE'd battle-attach frame where the battle state is fully
+  determined by the synced selections, so both peers start the fight identical by construction; GekkoNet's checksum
+  compares remain the detector (a mismatch = a wrong attach point or an unsynced input: an RE bug, never patched
+  over the wire). Lockstep menus remain the working baseline until this lands. RE owed: the attach frame per
+  scene transition, every value battle setup reads from the menus (selections, RNG draw points, options), and the
+  remote-event injection points in the menu scripts.
+- **Rulesets** (FUC `notes/RULESETS.md`): winner lock, stage chooser (P1/P2/loser/winner/random), post-match
+  (menu / straight to CSS / auto-rematch), rematch with a new stage, arcade-style preset -- all in mode 3 with
+  scene-entry writes, forced branches and script patches. Live verification pending.
+- **Input: creamybinder** (`Sdbz/PcInput`, `3rdparty/creamybinder` tracking master). It owns local input for the
+  whole PovertyCaster session (menus, offline, netplay); PCSX2's SDL/XInput/DInput sources are closed while it owns
+  the devices (`InputManager::IsInputSourceEnabled`). Profile = manifest name, config beside `pcsx2-qt.exe`
+  (`creamybinder-<profile>.ini`), F4 binder in PCSX2's ImGui (host contract: `BinderController::update` after poll,
+  `iam_update_begin_frame` per ImGui frame). Owed: PovertyCaster's binder theme/fonts/logo drop-in (propose moving
+  that presentation layer into creamybinder), a session hotkey profile, analog axes if a game needs them.
+- **Soak tooling:**
+  - `bot S,1` plays a side through the whole loop (random picks, fight, one-more choice);
+  - `ai_route` makes every fighter's CPU AI tick and play through its real pad, as simulation-level hooks
+    (netplay-safe);
+  - `gs_shot` captures game video only.
