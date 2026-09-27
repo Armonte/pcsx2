@@ -71,6 +71,7 @@ namespace RollbackDevice
 		std::atomic<u32> s_ext_rollback{0};   // Netplay: depth requested for the next frame boundary
 		u32 s_cur_depth = 0;                  // depth of the rollback in progress   // host-side gate condition for the next frame (SetFrameGateCondition)
 		std::atomic<bool> s_resimulating{false};   // between a rollback and CUR_PRE (read by other threads)
+		u8 s_resim_nonfinal = 0;                   // re-simulating a frame that is not the rollback's last (EeHooks byte)
 		std::atomic<bool> s_lever_host_vsync{true}, s_lever_park{true}, s_lever_iop{true};
 		s32 s_confirmed = -1;                      // resim captures below this frame are skipped (-1 = none)
 		u32 s_resim_flag_addr = 0;                 // game-side resim flag word (0 = none)
@@ -380,6 +381,7 @@ namespace RollbackDevice
 			s_ref_pages.clear(); // pins of a dropped ring: never unpinned into another ring
 			s_ring.reset();
 			s_resimulating.store(false, std::memory_order_relaxed);
+			s_resim_nonfinal = 0;
 			s_frame = -1;
 			s_dyn_rebuilds = 0;
 			s_resim_active = false;
@@ -573,6 +575,7 @@ namespace RollbackDevice
 		std::lock_guard lk(s_mtx);
 		s_mode = Mode::Off;
 		s_resimulating.store(false, std::memory_order_relaxed); // EE unparks the sync counters at its next event test
+		s_resim_nonfinal = 0;
 		s_ring.reset();
 	}
 
@@ -682,6 +685,7 @@ namespace RollbackDevice
 
 	void SetFrameGateCondition(bool ok) { s_gate_condition.store(ok, std::memory_order_relaxed); }
 
+	const u8* ResimNonFinalFlag() { return &s_resim_nonfinal; }
 	const u8* ResimulatingFlag()
 	{
 		static_assert(sizeof(std::atomic<bool>) == 1, "EeHooks tests the flag as a byte");
@@ -964,6 +968,7 @@ namespace RollbackDevice
 					InjectInput(s_resim_base + static_cast<s32>(arg));
 				s_phase = Phase::Resim;
 				s_phase_frame = s_resim_base + static_cast<s32>(arg);
+				s_resim_nonfinal = s_resim_active && arg + 1 < s_cur_depth;
 				s_cur_trace.clear();
 				return 0;
 
@@ -1055,6 +1060,7 @@ namespace RollbackDevice
 					}
 					InjectInput(s_frame);
 					s_resim_active = false;
+					s_resim_nonfinal = 0;
 					s_resimulating.store(false, std::memory_order_relaxed);
 					rcntRollbackUnpark();
 					WriteResimFlag(0);

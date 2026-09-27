@@ -1589,13 +1589,13 @@ static void recEmitEeHook(u32 startpc, EeHooks::Kind kind)
 		iBranchTest();
 		run.SetTarget();
 	}
-	else if (kind == EeHooks::Kind::SkipCallResim || kind == EeHooks::Kind::SkipCallAlways)
+	else if (kind == EeHooks::Kind::SkipCallResim || kind == EeHooks::Kind::SkipCallAlways || kind == EeHooks::Kind::SkipCallResimNonFinal)
 	{
 		// continue at the delay slot (compiled as its own block start), which then runs on to site + 8
 		std::optional<xForwardJZ32> run;
-		if (kind == EeHooks::Kind::SkipCallResim)
+		if (kind != EeHooks::Kind::SkipCallAlways)
 		{
-			xCMP(ptr8[EeHooks::ResimFlag()], 0);
+			xCMP(ptr8[kind == EeHooks::Kind::SkipCallResim ? EeHooks::ResimFlag() : EeHooks::ResimNonFinalFlag()], 0);
 			run.emplace();
 		}
 		xMOV(ptr32[&cpuRegs.pc], startpc + 4);

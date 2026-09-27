@@ -491,6 +491,7 @@ namespace GameRollback
 			u32 sim_tick_site = 0, return_addr = 0, render_begin_site = 0, render_end_site = 0;
 			std::vector<Step> steps;
 			std::vector<u32> resim_gates, resim_skips, always_skips;
+			std::vector<u32> resim_skips_nonfinal; // skipped on re-simulated frames but the last (pure derived outputs)
 			std::vector<EntryAction> entry_actions;
 			u32 pad_read_fn = 0, pad_site = 0;
 			u32 pad_mode = 0x73; // report mode byte every netplay peer builds reports with (the game's configured pad mode)
@@ -831,6 +832,8 @@ namespace GameRollback
 				}
 				if (Has(h, "resim_skip_call"))
 					m->resim_skips = ParseList(Child(h, "resim_skip_call"));
+				if (Has(h, "resim_skip_call_nonfinal"))
+					m->resim_skips_nonfinal = ParseList(Child(h, "resim_skip_call_nonfinal"));
 				if (Has(h, "skip_call"))
 					m->always_skips = ParseList(Child(h, "skip_call"));
 				if (Has(h, "entry_actions"))
@@ -2599,6 +2602,16 @@ namespace GameRollback
 				else
 				{
 					EeHooks::AddSkipCall(a, false, EeHooks::OWNER_GAME);
+					s_installed.push_back(a);
+				}
+			}
+			for (const u32 a : s_man.resim_skips_nonfinal)
+			{
+				if (s_chains.count(a))
+					Console.Error("GameRollback: %08X is both a call-site skip and a hook: skip ignored", a);
+				else
+				{
+					EeHooks::AddSkipCallNonFinal(a, EeHooks::OWNER_GAME);
 					s_installed.push_back(a);
 				}
 			}
