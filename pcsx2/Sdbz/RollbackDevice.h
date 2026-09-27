@@ -153,4 +153,11 @@ namespace RollbackDevice
 	void Stop();
 	std::string Status();
 	std::string ReportText(); // per-page diff histogram + last differing runs (sync test)
+	struct Perf
+	{
+		u64 rollbacks = 0, last_us = 0, avg_us = 0, max_us = 0, avg_load_us = 0, avg_resim_us = 0, sim_us = 0;
+		double pace_avg_ms = 0.0, pace_max_ms = 0.0, late_pct = 0.0;
+		u32 pace_p99_ms = 0;
+	};
+	bool GetPerf(Perf* out); // false: device off
 } // namespace RollbackDevice

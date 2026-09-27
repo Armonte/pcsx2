@@ -69,6 +69,16 @@ namespace NetBridge
 	void ResolveSave(s32 save_index, u32 checksum);
 	std::string Status();
 	float PaceFactor(); // P2P: suggested frame-time multiplier (1.0 nominal)
+	struct NetStats
+	{
+		s32 frame = 0, rollbacks = 0, last_rollback_frames = 0, delay = 0, stalled = 0, desync_frame = -1;
+		s64 rollback_frames_total = 0;
+		u32 ping_ms = 0, jitter_ms = 0, compares = 0, mismatches = 0;
+		float frames_ahead = 0.0f;
+		bool desynced = false;
+	};
+	bool GetStats(NetStats* out); // false: no session
+	int InputDelay(); // configured per-battle input delay (frames)
 
 	// ---- Link mode (Mode::Link). EE thread. ----
 	struct Message

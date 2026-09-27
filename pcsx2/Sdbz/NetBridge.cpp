@@ -663,6 +663,30 @@ namespace NetBridge
 		return st.pace_factor > 0.5f ? st.pace_factor : 1.0f;
 	}
 
+	int InputDelay() { return s_cfg.input_delay; }
+	bool GetStats(NetStats* out)
+	{
+		if (!s_session || !p_get_stats)
+			return false;
+		pcb_stats st = {};
+		st.struct_size = sizeof(st);
+		p_get_stats(s_session, &st);
+		out->frame = st.current_frame;
+		out->rollbacks = st.rollbacks;
+		out->last_rollback_frames = st.last_rollback_frames;
+		out->rollback_frames_total = st.rollback_frames_total;
+		out->delay = st.current_delay;
+		out->stalled = st.stalled_frames;
+		out->desynced = st.desynced != 0;
+		out->desync_frame = st.desync_frame;
+		out->ping_ms = st.ping_ms;
+		out->jitter_ms = st.jitter_ms;
+		out->compares = st.health_compares;
+		out->mismatches = st.health_mismatches;
+		out->frames_ahead = st.frames_ahead;
+		return true;
+	}
+
 	std::string Status()
 	{
 		if (s_cfg.mode == Mode::JournalReplay && !s_jplans.empty())

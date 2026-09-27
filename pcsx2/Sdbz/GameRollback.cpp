@@ -3176,20 +3176,35 @@ namespace GameRollback
 			std::string b;
 			if (s_lphase != LinkPhase::Off)
 			{
+				// line 1: who/where; in battle also the link, the rollback activity and what rollbacks cost
 				b = fmt::format("P{}", s_local + 1);
+				NetBridge::NetStats ns;
+				const bool battle = (s_lphase == LinkPhase::Battle || s_lphase == LinkPhase::Detaching) && NetBridge::GetStats(&ns);
 				if (s_wait_hold)
 					b += " | waiting for the other player";
-				else if (s_lphase == LinkPhase::Battle || s_lphase == LinkPhase::Detaching)
-				{
-					b += fmt::format(" | battle {}", s_battle_counter);
-					const std::string st = NetBridge::Status();
-					if (const size_t k = st.find("rollbacks "); k != std::string::npos)
-						b += fmt::format(" | rb {}", std::atoi(st.c_str() + k + 10));
-				}
+				else if (battle)
+					b += fmt::format(" | battle {} | frame {}", s_battle_counter, ns.frame);
 				else
 					b += CssMirror::InCss() ? " | character select" : " | menus";
-				if (const u32 ping = NetBridge::LinkPingMs())
-					b += fmt::format(" | ping {} ms", ping);
+				if (battle)
+				{
+					b += fmt::format(" | ping {} ms +-{} | input delay {}f | ahead {:+.1f}f", ns.ping_ms, ns.jitter_ms, ns.delay, ns.frames_ahead);
+					b += fmt::format("\nrollbacks {} (last {}f, {} frames resimulated) | stalls {} | checks {}/{}{}", ns.rollbacks,
+						ns.last_rollback_frames, ns.rollback_frames_total, ns.stalled, ns.compares, ns.mismatches,
+						ns.desynced ? fmt::format(" | DESYNC at {}", ns.desync_frame) : std::string());
+					RollbackDevice::Perf pf;
+					if (RollbackDevice::GetPerf(&pf))
+						b += fmt::format("\nrollback cost avg {:.2f} ms (load {:.2f}, resim {:.2f}) max {:.1f} | sim {:.2f} ms/f | "
+										 "frame {:.1f} ms p99 {} ({:.1f}% late)",
+							pf.avg_us / 1000.0, pf.avg_load_us / 1000.0, pf.avg_resim_us / 1000.0, pf.max_us / 1000.0, pf.sim_us / 1000.0,
+							pf.pace_avg_ms, pf.pace_p99_ms, pf.late_pct);
+				}
+				else
+				{
+					if (const u32 ping = NetBridge::LinkPingMs())
+						b += fmt::format(" | ping {} ms", ping);
+					b += fmt::format(" | input delay {}f", NetBridge::InputDelay());
+				}
 			}
 			std::lock_guard lk(s_badge_mtx);
 			s_badge = std::move(b);
