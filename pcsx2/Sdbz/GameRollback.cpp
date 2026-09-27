@@ -1158,6 +1158,18 @@ namespace GameRollback
 		// ---- link mode (async menus, per-battle rollback) ----
 		enum class LinkPhase : u8 { Off, Menu, Attaching, Battle, Detaching };
 		LinkPhase s_lphase = LinkPhase::Off;
+		enum : u16 { MSG_INPUT = 1, MSG_PICK = 2, MSG_CHOICE = 3 };
+		int s_local = 0;                         // local player (0/1)
+		std::deque<std::array<u8, 6>> s_remote_in; // remote player's streamed menu inputs, applied one per read
+		std::array<u8, 6> s_remote_last = {0, 0, 0x80, 0x80, 0x80, 0x80};
+		std::vector<u32> s_remote_pick;          // the peer's resolved selection values (MSG_PICK)
+		bool s_remote_pick_valid = false;
+		s32 s_remote_choice = -1;                // the peer's one-more choice (MSG_CHOICE)
+		bool s_attach_req = false, s_detach_req = false, s_onemore = false, s_choice_sent = false;
+		s32 s_menu_frame = 0;
+		u32 s_battle_counter = 0;
+		std::vector<u32> s_link_hooks;
+		std::string s_link_dump_prefix; // desync forensics: EE RAM at every attach (after the canonical writes)
 		bool LinkTick();                                // frame boundary: true = this frame runs without netcode
 		bool LinkPadRead(u32 player, u8* buf);          // menu phases: stream/feed; true = handled
 		void InstallLinkHooks();
@@ -1513,6 +1525,22 @@ namespace GameRollback
 				n = NetBridge::Frame(&s_net_plan);
 				if (n != 0)
 					break;
+				if (s_lphase == LinkPhase::Detaching)
+				{
+					// held at the stop frame: the detach completes here (never run a game frame on a hold)
+					const int d = NetBridge::Detach();
+					if (d != 0)
+					{
+						DoStop();
+						s_net = false;
+						s_detach_req = false;
+						s_onemore = true;
+						s_choice_sent = false;
+						s_remote_in.clear();
+						s_lphase = LinkPhase::Menu;
+						return false;
+					}
+				}
 				if (waited > 10000) // ~10 s without a frame: give up
 				{
 					n = -1;
@@ -2398,18 +2426,6 @@ namespace GameRollback
 		}
 
 		// ================= link mode runtime =================
-		enum : u16 { MSG_INPUT = 1, MSG_PICK = 2, MSG_CHOICE = 3 };
-		int s_local = 0;                         // local player (0/1)
-		std::deque<std::array<u8, 6>> s_remote_in; // remote player's streamed menu inputs, applied one per read
-		std::array<u8, 6> s_remote_last = {0, 0, 0x80, 0x80, 0x80, 0x80};
-		std::vector<u32> s_remote_pick;          // the peer's resolved selection values (MSG_PICK)
-		bool s_remote_pick_valid = false;
-		s32 s_remote_choice = -1;                // the peer's one-more choice (MSG_CHOICE)
-		bool s_attach_req = false, s_detach_req = false, s_onemore = false, s_choice_sent = false;
-		s32 s_menu_frame = 0;
-		u32 s_battle_counter = 0;
-		std::vector<u32> s_link_hooks;
-		std::string s_link_dump_prefix; // desync forensics: EE RAM at every attach (after the canonical writes)
 
 		void LinkPump()
 		{
