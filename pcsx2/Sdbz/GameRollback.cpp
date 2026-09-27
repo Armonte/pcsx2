@@ -2788,7 +2788,17 @@ namespace GameRollback
 					else
 						EeHooks::AddResimGate(pc, EeHooks::OWNER_GAME);
 					if (const auto gr = s_man.gate_ranges.find(pc); gr != s_man.gate_ranges.end())
-						EeHooks::SetGateRanges(pc, gr->second.reg, gr->second.ranges);
+					{
+						if (gr->second.ptrs.empty())
+							EeHooks::SetGateRanges(pc, gr->second.reg, gr->second.ranges);
+						else
+						{
+							// pointer-set gate: never unconditional -- the current set, or nothing until the first refresh
+							const auto cur = s_gate_ptr_sets.find(pc);
+							EeHooks::SetGateRanges(pc, gr->second.reg,
+								cur != s_gate_ptr_sets.end() ? cur->second : std::vector<std::pair<u32, u32>>{{0xFFFFFFF0u, 0xFFFFFFF0u}});
+						}
+					}
 					if (std::find(s_man.nonfinal_gates.begin(), s_man.nonfinal_gates.end(), pc) != s_man.nonfinal_gates.end())
 						EeHooks::SetGateNonFinal(pc);
 				}
