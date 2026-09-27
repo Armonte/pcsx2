@@ -28,6 +28,7 @@ namespace EeHooks
 			u32 v0 = 0; // ResimGateRet
 			bool ab = false; // interleaved A/B: acts only on the rollback device's A/B "on" rollbacks
 			NativeFn native = nullptr;
+			bool nonfinal = false; // gates: act only on re-simulated frames that are not the rollback's last
 			u32 range_reg = 0;                         // gates: also require GPR[range_reg] (low word) in one of ranges
 			std::vector<std::pair<u32, u32>> ranges; //   [lo, hi); empty = unconditional
 		};
@@ -102,6 +103,17 @@ namespace EeHooks
 				return true;
 		return false;
 	}
+	void SetGateNonFinal(u32 pc)
+	{
+		{
+			std::lock_guard lk(s_mtx);
+			const auto it = s_hooks.find(Key(pc));
+			if (it == s_hooks.end())
+				return;
+			it->second.nonfinal = true;
+		}
+		Invalidate(pc);
+	}
 	void SetAB(u32 pc)
 	{
 		{
@@ -123,7 +135,13 @@ namespace EeHooks
 			if (const auto it = s_hooks.find(Key(pc)); it != s_hooks.end())
 				ab = it->second.ab, kind = it->second.kind;
 		}
-		if (kind == Kind::SkipCallResimNonFinal)
+		bool nonfinal = kind == Kind::SkipCallResimNonFinal;
+		{
+			std::lock_guard lk(s_mtx);
+			if (const auto it = s_hooks.find(Key(pc)); it != s_hooks.end())
+				nonfinal |= it->second.nonfinal;
+		}
+		if (nonfinal)
 			return ab ? RollbackDevice::ResimNonFinalABFlag() : RollbackDevice::ResimNonFinalFlag();
 		return ab ? RollbackDevice::ResimABFlag() : RollbackDevice::ResimulatingFlag();
 	}

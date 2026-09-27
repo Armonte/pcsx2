@@ -501,6 +501,7 @@ namespace GameRollback
 				std::vector<std::pair<u32, u32>> ranges;
 			};
 			std::map<u32, GateRange> gate_ranges;  // gate -> act only when reg (default a0) is in one of [lo, hi)
+			std::vector<u32> nonfinal_gates;       // gates acting only on non-final re-simulated frames
 			struct NativeDef
 			{
 				u32 addr;
@@ -860,6 +861,12 @@ namespace GameRollback
 							m->gate_values[a] = Get(c, "v0", 0);
 						if (IsAB(c))
 							m->ab_hooks.push_back(a);
+						if (c.is_map() && c.has_child("nonfinal"))
+						{
+							const ryml::csubstr nv = c["nonfinal"].val();
+							if (nv == "true" || nv == "1" || nv == "yes")
+								m->nonfinal_gates.push_back(a);
+						}
 						if (c.is_map() && Has(c, "in"))
 						{
 							static const char* regs[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4",
@@ -2651,6 +2658,8 @@ namespace GameRollback
 						EeHooks::AddResimGate(pc, EeHooks::OWNER_GAME);
 					if (const auto gr = s_man.gate_ranges.find(pc); gr != s_man.gate_ranges.end())
 						EeHooks::SetGateRanges(pc, gr->second.reg, gr->second.ranges);
+					if (std::find(s_man.nonfinal_gates.begin(), s_man.nonfinal_gates.end(), pc) != s_man.nonfinal_gates.end())
+						EeHooks::SetGateNonFinal(pc);
 				}
 				else if (c.actions.size() == 1 && !c.gate && !c.actions[0].ra.empty())
 				{
