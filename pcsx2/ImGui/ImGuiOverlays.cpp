@@ -1848,7 +1848,23 @@ void ImGuiManager::RenderOverlays()
 		const ImVec2 p0(io.x - ts.x - margin - 2.0f * spacing, margin), p1(io.x - margin, margin + ts.y + 2.0f * spacing);
 		ImDrawList* dl = ImGui::GetForegroundDrawList();
 		dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 170), 4.0f * scale);
-		dl->AddText(font, size, ImVec2(p0.x + spacing, p0.y + spacing), IM_COL32(255, 220, 90, 255), badge.c_str());
+		// line by line: the desync detector's line is green while in sync, red once a desync was detected
+		float y = p0.y + spacing;
+		for (size_t pos = 0; pos <= badge.size();)
+		{
+			size_t nl = badge.find('\n', pos);
+			if (nl == std::string::npos)
+				nl = badge.size();
+			const std::string_view line(badge.data() + pos, nl - pos);
+			ImU32 col = IM_COL32(255, 220, 90, 255);
+			if (line.find("DESYNC") != std::string_view::npos)
+				col = IM_COL32(255, 70, 70, 255);
+			else if (line.starts_with("sync OK") || line.find(": in sync") != std::string_view::npos)
+				col = IM_COL32(110, 230, 110, 255);
+			dl->AddText(font, size, ImVec2(p0.x + spacing, y), col, line.data(), line.data() + line.size());
+			y += size;
+			pos = nl + 1;
+		}
 	}
 	PcInput::DrawOverlay(); // creamybinder binder (PovertyCaster session input), on top
 }

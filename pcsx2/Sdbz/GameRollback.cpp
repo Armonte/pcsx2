@@ -421,6 +421,10 @@ namespace GameRollback
 				                                            // commit -> attach window: effect/sound RNG streams, ...)
 				Val onemore_decided;                        // the local one-more choice has been made
 				u32 onemore_choice = 0, retry_value = 1;    // choice word, its RETRY value
+				// the one-more menu as a vote: the local ○ is withheld and sent; once both votes are in, the host moves the
+				// menu cursor (a script ctx var) to the agreed option and confirms -- the menu stays live meanwhile
+				u32 vote_sig_off = 0, vote_cursor_var = 0, vote_retry_index = 0, vote_css_index = 1;
+				std::string vote_sig;
 				std::vector<ExprWrite> retry_writes, css_writes; // apply the agreed choice
 				// pre-attach hold (async-menus option B): between the commit and the attach, a frame where the game's
 				// load request list has pending requests skips the sim/render (jump at -> to), so every load costs the
@@ -1038,6 +1042,15 @@ namespace GameRollback
 						const auto om = Child(lk, "onemore");
 						m->link.onemore_decided = ParseVal(Child(om, "decided"));
 						m->link.onemore_choice = Get(om, "choice", 0);
+						if (Has(om, "vote"))
+						{
+							const auto vt = Child(om, "vote");
+							m->link.vote_sig_off = Get(vt, "sig_off", 0);
+							m->link.vote_sig = GetStr(vt, "sig");
+							m->link.vote_cursor_var = Get(vt, "cursor_var", 0);
+							m->link.vote_retry_index = Get(vt, "retry_index", 0);
+							m->link.vote_css_index = Get(vt, "css_index", 1);
+						}
 						m->link.retry_value = Get(om, "retry_value", 1);
 						if (Has(om, "retry_writes"))
 							for (const auto& c : Child(om, "retry_writes").children())
@@ -1341,10 +1354,12 @@ namespace GameRollback
 		bool s_remote_pick_valid = false;
 		std::vector<u32> s_commit_sel;           // our committed picks awaiting the peer's for verification
 		bool s_wait_hold = false;                // hold whole frames (no sim tick, no render) while waiting for the peer
-		bool s_choice_pending = false;           // our one-more choice is sent; the peer's is awaited (held frames)
 		s32 s_choice_mine = -1;
 		u32 s_attach_frames = 0;                 // frames spent at the attach barrier
 		u32 s_wait_frames = 0;                   // held frames while waiting for the peer (diagnostics)
+		u32 s_vote_vm = 0;                       // the one-more menu's script VM (latched by signature)
+		s32 s_vote_final = -1;                   // agreed one-more result once both votes are in (choice value)
+		u16 s_vote_prev = 0;
 		s32 s_remote_choice = -1;                // the peer's one-more choice (MSG_CHOICE)
 		bool s_attach_req = false, s_detach_req = false, s_onemore = false, s_choice_sent = false;
 		// from the battle commit / the agreed one-more choice until the attach: both ports read an identical neutral pad
@@ -1358,6 +1373,7 @@ namespace GameRollback
 		bool LinkPadRead(u32 player, u8* buf);          // menu phases: stream/feed; true = handled
 		void VlBegin();                                 // virtual load clock: open the pre-attach window
 		void LinkVerifyPicks();                         // mirror menus: our committed picks vs the peer's
+		void OneMoreOnTick(u32 vm);                     // latch the one-more menu script VM
 		void AiWaitRecordVm(u32 vm, u32 file);         // RETRY canon: remember AI script VMs (Seq_Init)
 		struct AiVm
 		{
@@ -1729,6 +1745,8 @@ namespace GameRollback
 						s_detach_req = false;
 						s_onemore = true;
 						s_choice_sent = false;
+						s_vote_final = -1;
+						s_vote_prev = 0;
 						s_remote_in.clear();
 						s_lphase = LinkPhase::Menu;
 						return false;
@@ -3115,6 +3133,7 @@ namespace GameRollback
 			{
 				EeHooks::AddCall(pc, [](u32) {
 					CssMirror::OnScriptTick(cpuRegs.GPR.n.a0.UL[0]);
+					OneMoreOnTick(cpuRegs.GPR.n.a0.UL[0]);
 					return EeHooks::Action::Continue;
 				}, EeHooks::OWNER_GAME);
 				s_link_hooks.push_back(pc);
@@ -3161,6 +3180,8 @@ namespace GameRollback
 			return static_cast<u32>(h ^ (h >> 32));
 		}
 		// Frame boundary. Returns true when this frame runs locally (menus / waiting).
+		std::string s_last_sync;   // the desync detector's latest verdict (kept for the menus after a battle)
+		u32 s_last_sync_battle = 0;
 		std::mutex s_badge_mtx;
 		std::string s_badge;
 		void LinkBadgeUpdate()
@@ -3176,20 +3197,43 @@ namespace GameRollback
 			std::string b;
 			if (s_lphase != LinkPhase::Off)
 			{
+				// line 1: who/where; in battle also the link, the rollback activity and what rollbacks cost
 				b = fmt::format("P{}", s_local + 1);
+				NetBridge::NetStats ns;
+				const bool battle = (s_lphase == LinkPhase::Battle || s_lphase == LinkPhase::Detaching) && NetBridge::GetStats(&ns);
 				if (s_wait_hold)
 					b += " | waiting for the other player";
-				else if (s_lphase == LinkPhase::Battle || s_lphase == LinkPhase::Detaching)
-				{
-					b += fmt::format(" | battle {}", s_battle_counter);
-					const std::string st = NetBridge::Status();
-					if (const size_t k = st.find("rollbacks "); k != std::string::npos)
-						b += fmt::format(" | rb {}", std::atoi(st.c_str() + k + 10));
-				}
+				else if (battle)
+					b += fmt::format(" | battle {} | frame {}", s_battle_counter, ns.frame);
 				else
 					b += CssMirror::InCss() ? " | character select" : " | menus";
-				if (const u32 ping = NetBridge::LinkPingMs())
-					b += fmt::format(" | ping {} ms", ping);
+				if (battle)
+				{
+					b += fmt::format(" | ping {} ms +-{} | input delay {}f | ahead {:+.1f}f", ns.ping_ms, ns.jitter_ms, ns.delay, ns.frames_ahead);
+					// the desync detector: cross-peer checksum compares of confirmed frames
+					s_last_sync = ns.desynced ?
+									  fmt::format("DESYNC at frame {} (checks {}/{} mismatched)", ns.desync_frame, ns.compares, ns.mismatches) :
+									  fmt::format("sync OK | {} checks, {} mismatches", ns.compares, ns.mismatches);
+					s_last_sync_battle = s_battle_counter;
+					b += "\n" + s_last_sync;
+					b += fmt::format("\nrollbacks {} (last {}f, {} frames resimulated) | stalls {}", ns.rollbacks,
+						ns.last_rollback_frames, ns.rollback_frames_total, ns.stalled);
+					RollbackDevice::Perf pf;
+					if (RollbackDevice::GetPerf(&pf))
+						b += fmt::format("\nrollback cost avg {:.2f} ms (load {:.2f}, resim {:.2f}) max {:.1f} | sim {:.2f} ms/f | "
+										 "frame {:.1f} ms p99 {} ({:.1f}% late)",
+							pf.avg_us / 1000.0, pf.avg_load_us / 1000.0, pf.avg_resim_us / 1000.0, pf.max_us / 1000.0, pf.sim_us / 1000.0,
+							pf.pace_avg_ms, pf.pace_p99_ms, pf.late_pct);
+				}
+				else
+				{
+					if (const u32 ping = NetBridge::LinkPingMs())
+						b += fmt::format(" | ping {} ms", ping);
+					b += fmt::format(" | input delay {}f", NetBridge::InputDelay());
+					if (s_last_sync_battle)
+						b += fmt::format("\nlast battle {}: {}", s_last_sync_battle,
+							s_last_sync.rfind("DESYNC", 0) == 0 ? s_last_sync : "in sync (" + s_last_sync.substr(10) + ")");
+				}
 			}
 			std::lock_guard lk(s_badge_mtx);
 			s_badge = std::move(b);
@@ -3224,43 +3268,50 @@ namespace GameRollback
 				{
 					s_menu_frame++;
 					CssMirror::Frame(s_menu_frame, [](const void* d, u32 n) { NetBridge::LinkSend(MSG_CSS, s_menu_frame, d, n); });
-					if (s_onemore && !s_choice_sent)
+					if (s_onemore)
 					{
 						s64 d = 0;
-						if (Eval(s_man.link.onemore_decided, 0, &d) && d != 0)
+						const bool decided = Eval(s_man.link.onemore_decided, 0, &d) && d != 0;
+						if (decided && !s_choice_sent)
 						{
-							// our player chose: send it, then hold the game's frames (no sim tick, so the menu cannot act on the
-							// choice yet) until the peer's arrives -- the emulator itself keeps running meanwhile
+							// the game confirmed before a vote was taken (vote support off / menu not latched): send it now and hold
+							// the game's frames until the peer's choice arrives
 							s_choice_mine = static_cast<s32>(Rd(s_man.link.onemore_choice));
 							NetBridge::LinkSend(MSG_CHOICE, s_menu_frame, &s_choice_mine, 4);
 							s_choice_sent = true;
-							s_choice_pending = true;
 						}
-					}
-					if (s_choice_pending)
-					{
-						s_wait_hold = s_remote_choice < 0;
+						if (!decided && s_choice_sent && s_remote_choice >= 0 && s_vote_final < 0)
+						{
+							// both votes in: RETRY iff both RETRY; the pad path now drives the menu there and confirms
+							const s32 rv = static_cast<s32>(s_man.link.retry_value);
+							s_vote_final = (s_choice_mine == rv && s_remote_choice == rv) ? rv : (rv ? 0 : 1);
+						}
+						s_wait_hold = decided && s_remote_choice < 0;
+						if (decided && s_remote_choice >= 0)
+						{
+							// both chose: both apply the agreed result (RETRY iff both RETRY)
+							const s32 mine = s_choice_mine;
+							const bool retry = mine == static_cast<s32>(s_man.link.retry_value) &&
+											   s_remote_choice == static_cast<s32>(s_man.link.retry_value);
+							ApplyWrites(retry ? s_man.link.retry_writes : s_man.link.css_writes);
+							s_pre_attach_neutral = retry; // RETRY: straight to the attach point with neutral pads
+							if (retry)
+							{
+								VlBegin();
+								ApplyWrites(s_man.link.commit_writes); // the RETRY -> attach window, like a commit
+								if (s_man.vs.state)
+									VsInit();
+							}
+							Console.WriteLn("GameRollback: link: one-more %s (mine %d, peer %d; %s, held %u frames)",
+								retry ? "RETRY" : "CHARACTER SELECT", mine, s_remote_choice, s_vote_final >= 0 ? "voted" : "confirmed first",
+								s_wait_frames);
+							s_wait_frames = 0;
+							s_remote_choice = -1;
+							s_vote_final = -1;
+							s_onemore = false;
+						}
 						if (s_wait_hold)
 							return true;
-						// both chose: both apply the agreed result (RETRY iff both RETRY)
-						s_choice_pending = false;
-						const s32 mine = s_choice_mine;
-						const bool retry = mine == static_cast<s32>(s_man.link.retry_value) &&
-										   s_remote_choice == static_cast<s32>(s_man.link.retry_value);
-						ApplyWrites(retry ? s_man.link.retry_writes : s_man.link.css_writes);
-						s_pre_attach_neutral = retry; // RETRY: straight to the attach point with neutral pads
-						if (retry)
-						{
-							VlBegin();
-							ApplyWrites(s_man.link.commit_writes); // the RETRY -> attach window, like a commit
-							if (s_man.vs.state)
-								VsInit();
-						}
-						Console.WriteLn("GameRollback: link: one-more %s (mine %d, peer %d; waited %u frames for the peer)",
-							retry ? "RETRY" : "CHARACTER SELECT", mine, s_remote_choice, s_wait_frames);
-						s_wait_frames = 0;
-						s_remote_choice = -1;
-						s_onemore = false;
 					}
 					if (!s_attach_req)
 						return true;
@@ -3338,6 +3389,8 @@ namespace GameRollback
 						s_detach_req = false;
 						s_onemore = true; // match end: the one-more menu follows
 						s_choice_sent = false;
+						s_vote_final = -1;
+						s_vote_prev = 0;
 						s_remote_in.clear();
 						s_lphase = LinkPhase::Menu;
 						return true;
@@ -3351,6 +3404,55 @@ namespace GameRollback
 		// Menu phases: the local player's port streams out, the remote player's port is fed from the stream (holding
 		// the last input on underrun keeps autorepeat identical). The one-more menu reads port 0 only: there every peer
 		// feeds its LOCAL player into port 0, so both drive their own cursor.
+		// Seq_TickThreads hook: latch the one-more menu's script VM by its signature string
+		void OneMoreOnTick(u32 vm)
+		{
+			const auto& L = s_man.link;
+			if (!L.vote_cursor_var || L.vote_sig.empty())
+				return;
+			const u32 t0 = Rd(vm + 12), base = t0 ? Rd(t0 + 92) : 0;
+			if (base && std::memcmp(&eeMem->Main[(base + L.vote_sig_off) & RAM_MASK], L.vote_sig.data(), L.vote_sig.size()) == 0)
+				s_vote_vm = vm;
+		}
+		// port 0 of the one-more menu: our ○ becomes a vote (withheld, sent); with both votes the host drives the cursor
+		void OneMoreVotePad(u8* buf)
+		{
+			const auto& L = s_man.link;
+			s64 d = 0;
+			if (!L.vote_cursor_var || !s_vote_vm || (Eval(L.onemore_decided, 0, &d) && d != 0))
+				return;
+			constexpr u16 OK = 0x20, UP = 0x1000, DOWN = 0x4000, LEFT = 0x8000, RIGHT = 0x2000;
+			u8 raw[6];
+			ReportToInput(buf, raw);
+			u16 b = static_cast<u16>((raw[0] << 8) | raw[1]);
+			const u16 pressed = static_cast<u16>(b & ~s_vote_prev);
+			s_vote_prev = b;
+			const u32 vars = Rd(Rd(s_vote_vm - 8 + 0x28));
+			if (!vars)
+				return;
+			const u32 cursor = Rd(vars + 4 * L.vote_cursor_var);
+			if (s_vote_final >= 0)
+			{
+				// both voted: move to the agreed option, then confirm (one press per two frames)
+				const u32 target = s_vote_final == static_cast<s32>(L.retry_value) ? L.vote_retry_index : L.vote_css_index;
+				b = (s_menu_frame & 1) ? 0 : (cursor != target ? DOWN : OK);
+			}
+			else if (!s_choice_sent)
+			{
+				if (pressed & OK)
+				{
+					s_choice_mine = cursor == L.vote_retry_index ? static_cast<s32>(L.retry_value) : (L.retry_value ? 0 : 1);
+					NetBridge::LinkSend(MSG_CHOICE, s_menu_frame, &s_choice_mine, 4);
+					s_choice_sent = true;
+					Console.WriteLn("GameRollback: link: one-more vote %s sent", cursor == L.vote_retry_index ? "RETRY" : "CHARACTER SELECT");
+				}
+				b &= static_cast<u16>(~OK);
+			}
+			else
+				b &= static_cast<u16>(~(OK | UP | DOWN | LEFT | RIGHT)); // voted: the menu stays live, the vote stays put
+			const u8 x[6] = {static_cast<u8>(b >> 8), static_cast<u8>(b), 0x80, 0x80, 0x80, 0x80};
+			BuildReport(x, buf);
+		}
 		bool LinkPadRead(u32 player, u8* buf)
 		{
 			if (player > 1)
@@ -3404,6 +3506,7 @@ namespace GameRollback
 				}
 				else if (s_local != 0 && s_live_valid[s_local])
 					std::memcpy(buf, s_live_report[s_local], PAD_REPORT);
+				OneMoreVotePad(buf);
 				return true;
 			}
 			if (player == local_port)
@@ -3520,7 +3623,8 @@ namespace GameRollback
 					s_net = false;
 					s_battle_counter = 0;
 					s_onemore = s_attach_req = s_detach_req = false;
-					s_wait_hold = s_choice_pending = false;
+					s_wait_hold = false;
+					s_vote_final = -1;
 					s_attach_frames = 0;
 					s_commit_sel.clear();
 					s_remote_in.clear();

@@ -1080,6 +1080,39 @@ namespace RollbackDevice
 		}
 	}
 
+	bool GetPerf(Perf* out)
+	{
+		std::lock_guard lk(s_mtx);
+		if (s_mode == Mode::Off)
+			return false;
+		const u64 n = s_rollbacks;
+		out->rollbacks = n;
+		out->last_us = s_last_rollback_us;
+		out->max_us = s_max_rollback_us;
+		out->avg_us = n ? s_sum_rollback_us / n : 0;
+		out->avg_load_us = n ? s_sum_load_us / n : 0;
+		const u64 other = s_sum_ref_us + s_sum_load_us + s_sum_cap_us + s_sum_cmp_us;
+		out->avg_resim_us = n ? (s_sum_rollback_us > other ? s_sum_rollback_us - other : 0) / n : 0;
+		out->sim_us = s_sim_frames ? s_sum_sim_us / s_sim_frames : 0;
+		if (s_pace_frames)
+		{
+			out->pace_avg_ms = s_pace_sum_us / 1000.0 / s_pace_frames;
+			out->pace_max_ms = s_pace_max_us / 1000.0;
+			out->late_pct = 100.0 * s_pace_over / s_pace_frames;
+			u64 acc = 0;
+			for (u32 b = 0; b <= 100; b++)
+			{
+				acc += s_pace_hist[b];
+				if (acc * 100 >= s_pace_frames * 99)
+				{
+					out->pace_p99_ms = b;
+					break;
+				}
+			}
+		}
+		return true;
+	}
+
 	std::string Status()
 	{
 		std::lock_guard lk(s_mtx);
