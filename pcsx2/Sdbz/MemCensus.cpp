@@ -32,7 +32,7 @@ namespace MemCensus
 			u64 fields[4] = {0, 0, 0, 0}; // 16-byte buckets of the field offset (up to 4 KiB)
 		};
 		std::mutex s_mtx;
-		std::map<u64, Stat> s_stats; // (phase << 40) | (store << 32) | pc
+		std::map<std::pair<u64, u32>, Stat> s_stats; // ((phase << 40) | (store << 32) | pc, $ra = caller of a leaf)
 
 		void ResetRecompiler()
 		{
@@ -80,7 +80,7 @@ namespace MemCensus
 			const Range& r = s_ranges[i];
 			if (addr - r.lo >= r.hi - r.lo)
 				continue;
-			Stat& s = s_stats[(static_cast<u64>(ph) << 40) | (static_cast<u64>(store) << 32) | pc];
+			Stat& s = s_stats[{(static_cast<u64>(ph) << 40) | (static_cast<u64>(store) << 32) | pc, cpuRegs.GPR.n.ra.UL[0]}];
 			s.count++;
 			s.lo = std::min(s.lo, addr);
 			s.hi = std::max(s.hi, addr);
@@ -96,18 +96,19 @@ namespace MemCensus
 	{
 		static const char* phases[] = {"other", "frame_begin", "capture", "load", "synctest", "resim", "resim_capture", "sim", "render"};
 		std::lock_guard lk(s_mtx);
-		std::string out = "# MemCensus: pc rw phase count range lo_addr hi_addr fields(field offsets touched, 16-byte buckets)\n";
+		std::string out = "# MemCensus: pc rw phase count range lo_addr hi_addr fields(field offsets touched, 16-byte buckets) ra\n";
 		for (u32 i = 0; i < s_ranges.size(); i++)
 			out += fmt::format("# range {}: {:08X}-{:08X} stride {:X}\n", i, s_ranges[i].lo, s_ranges[i].hi, s_ranges[i].stride);
-		for (const auto& [k, s] : s_stats)
+		for (const auto& [kk, s] : s_stats)
 		{
+			const u64 k = kk.first;
 			const u32 pc = static_cast<u32>(k), store = (k >> 32) & 1, ph = static_cast<u32>(k >> 40);
 			std::string f;
 			for (u32 b = 0; b < 256; b++)
 				if (s.fields[b >> 6] & (1ull << (b & 63)))
 					f += fmt::format("{}{:X}", f.empty() ? "" : ",", b * 16);
-			out += fmt::format("{:08X} {} {} {} {} {:08X} {:08X} {}\n", pc, store ? "W" : "R", ph < 9 ? phases[ph] : "?", s.count, s.range, s.lo,
-				s.hi, f);
+			out += fmt::format("{:08X} {} {} {} {} {:08X} {:08X} {} {:08X}\n", pc, store ? "W" : "R", ph < 9 ? phases[ph] : "?", s.count, s.range,
+				s.lo, s.hi, f.empty() ? "-" : f, kk.second);
 		}
 		return out;
 	}
