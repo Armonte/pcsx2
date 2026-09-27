@@ -45,5 +45,7 @@ namespace GameRollback
 	void PollAutoStart(); // CPU thread, each presented frame: launcher environment (PS2RB_*), once
 
 	std::string Status();
+	// netplay session badge for the on-screen overlay ("P1 | battle 3 | ping 105 ms"), empty outside a session. Any thread.
+	std::string LinkBadge();
 	void SetFileWatch(bool on);
 } // namespace GameRollback
