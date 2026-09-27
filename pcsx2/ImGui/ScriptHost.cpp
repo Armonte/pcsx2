@@ -748,7 +748,12 @@ namespace
 		if (++s_pollCounter < 30)
 			return;
 		s_pollCounter = 0;
-		if (ResolveScriptPath() != s_path)
+		const std::string resolved = ResolveScriptPath();
+		// a transient empty serial (disc read errors under host memory pressure) is not a game change: tearing the
+		// script down mid-session would drop its hooks and state. Only a different, known game switches.
+		if (resolved.empty() && !s_path.empty() && VMManager::HasValidVM())
+			return;
+		if (resolved != s_path)
 		{
 			Console.WriteLn("[Script] game changed -> switching script");
 			LoadScript();
