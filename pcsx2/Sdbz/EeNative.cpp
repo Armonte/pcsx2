@@ -168,6 +168,84 @@ namespace EeNative
 			return true;
 		}
 
+		// 0x1AD5A0 CHitBlkManager_ResetQueriedCellFlags(a0 = mgr): for each grid cell (rows +0x30, cols +0x2C, flags
+		// array +0x14) with bit0 set: clear it, then for each mesh in that cell's slot list (+0x18, stride +0x0C slots,
+		// up to the first NULL): +200 = (+200 & 0xFFEDF7FF) | 0x13000. The EE code scans every cell each call.
+		// Cycles = exactly what the recompiler charges for the executed blocks (block starts/cycles from EeBlockProf):
+		// entry 5, first row 11 (+5 per further row), first column 13 (+12 per further), not flagged 7, flagged 13 +
+		// (non-empty list: 1 + 17 per mesh + 2) + 6, row end 7, exit 3 + 2. rows/cols <= 0 take unprofiled paths: decline.
+		bool HitBlkResetQueriedCellFlags(Mode mode)
+		{
+			if (!ModeAllows(mode))
+				return false;
+			const u32 mgr = Gpr32(A0);
+			const u8* m = Ram(mgr, 0x34);
+			if (!m)
+				return false;
+			auto rd = [](const u8* p, u32 off) { u32 v; std::memcpy(&v, p + off, 4); return v; };
+			const s32 rows = static_cast<s32>(rd(m, 0x30)), cols = static_cast<s32>(rd(m, 0x2C));
+			const u32 flags = rd(m, 0x14), slots = rd(m, 0x18), stride = rd(m, 0x0C);
+			if (rows <= 0 || cols <= 0 || rows > 64 || cols > 64)
+				return false;
+			u8* fl = Ram(flags, static_cast<u32>(rows * cols) * 4);
+			if (!fl)
+				return false;
+			// validate every list we will walk before writing anything (decline = no side effects)
+			for (s32 c = 0; c < rows * cols; c++)
+			{
+				u32 f;
+				std::memcpy(&f, fl + 4 * c, 4);
+				if (!(f & 1))
+					continue;
+				for (u32 k = 0;; k++)
+				{
+					const u8* sp = Ram(slots + 4 * (static_cast<u32>(c) * stride + k), 4);
+					if (!sp || k > 4096)
+						return false;
+					const u32 node = rd(sp, 0);
+					if (!node)
+						break;
+					if (!Ram(node + 200, 4))
+						return false;
+				}
+			}
+			u64 cyc = 5 + 11 + 5 * static_cast<u64>(rows - 1) + 3 + 2;
+			for (s32 r = 0; r < rows; r++)
+			{
+				cyc += 13 + 12 * static_cast<u64>(cols - 1) + 7;
+				for (s32 col = 0; col < cols; col++)
+				{
+					const u32 c = static_cast<u32>(col + r * cols);
+					u32 f;
+					std::memcpy(&f, fl + 4 * c, 4);
+					if (!(f & 1))
+					{
+						cyc += 7;
+						continue;
+					}
+					f &= 0xFFFFFFFEu;
+					std::memcpy(fl + 4 * c, &f, 4);
+					cyc += 13 + 6;
+					u32 k = 0;
+					for (;; k++)
+					{
+						const u32 node = rd(Ram(slots + 4 * (c * stride + k), 4), 0);
+						if (!node)
+							break;
+						u8* p = Ram(node + 200, 4);
+						u32 v;
+						std::memcpy(&v, p, 4);
+						v = (v & 0xFFEDF7FFu) | 0x13000u;
+						std::memcpy(p, &v, 4);
+					}
+					if (k)
+						cyc += 1 + 17 * static_cast<u64>(k) + 2;
+				}
+			}
+			cpuRegs.cycle += cyc;
+			return true;
+		}
+
 		// ---- registry: one static trampoline per (impl, mode) so the JIT can call it directly ----
 		template <bool (*Impl)(Mode), Mode M>
 		bool Tramp()
@@ -184,6 +262,7 @@ namespace EeNative
 			NATIVE_IMPL("vu0_mat44_mul", Vu0Mat44Mul),
 			NATIVE_IMPL("mat44_copy", Mat44Copy),
 			NATIVE_IMPL("vu0_mat44_load_identity", Vu0Mat44LoadIdentity),
+			NATIVE_IMPL("sdbz_hitblk_reset_queried_cells", HitBlkResetQueriedCellFlags),
 		};
 #undef NATIVE_IMPL
 	} // namespace
