@@ -33,6 +33,7 @@ namespace EeHooks
 		SkipCallResim,
 		SkipCallAlways,
 		SkipCallResimNonFinal, // skipped on re-simulated frames except the last one (derived-output recomputes)
+		Native,                // direct call of a native (C++) implementation; true = done (pc = $ra), false = run the EE code
 	};
 	enum class Action : u8
 	{
@@ -63,6 +64,11 @@ namespace EeHooks
 	void AddSkipCall(u32 site, bool always, Owner owner = OWNER_SCRIPT);
 	void AddSkipCallNonFinal(u32 site, Owner owner = OWNER_SCRIPT); // skipped on re-simulated frames but the last
 	void AddCall(u32 pc, Handler handler, Owner owner = OWNER_SCRIPT);
+	// Native: the recompiler emits a direct call of fn at the block entry (no lookup); fn returns true when it performed
+	// the function (it must leave the EE state exactly as the EE code would), false to run the EE code instead.
+	using NativeFn = bool (*)();
+	void AddNative(u32 pc, NativeFn fn, Owner owner = OWNER_SCRIPT);
+	NativeFn GetNative(u32 pc);
 	// Same, but the handler only runs when $ra is one of ra_filter (callers' return addresses): the comparisons are
 	// emitted natively, so other callers of a hot function pay a few compares, not a C++ call.
 	void AddCallFiltered(u32 pc, Handler handler, std::vector<u32> ra_filter, Owner owner = OWNER_SCRIPT);

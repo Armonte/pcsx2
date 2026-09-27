@@ -937,6 +937,7 @@ set(pcsx2ImGuiSources
 	Sdbz/PageSnapshotRing.cpp
 	Sdbz/EeBlockProf.cpp
 	Sdbz/EeCallGraph.cpp
+	Sdbz/EeNative.cpp
 	Sdbz/MemCensus.cpp
 	Sdbz/RbProfiler.cpp
 	Sdbz/RollbackDevice.cpp
@@ -966,6 +967,7 @@ set(pcsx2ImGuiHeaders
 	Sdbz/PageSnapshotRing.h
 	Sdbz/EeBlockProf.h
 	Sdbz/EeCallGraph.h
+	Sdbz/EeNative.h
 	Sdbz/MemCensus.h
 	Sdbz/RbProfiler.h
 	Sdbz/RollbackDevice.h

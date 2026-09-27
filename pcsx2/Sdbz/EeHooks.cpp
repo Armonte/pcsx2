@@ -27,6 +27,7 @@ namespace EeHooks
 			std::vector<u32> ra_filter;
 			u32 v0 = 0; // ResimGateRet
 			bool ab = false; // interleaved A/B: acts only on the rollback device's A/B "on" rollbacks
+			NativeFn native = nullptr;
 			u32 range_reg = 0;                         // gates: also require GPR[range_reg] (low word) in one of ranges
 			std::vector<std::pair<u32, u32>> ranges; //   [lo, hi); empty = unconditional
 		};
@@ -133,6 +134,18 @@ namespace EeHooks
 		return it == s_hooks.end() ? 0 : it->second.v0;
 	}
 	void AddCall(u32 pc, Handler handler, Owner owner) { Set(pc, {Kind::Call, std::move(handler), owner}); }
+	void AddNative(u32 pc, NativeFn fn, Owner owner)
+	{
+		Hook h{Kind::Native, {}, owner};
+		h.native = fn;
+		Set(pc, std::move(h));
+	}
+	NativeFn GetNative(u32 pc)
+	{
+		std::lock_guard lk(s_mtx);
+		const auto it = s_hooks.find(Key(pc));
+		return it == s_hooks.end() ? nullptr : it->second.native;
+	}
 	void AddCallFiltered(u32 pc, Handler handler, std::vector<u32> ra_filter, Owner owner)
 	{
 		Set(pc, {Kind::Call, std::move(handler), owner, std::move(ra_filter)});

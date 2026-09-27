@@ -189,6 +189,14 @@ static void execI()
 			cpuRegs.pc += 4; // the delay slot runs next, then execution continues after the call
 			return;
 		}
+		if (hook == EeHooks::Kind::Native)
+		{
+			if (const EeHooks::NativeFn fn = EeHooks::GetNative(cpuRegs.pc); fn && fn())
+			{
+				cpuRegs.pc = cpuRegs.GPR.n.ra.UL[0];
+				return;
+			}
+		}
 		if (hook == EeHooks::Kind::Call)
 		{
 			switch (EeHooks::RunCall(cpuRegs.pc))
