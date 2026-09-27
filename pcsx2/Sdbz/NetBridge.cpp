@@ -4,6 +4,8 @@
 #include "Sdbz/NetBridge.h"
 #include "Sdbz/pc_ps2_bridge.h"
 
+#include <cstddef>
+
 #include "Config.h"
 
 #include "common/Console.h"
@@ -506,6 +508,7 @@ namespace NetBridge
 		plan->load_frame = -1;
 		plan->rollback_advances = 0;
 		plan->steps.clear();
+		plan->confirmed = -1;
 		plan->pre_saves.clear();
 		s_save_to_bridge.clear();
 		if (s_cfg.mode == Mode::JournalReplay)
@@ -597,6 +600,16 @@ namespace NetBridge
 					std::fprintf(s_journal, " %02x", st.inputs[k / 6][k % 6]);
 				std::fprintf(s_journal, "\n");
 			}
+		}
+		// revision 3: frames the session can never load again (all peers' inputs real); unknown on older DLLs, without a
+		// peer, or while a peer is disconnected (the session holds confirmation back then)
+		if (s_session && p_get_stats)
+		{
+			pcb_stats st = {};
+			st.struct_size = sizeof(st);
+			if (p_get_stats(s_session, &st) && st.struct_size >= offsetof(pcb_stats, prediction_depth) + sizeof(st.prediction_depth) &&
+				st.connected_peers > 0 && !st.remote_disconnected)
+				plan->confirmed = st.current_frame - 1 - st.prediction_depth;
 		}
 		return n;
 	}

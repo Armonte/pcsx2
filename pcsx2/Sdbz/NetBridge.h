@@ -59,6 +59,7 @@ namespace NetBridge
 		u32 rollback_advances = 0;
 		std::vector<Step> steps; // ADVANCE events in order, each with its SAVE index
 		std::vector<s32> pre_saves; // SAVEs before any ADVANCE (the session's frame-0 save): answer with the current state
+		s32 confirmed = -1; // newest netcode frame run on real inputs from every peer (never loaded again); -1 = unknown
 	};
 
 	bool Start(const Config& cfg, Host host, std::string* error);

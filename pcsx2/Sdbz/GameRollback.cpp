@@ -1846,6 +1846,9 @@ namespace GameRollback
 				}
 			}
 			RollbackDevice::SetExternalRollback(s_net_plan.rollback_advances);
+			// re-simulated saves of confirmed frames are never loaded again: the device keeps only their checksum
+			if (s_net_plan.confirmed >= 0)
+				RollbackDevice::SetConfirmedFrame(s_net_plan.confirmed + s_net_frame_base + 1);
 			return true;
 		}
 
