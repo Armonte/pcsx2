@@ -1334,6 +1334,7 @@ namespace GameRollback
 		bool LinkTick();                                // frame boundary: true = this frame runs without netcode
 		bool LinkPadRead(u32 player, u8* buf);          // menu phases: stream/feed; true = handled
 		void VlBegin();                                 // virtual load clock: open the pre-attach window
+		void LinkVerifyPicks();                         // mirror menus: our committed picks vs the peer's
 		void AiWaitRecordVm(u32 vm, u32 file);         // RETRY canon: remember AI script VMs (Seq_Init)
 		struct AiVm
 		{
