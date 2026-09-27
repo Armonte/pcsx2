@@ -99,6 +99,10 @@ namespace RollbackDevice
 	void SetLevers(bool host_vsync, bool park_sync, bool skip_iop);
 	bool SkipHostVSync(); // IsResimulating() && host_vsync
 	bool SkipIop();       // IsResimulating() && skip_iop
+	// IsResimulating() && skip_iop && quiet_iop: with the IOP frozen, the EE event test neither schedules event checks
+	// for it nor runs its event test (those checks found nothing to do and cost ~25% of re-simulation time)
+	bool QuietIop();
+	void SetQuietIop(bool on);
 	// Render DMA sink: while re-simulating, VIF1 / GIF DMA kicks complete at once without transferring anything, so
 	// nothing a re-simulated frame draws reaches VU1 or the GS (duplicate packets would corrupt the GS; the work is
 	// wasted anyway). Generic for every game; on by default.

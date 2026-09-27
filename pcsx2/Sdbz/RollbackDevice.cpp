@@ -12,6 +12,7 @@
 #include "Counters.h"
 
 #include "common/Console.h"
+#include "common/Error.h"
 #include "common/FileSystem.h"
 #include "common/Timer.h"
 #include "Sdbz/CpuTimer.h"
@@ -723,6 +724,16 @@ namespace RollbackDevice
 	}
 	bool SkipHostVSync() { return IsResimulating() && s_lever_host_vsync.load(std::memory_order_relaxed); }
 	bool SkipIop() { return IsResimulating() && s_lever_iop.load(std::memory_order_relaxed); }
+	namespace
+	{
+		std::atomic<bool> s_lever_quiet_iop{false};
+	}
+	bool QuietIop() { return SkipIop() && s_lever_quiet_iop.load(std::memory_order_relaxed); }
+	void SetQuietIop(bool on)
+	{
+		s_lever_quiet_iop.store(on, std::memory_order_relaxed);
+		Console.WriteLn("RollbackDevice: lever quiet_iop=%d", on);
+	}
 
 	// Presentation pacing: host time between consecutive presented vsyncs (after the frame limiter) -- what the
 	// player sees. Counted only while the device runs.
@@ -1085,10 +1096,17 @@ namespace RollbackDevice
 	{
 		std::lock_guard lk(s_mtx);
 		u32 n = 0;
-		auto write = [](const std::string& path, auto&& body) {
-			std::FILE* fp = FileSystem::OpenCFile(path.c_str(), "wb");
+		auto write = [](std::string path, auto&& body) {
+#ifdef _WIN32
+			std::replace(path.begin(), path.end(), '/', '\\');
+#endif
+			Error err;
+			std::FILE* fp = FileSystem::OpenCFile(path.c_str(), "wb", &err);
 			if (!fp)
+			{
+				Console.Error("RollbackDevice: desync dump: cannot write %s: %s", path.c_str(), err.GetDescription().c_str());
 				return false;
+			}
 			const bool ok = body(fp);
 			std::fclose(fp);
 			return ok;

@@ -404,7 +404,10 @@ __fi void _cpuEventTest_Shared()
 		EEsCycle += cpuRegs.cycle - EEoCycle;
 	EEoCycle = cpuRegs.cycle;
 
-	if (EEsCycle > 0)
+	// Rollback re-simulation with the IOP frozen (quiet_iop): nothing to run, test or schedule for it
+	const bool quiet_iop = RollbackDevice::QuietIop();
+
+	if (EEsCycle > 0 && !quiet_iop)
 		iopEventAction = true;
 
 	if (iopEventAction)
@@ -417,7 +420,8 @@ __fi void _cpuEventTest_Shared()
 		iopEventAction = false;
 	}
 
-	iopEventTest();
+	if (!quiet_iop) [[likely]]
+		iopEventTest();
 
 	if (cpuTestCycle(nextStartCounter, nextDeltaCounter))
 	{
@@ -455,8 +459,12 @@ __fi void _cpuEventTest_Shared()
 	// ---- Schedule Next Event Test --------------
 	const float mutiplier = static_cast<float>(PS2CLK) / static_cast<float>(PSXCLK);
 	const int nextIopEventDeta = ((psxRegs.iopNextEventCycle - psxRegs.cycle) * mutiplier);
+	if (quiet_iop)
+	{
+		// no IOP-driven event checks: the next one is whatever the EE itself has scheduled (counters, DMA, timers)
+	}
 	// 8 or more cycles behind and there's an event scheduled
-	if (EEsCycle >= nextIopEventDeta)
+	else if (EEsCycle >= nextIopEventDeta)
 	{
 		// EE's running way ahead of the IOP still, so we should branch quickly to give the
 		// IOP extra timeslices in short order.
