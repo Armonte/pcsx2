@@ -427,6 +427,8 @@ namespace GameRollback
 				u32 pend_list = 0, pend_pool = 0, pend_done_bit = 0x100, pend_next_off = 8, pend_sentinel = 1;
 				std::vector<std::pair<u32, u32>> hold_jumps;
 				std::vector<u32> hold_wait_to;              // per jump: target while waiting for the peer (0 = same as `to`)
+				u32 present_at = 0, present_to = 0;         // held frames skip the buffer flip (+ back-buffer clear): the last
+				                                            // complete frame stays on screen instead of stale buffers flickering
 				// virtual load clock (pre-attach window): the game's loader sees each read complete a FIXED number of
 				// loader ticks after it was issued (base + sectors / sectors_per_tick), identical on both peers, so the
 				// VS screen keeps animating while the disc works. A frame is held only when the virtual deadline has
@@ -931,6 +933,11 @@ namespace GameRollback
 									m->link.hold_jumps.emplace_back(Get(c, "at", 0), Get(c, "to", 0));
 									m->link.hold_wait_to.push_back(Get(c, "wait_to", 0));
 								}
+						if (Has(hd, "present_skip"))
+						{
+							m->link.present_at = Get(Child(hd, "present_skip"), "at", 0);
+							m->link.present_to = Get(Child(hd, "present_skip"), "to", 0);
+						}
 						if (Has(hd, "virtual"))
 						{
 							const auto vl = Child(hd, "virtual");
@@ -3090,6 +3097,16 @@ namespace GameRollback
 					return EeHooks::Action::Continue;
 				}, EeHooks::OWNER_GAME);
 				s_link_hooks.push_back(pc);
+			}
+			if (L.present_at && L.present_to)
+			{
+				EeHooks::AddCall(L.present_at, [](u32) {
+					if (!s_hold_frame)
+						return EeHooks::Action::Continue;
+					cpuRegs.pc = s_man.link.present_to; // no flip, no clear; the vblank wait still paces the frame
+					return EeHooks::Action::Jump;
+				}, EeHooks::OWNER_GAME);
+				s_link_hooks.push_back(L.present_at);
 			}
 			if (const u32 pc = CssMirror::TickHookPc())
 			{
