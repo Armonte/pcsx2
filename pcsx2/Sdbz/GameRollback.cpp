@@ -442,6 +442,21 @@ namespace GameRollback
 				} vload;
 			} link;
 			CssMirror::Config css_mirror; // link.css_mirror
+			// link.fx_canon: effect-pool free lists rebuilt in their pool-init order at every attach (FUC notes/RETRY_CANON.md)
+			struct FreeList
+			{
+				u32 head = 0, stride = 0;
+			};
+			bool fx_canon = false;
+			std::vector<FreeList> fx_dlists, fx_slists; // doubly linked FIFO {1, last, first} / singly linked LIFO (top = highest)
+			// link.ai_wait_canon: AI-script "wait for FIGHT or N frames" countdowns restarted at the attach
+			struct AiWaitLoop
+			{
+				u32 set = 0, yield_pc = 0, reg = 20, value = 600;
+			};
+			bool ai_wait_canon = false;
+			std::vector<AiWaitLoop> ai_wait_loops;
+			std::vector<u8> ai_wait_set_sig, ai_wait_yield_sig;
 			u32 script_hook = 0;
 			int script_file_reg = 5; // a1
 			std::vector<ScriptPatchGroup> script_patches;
@@ -504,6 +519,13 @@ namespace GameRollback
 				return {};
 			const ryml::csubstr v = n[ryml::to_csubstr(key)].val();
 			return std::string(v.str, v.len);
+		}
+		std::vector<u8> ParseHex(const std::string& h)
+		{
+			std::vector<u8> v;
+			for (size_t i = 0; i + 1 < h.size(); i += 2)
+				v.push_back(static_cast<u8>(std::strtoul(h.substr(i, 2).c_str(), nullptr, 16)));
+			return v;
 		}
 		bool Has(const ryml::ConstNodeRef& n, const char* key) { return n.is_map() && n.has_child(ryml::to_csubstr(key)); }
 		ryml::ConstNodeRef Child(const ryml::ConstNodeRef& n, const char* key) { return n[ryml::to_csubstr(key)]; }
@@ -920,6 +942,25 @@ namespace GameRollback
 							V.stall_to = Get(vl, "stall_to", 0);
 						}
 					}
+					if (Has(lk, "fx_canon"))
+					{
+						const auto fx = Child(lk, "fx_canon");
+						m->fx_canon = Get(fx, "enabled", 1) != 0;
+						for (const char* k : {"dlists", "slists"})
+							if (Has(fx, k))
+								for (const auto& c : Child(fx, k).children())
+									(k[0] == 'd' ? m->fx_dlists : m->fx_slists).push_back({Get(c, "head", 0), Get(c, "stride", 0)});
+					}
+					if (Has(lk, "ai_wait_canon"))
+					{
+						const auto aw = Child(lk, "ai_wait_canon");
+						m->ai_wait_canon = Get(aw, "enabled", 1) != 0;
+						m->ai_wait_set_sig = ParseHex(GetStr(aw, "set_sig"));
+						m->ai_wait_yield_sig = ParseHex(GetStr(aw, "yield_sig"));
+						if (Has(aw, "loops"))
+							for (const auto& c : Child(aw, "loops").children())
+								m->ai_wait_loops.push_back({Get(c, "set", 0), Get(c, "yield_pc", 0), Get(c, "reg", 20), Get(c, "value", 600)});
+					}
 					if (Has(lk, "css_mirror"))
 					{
 						// async mirror character select (CssMirror.h; FUC notes/CSS_MIRROR_RE.md)
@@ -1288,6 +1329,7 @@ namespace GameRollback
 		bool LinkTick();                                // frame boundary: true = this frame runs without netcode
 		bool LinkPadRead(u32 player, u8* buf);          // menu phases: stream/feed; true = handled
 		void VlBegin();                                 // virtual load clock: open the pre-attach window
+		void AiWaitRecordVm(u32 vm, u32 file);         // RETRY canon: remember AI script VMs (Seq_Init)
 		void InstallLinkHooks();
 		void RemoveLinkHooks();
 		void DoStop();
@@ -1821,10 +1863,11 @@ namespace GameRollback
 				}, EeHooks::OWNER_GAME);
 				s_session_hooks.push_back(fb.at);
 			}
-			if (s_man.script_hook && !s_man.script_patches.empty())
+			if (s_man.script_hook && (!s_man.script_patches.empty() || s_man.link.ai_wait_canon))
 			{
 				EeHooks::AddCall(s_man.script_hook, [](u32) {
 					const u32 file = cpuRegs.GPR.r[s_man.script_file_reg].UL[0];
+					AiWaitRecordVm(cpuRegs.GPR.n.a0.UL[0], file);
 					for (const auto& grp : s_man.script_patches)
 					{
 						bool all = !grp.patches.empty();
@@ -2653,6 +2696,7 @@ namespace GameRollback
 				Wr(s_man.link.seed_addr, s_local == 0 ? mine[sel.size()] : s_remote_pick[sel.size()]);
 			s_remote_pick_valid = false;
 			s_pre_attach_neutral = true;
+			s_ai_vms.clear(); // a new battle loads new AI scripts
 			VlBegin();
 			// the commit -> attach window must run identically: reset what the async menus let drift (the virtual
 			// audio clock restarts from its canonical empty state, like at every rollback start)
@@ -2679,6 +2723,102 @@ namespace GameRollback
 			}
 			return n;
 		}
+		// ---- RETRY re-attach canonicalization (FUC notes/RETRY_CANON.md) ----
+		struct AiVm
+		{
+			u32 vm = 0, file = 0;
+			std::vector<const Manifest::AiWaitLoop*> loops;
+		};
+		std::vector<AiVm> s_ai_vms; // AI script VMs started since the last commit (recorded at Seq_Init)
+		void AiWaitRecordVm(u32 vm, u32 file)
+		{
+			const auto& L = s_man.link;
+			if (!L.ai_wait_canon || !vm || !file || L.ai_wait_set_sig.empty() || L.ai_wait_yield_sig.empty())
+				return;
+			AiVm rec{vm, file, {}};
+			for (const auto& lp : L.ai_wait_loops)
+			{
+				const u32 a = (file + lp.set) & RAM_MASK, b = (file + lp.yield_pc) & RAM_MASK;
+				if (a + L.ai_wait_set_sig.size() <= Ps2MemSize::MainRam && b + L.ai_wait_yield_sig.size() <= Ps2MemSize::MainRam &&
+					std::memcmp(&eeMem->Main[a], L.ai_wait_set_sig.data(), L.ai_wait_set_sig.size()) == 0 &&
+					std::memcmp(&eeMem->Main[b], L.ai_wait_yield_sig.data(), L.ai_wait_yield_sig.size()) == 0)
+					rec.loops.push_back(&lp);
+			}
+			if (rec.loops.empty())
+				return;
+			s_ai_vms.erase(std::remove_if(s_ai_vms.begin(), s_ai_vms.end(), [vm](const AiVm& v) { return v.vm == vm; }), s_ai_vms.end());
+			s_ai_vms.push_back(std::move(rec));
+		}
+		// every thread of a recorded AI VM parked in a "wait for FIGHT or N frames" loop restarts its countdown now
+		void AiWaitCanon()
+		{
+			if (!s_man.link.ai_wait_canon)
+				return;
+			u32 n_written = 0;
+			for (const AiVm& v : s_ai_vms)
+			{
+				const u32 ctx = Rd(v.vm + 12), base = Rd(v.vm + 28), n = Rd(v.vm + 4) >> 16; // u16 at vm+6
+				if (!ctx || base != v.file)
+					continue; // the VM ended or was reused
+				for (u32 t = 1; t < n && t < 64; t++)
+				{
+					const u32 pc = Rd(ctx + 96 * t + 88);
+					for (const auto* lp : v.loops)
+						if (pc && pc - base == lp->yield_pc)
+						{
+							Wr(ctx + 96 * t + 4 * lp->reg, lp->value);
+							n_written++;
+						}
+				}
+			}
+			Console.WriteLn("GameRollback: ai_wait_canon: %u countdown(s) restarted (%zu AI VMs)", n_written, s_ai_vms.size());
+		}
+		// effect pools: free nodes relinked in pool-init order and zeroed; live nodes untouched
+		void FxCanon()
+		{
+			const auto& L = s_man.link;
+			if (!L.fx_canon)
+				return;
+			std::string log;
+			for (const auto& fl : L.fx_dlists)
+			{
+				// {+0 = 1 (head marker), +4 last, +8 first}; node {+0 self, +4 prev, +8 next}; FIFO, ascending at init
+				std::vector<u32> nodes;
+				for (u32 n = Rd(fl.head + 8), guard = 0; n && n != fl.head && guard < 65536; n = Rd(n + 8), guard++)
+					nodes.push_back(n);
+				std::sort(nodes.begin(), nodes.end());
+				for (size_t i = 0; i < nodes.size(); i++)
+				{
+					std::memset(&eeMem->Main[nodes[i] & RAM_MASK], 0, fl.stride);
+					Wr(nodes[i] + 0, nodes[i]);
+					Wr(nodes[i] + 4, i ? nodes[i - 1] : fl.head);
+					Wr(nodes[i] + 8, i + 1 < nodes.size() ? nodes[i + 1] : fl.head);
+				}
+				Wr(fl.head + 0, 1);
+				Wr(fl.head + 4, nodes.empty() ? fl.head : nodes.back());
+				Wr(fl.head + 8, nodes.empty() ? fl.head : nodes.front());
+				log += fmt::format(" d{:x}:{}", fl.head, nodes.size());
+			}
+			for (const auto& fl : L.fx_slists)
+			{
+				// singly linked LIFO {+0 next}; built by pushing ascending addresses, so the top is the highest
+				std::vector<u32> nodes;
+				for (u32 n = Rd(fl.head), guard = 0; n && guard < 65536; n = Rd(n), guard++)
+					nodes.push_back(n);
+				std::sort(nodes.begin(), nodes.end());
+				u32 top = 0;
+				for (const u32 n : nodes)
+				{
+					std::memset(&eeMem->Main[n & RAM_MASK], 0, fl.stride);
+					Wr(n, top);
+					top = n;
+				}
+				Wr(fl.head, top);
+				log += fmt::format(" s{:x}:{}", fl.head, nodes.size());
+			}
+			Console.WriteLn("GameRollback: fx_canon: free lists relinked:%s", log.c_str());
+		}
+
 		bool s_hold_frame = false; // decided at the first hold jump of the frame, reused by the others
 		u64 s_held_frames = 0;
 
@@ -2988,6 +3128,8 @@ namespace GameRollback
 					VlReport();
 					s_pre_attach_neutral = false;
 					ApplyWrites(s_man.link.attach_writes); // canonical state at every (re-)attach
+					FxCanon();
+					AiWaitCanon();
 					if (!s_link_dump_prefix.empty())
 					{
 						const std::string out = fmt::format("{}.gen{}", s_link_dump_prefix, s_battle_counter + 1);
