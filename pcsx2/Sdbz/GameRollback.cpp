@@ -1415,15 +1415,29 @@ namespace GameRollback
 			}
 		}
 
+		// the cross-peer checksum of the watched state: 8 bytes per step (multiply-rotate mix), ~8x the byte-wise FNV it
+		// replaces -- it runs on every save, forward and re-simulated. Both peers run the same build.
 		u32 HashState()
 		{
-			u64 h = 1469598103934665603ull;
+			u64 h = 0x9E3779B97F4A7C15ull;
 			for (const auto& [a, l] : s_hash_ranges)
 			{
 				const u8* p = &eeMem->Main[a & RAM_MASK];
-				for (u32 k = 0; k < l; k++)
+				u32 k = 0;
+				for (; k + 8 <= l; k += 8)
+				{
+					u64 w;
+					std::memcpy(&w, p + k, 8);
+					h = (h ^ w) * 0xFF51AFD7ED558CCDull;
+					h = (h << 31) | (h >> 33);
+				}
+				for (; k < l; k++)
 					h = (h ^ p[k]) * 1099511628211ull;
+				h ^= l; // range lengths are part of the state's shape
 			}
+			h ^= h >> 33;
+			h *= 0xC4CEB9FE1A85EC53ull;
+			h ^= h >> 29;
 			return static_cast<u32>(h ^ (h >> 32));
 		}
 		void BuildReport(const u8* in, u8* out)
