@@ -110,6 +110,10 @@ namespace
 		return {};
 	}
 
+	std::mutex s_loadFailMutex; // a script-requested state load that failed (CPU thread -> script frame)
+	std::string s_loadFailMsg;
+	u32 s_loadFailSerial = 0;
+
 	std::time_t FileMtime(const std::string& p)
 	{
 		FILESYSTEM_STAT_DATA sd;
@@ -537,7 +541,12 @@ namespace
 				if (VMManager::LoadState(path.c_str(), &err))
 					Console.WriteLnFmt("[Script] state loaded: {}", path);
 				else
+				{
 					Console.ErrorFmt("[Script] load_state {} failed: {}", path, err.GetDescription());
+					std::lock_guard lk(s_loadFailMutex);
+					s_loadFailMsg = err.GetDescription();
+					s_loadFailSerial++;
+				}
 			}, false);
 		});
 		eng.set_function("set_aspect", [](int i) { ScriptBridge::SetAspect(i); });
@@ -905,6 +914,35 @@ namespace Script
 		// Re-arm the per-call instruction budget each frame (resets the count).
 		lua_sethook(s_state->lua_state(), InsnBudgetHook, LUA_MASKCOUNT, SDBZ_LUA_INSN_BUDGET);
 		DrainDispatch(); // deliver queued hotkeys (on_hotkey) before this frame
+
+		// A script-requested load failed: tell the script (on_state_load_failed(message)), so a pending setup/ack can report it
+		static u32 s_seen_load_fail = 0;
+		{
+			std::string msg;
+			bool failed = false;
+			{
+				std::lock_guard lk(s_loadFailMutex);
+				if (s_loadFailSerial != s_seen_load_fail)
+				{
+					s_seen_load_fail = s_loadFailSerial;
+					msg = s_loadFailMsg;
+					failed = true;
+				}
+			}
+			if (failed)
+			{
+				sol::protected_function fn = (*s_state)["on_state_load_failed"];
+				if (fn.valid())
+				{
+					sol::protected_function_result r = fn(msg);
+					if (!r.valid())
+					{
+						sol::error e = r;
+						Console.ErrorFmt("[Script] on_state_load_failed error: {}", e.what());
+					}
+				}
+			}
+		}
 
 		// A savestate was loaded since the last frame: tell the script (it re-arms its own state; code patches were
 		// already reconciled on the CPU thread) -- on_state_load(reapplied, kept, dropped).
