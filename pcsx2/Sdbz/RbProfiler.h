@@ -31,6 +31,7 @@ namespace RbProfiler
 
 	// EE thread only: registers the calling thread as the sampled one (first call) and sets the current phase.
 	void SetPhase(Phase p);
+	Phase CurrentPhase();
 
 	void Start(u32 hz); // any thread
 	void Stop();

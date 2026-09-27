@@ -864,6 +864,7 @@ set(pcsx2ImGuiSources
 	Sdbz/PadFeed.cpp
 	Sdbz/PageSnapshotRing.cpp
 	Sdbz/EeBlockProf.cpp
+	Sdbz/MemCensus.cpp
 	Sdbz/RbProfiler.cpp
 	Sdbz/RollbackDevice.cpp
 	Sdbz/SdbzDeterminism.cpp
@@ -891,6 +892,7 @@ set(pcsx2ImGuiHeaders
 	Sdbz/PadFeed.h
 	Sdbz/PageSnapshotRing.h
 	Sdbz/EeBlockProf.h
+	Sdbz/MemCensus.h
 	Sdbz/RbProfiler.h
 	Sdbz/RollbackDevice.h
 	Sdbz/SdbzDeterminism.h
