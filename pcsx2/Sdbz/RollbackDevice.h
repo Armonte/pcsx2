@@ -81,6 +81,9 @@ namespace RollbackDevice
 	// Byte that is nonzero while the device re-simulates frames (tested by native EeHooks resim gates).
 	const u8* ResimulatingFlag();
 	const u8* ResimNonFinalFlag(); // byte: re-simulating a frame that is not the rollback's last
+	const u8* ResimABFlag();         // byte: re-simulating in an A/B "on" rollback (every other one)
+	const u8* ResimNonFinalABFlag(); // byte: ResimNonFinalFlag && A/B "on" rollback
+	void MarkABUsed();               // report the interleaved A/B resim comparison
 	bool ProbeLogDump(const std::string& path); // every probe call (trace on): frame, gate value, phase, fn, ra, a0..a3
 
 	// Call tracing from host-side hooks (EeHooks): id as CMD_RNG_TRACE ids, the caller's return address and a0..a3.

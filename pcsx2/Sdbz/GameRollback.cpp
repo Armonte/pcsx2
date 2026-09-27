@@ -492,6 +492,7 @@ namespace GameRollback
 			std::vector<Step> steps;
 			std::vector<u32> resim_gates, resim_skips, always_skips;
 			std::vector<u32> resim_skips_nonfinal; // skipped on re-simulated frames but the last (pure derived outputs)
+			std::vector<u32> ab_hooks;             // gate/skip entries marked `ab: true` (interleaved A/B experiment)
 			std::vector<EntryAction> entry_actions;
 			u32 pad_read_fn = 0, pad_site = 0;
 			u32 pad_mode = 0x73; // report mode byte every netplay peer builds reports with (the game's configured pad mode)
@@ -623,6 +624,20 @@ namespace GameRollback
 				op.if_nonzero = Get(a, "if_nonzero", 0);
 			}
 			return op;
+		}
+		// `{addr: X, ab: true}`: the entry is an interleaved A/B experiment (acts on every other rollback only)
+		bool IsAB(const ryml::ConstNodeRef& c)
+		{
+			if (!c.is_map() || !c.has_child("ab"))
+				return false;
+			const ryml::csubstr v = c["ab"].val();
+			return v == "true" || v == "1" || v == "yes";
+		}
+		void CollectAB(const ryml::ConstNodeRef& n, std::vector<u32>* out)
+		{
+			for (const ryml::ConstNodeRef& c : n.children())
+				if (IsAB(c))
+					out->push_back(Get(c, "addr", 0));
 		}
 		std::vector<u32> ParseList(const ryml::ConstNodeRef& n)
 		{
@@ -828,12 +843,20 @@ namespace GameRollback
 						m->resim_gates.push_back(a);
 						if (c.is_map() && Has(c, "v0"))
 							m->gate_values[a] = Get(c, "v0", 0);
+						if (IsAB(c))
+							m->ab_hooks.push_back(a);
 					}
 				}
 				if (Has(h, "resim_skip_call"))
+				{
 					m->resim_skips = ParseList(Child(h, "resim_skip_call"));
+					CollectAB(Child(h, "resim_skip_call"), &m->ab_hooks);
+				}
 				if (Has(h, "resim_skip_call_nonfinal"))
+				{
 					m->resim_skips_nonfinal = ParseList(Child(h, "resim_skip_call_nonfinal"));
+					CollectAB(Child(h, "resim_skip_call_nonfinal"), &m->ab_hooks);
+				}
 				if (Has(h, "skip_call"))
 					m->always_skips = ParseList(Child(h, "skip_call"));
 				if (Has(h, "entry_actions"))
@@ -2619,6 +2642,11 @@ namespace GameRollback
 			{
 				EeHooks::AddSkipCall(a, true, EeHooks::OWNER_GAME);
 				s_installed.push_back(a);
+			}
+			for (const u32 a : s_man.ab_hooks)
+			{
+				EeHooks::SetAB(a);
+				Console.WriteLn("GameRollback: %08X is an interleaved A/B experiment (every other rollback)", a);
 			}
 		}
 		void InstallTraceHooks() {} // part of the chains (BuildChains)

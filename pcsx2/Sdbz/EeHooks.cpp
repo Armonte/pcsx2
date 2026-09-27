@@ -26,6 +26,7 @@ namespace EeHooks
 			Owner owner = OWNER_SCRIPT;
 			std::vector<u32> ra_filter;
 			u32 v0 = 0; // ResimGateRet
+			bool ab = false; // interleaved A/B: acts only on the rollback device's A/B "on" rollbacks
 		};
 		std::mutex s_mtx;
 		std::unordered_map<u32, Hook> s_hooks;
@@ -65,6 +66,31 @@ namespace EeHooks
 
 	void AddResimGate(u32 pc, Owner owner) { Set(pc, {Kind::ResimGate, {}, owner}); }
 	void AddResimGateRet(u32 pc, u32 v0, Owner owner) { Set(pc, {Kind::ResimGateRet, {}, owner, {}, v0}); }
+	void SetAB(u32 pc)
+	{
+		{
+			std::lock_guard lk(s_mtx);
+			const auto it = s_hooks.find(Key(pc));
+			if (it == s_hooks.end())
+				return;
+			it->second.ab = true;
+		}
+		RollbackDevice::MarkABUsed();
+		Invalidate(pc);
+	}
+	const u8* ResimFlagFor(u32 pc)
+	{
+		bool ab = false;
+		Kind kind = Kind::None;
+		{
+			std::lock_guard lk(s_mtx);
+			if (const auto it = s_hooks.find(Key(pc)); it != s_hooks.end())
+				ab = it->second.ab, kind = it->second.kind;
+		}
+		if (kind == Kind::SkipCallResimNonFinal)
+			return ab ? RollbackDevice::ResimNonFinalABFlag() : RollbackDevice::ResimNonFinalFlag();
+		return ab ? RollbackDevice::ResimABFlag() : RollbackDevice::ResimulatingFlag();
+	}
 	u32 GateReturnValue(u32 pc)
 	{
 		std::lock_guard lk(s_mtx);

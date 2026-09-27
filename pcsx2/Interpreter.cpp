@@ -175,15 +175,15 @@ static void execI()
 	// EE hooks (Sdbz/EeHooks.h), same semantics as the recompiler's block-entry hooks
 	if (const EeHooks::Kind hook = EeHooks::Lookup(cpuRegs.pc); hook != EeHooks::Kind::None) [[unlikely]]
 	{
-		if ((hook == EeHooks::Kind::ResimGate || hook == EeHooks::Kind::ResimGateRet) && *EeHooks::ResimFlag())
+		if ((hook == EeHooks::Kind::ResimGate || hook == EeHooks::Kind::ResimGateRet) && *EeHooks::ResimFlagFor(cpuRegs.pc))
 		{
 			if (hook == EeHooks::Kind::ResimGateRet)
 				cpuRegs.GPR.n.v0.SD[0] = static_cast<s32>(EeHooks::GateReturnValue(cpuRegs.pc));
 			cpuRegs.pc = cpuRegs.GPR.n.ra.UL[0];
 			return;
 		}
-		if (hook == EeHooks::Kind::SkipCallAlways || (hook == EeHooks::Kind::SkipCallResim && *EeHooks::ResimFlag()) ||
-			(hook == EeHooks::Kind::SkipCallResimNonFinal && *EeHooks::ResimNonFinalFlag()))
+		if (hook == EeHooks::Kind::SkipCallAlways ||
+			((hook == EeHooks::Kind::SkipCallResim || hook == EeHooks::Kind::SkipCallResimNonFinal) && *EeHooks::ResimFlagFor(cpuRegs.pc)))
 		{
 			cpuRegs.pc += 4; // the delay slot runs next, then execution continues after the call
 			return;

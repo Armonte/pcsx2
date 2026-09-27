@@ -51,6 +51,9 @@ namespace EeHooks
 	void AddResimGate(u32 pc, Owner owner = OWNER_SCRIPT);
 	void AddResimGateRet(u32 pc, u32 v0, Owner owner = OWNER_SCRIPT);
 	u32 GateReturnValue(u32 pc);
+	// Interleaved A/B: the hook at pc (gate / resim skip) acts only on every other rollback; the rollback device reports
+	// the paired resim-time comparison.
+	void SetAB(u32 pc);
 	void AddSkipCall(u32 site, bool always, Owner owner = OWNER_SCRIPT);
 	void AddSkipCallNonFinal(u32 site, Owner owner = OWNER_SCRIPT); // skipped on re-simulated frames but the last
 	void AddCall(u32 pc, Handler handler, Owner owner = OWNER_SCRIPT);
@@ -66,6 +69,7 @@ namespace EeHooks
 	std::vector<u32> CallFilter(u32 pc); // empty = no filter
 	const u8* ResimFlag();        // byte the ResimGate tests (nonzero while re-simulating)
 	const u8* ResimNonFinalFlag(); // nonzero on a re-simulated frame that is not the last one of its rollback
+	const u8* ResimFlagFor(u32 pc); // the byte the gate/skip hook at pc tests (resim, non-final, or their A/B variants)
 	u64* GateReturnCounter();     // incremented natively each time a ResimGate returns early
 	u64 GateReturns();
 } // namespace EeHooks
