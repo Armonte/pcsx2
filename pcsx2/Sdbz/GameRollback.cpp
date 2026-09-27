@@ -1166,6 +1166,9 @@ namespace GameRollback
 		bool s_remote_pick_valid = false;
 		s32 s_remote_choice = -1;                // the peer's one-more choice (MSG_CHOICE)
 		bool s_attach_req = false, s_detach_req = false, s_onemore = false, s_choice_sent = false;
+		// from the battle commit / the agreed one-more choice until the attach: both ports read an identical neutral pad
+		// on both peers (the fighters exist and latch input before the attach point; notes/ASYNC_MENUS_ATTACH.md)
+		bool s_pre_attach_neutral = false;
 		s32 s_menu_frame = 0;
 		u32 s_battle_counter = 0;
 		std::vector<u32> s_link_hooks;
@@ -2496,6 +2499,7 @@ namespace GameRollback
 			if (s_man.link.seed_addr)
 				Wr(s_man.link.seed_addr, s_local == 0 ? mine[sel.size()] : s_remote_pick[sel.size()]);
 			s_remote_pick_valid = false;
+			s_pre_attach_neutral = true;
 			Console.WriteLn("GameRollback: link: selections committed (%zu values)", sel.size());
 		}
 		void InstallLinkHooks()
@@ -2565,6 +2569,7 @@ namespace GameRollback
 								const bool retry = mine == static_cast<s32>(s_man.link.retry_value) &&
 												   s_remote_choice == static_cast<s32>(s_man.link.retry_value);
 								ApplyWrites(retry ? s_man.link.retry_writes : s_man.link.css_writes);
+								s_pre_attach_neutral = retry; // RETRY: straight to the attach point with neutral pads
 								Console.WriteLn("GameRollback: link: one-more %s (mine %d, peer %d)", retry ? "RETRY" : "CHARACTER SELECT",
 									mine, s_remote_choice);
 							}
@@ -2595,6 +2600,7 @@ namespace GameRollback
 						LinkPump();
 						std::this_thread::sleep_for(std::chrono::milliseconds(1));
 					}
+					s_pre_attach_neutral = false;
 					ApplyWrites(s_man.link.attach_writes); // canonical state at every (re-)attach
 					if (!s_link_dump_prefix.empty())
 					{
@@ -2648,6 +2654,12 @@ namespace GameRollback
 		{
 			if (player > 1)
 				return false;
+			if (s_pre_attach_neutral)
+			{
+				static constexpr u8 NEUTRAL[6] = {0, 0, 0x80, 0x80, 0x80, 0x80};
+				BuildReport(NEUTRAL, buf);
+				return true;
+			}
 			const u32 local_port = s_onemore ? 0u : static_cast<u32>(s_local);
 			u8 in[6];
 			if (s_onemore)
