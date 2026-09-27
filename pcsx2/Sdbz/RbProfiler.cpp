@@ -3,6 +3,7 @@
 
 #include "Sdbz/RbProfiler.h"
 #include "Sdbz/EeBlockProf.h"
+#include "Sdbz/EeCallGraph.h"
 
 #include "Memory.h"
 #include "R5900.h"
@@ -106,6 +107,8 @@ namespace RbProfiler
 				const bool ok = GetThreadContext(th, &ctx) != 0;
 				const u8 ph = s_phase.load(std::memory_order_relaxed);
 				const u32 ee_pc = cpuRegs.pc; // last block entry the recompiler stored (EE thread is suspended)
+				if (ok && EeCallGraph::Enabled() && (ph == PH_RESIM || ph == PH_SIM || ph == PH_RENDER))
+					EeCallGraph::HostSample(ph == PH_RESIM); // the suspended EE thread's shadow call stack
 				ResumeThread(th);
 				if (!ok)
 					continue;

@@ -6,6 +6,7 @@
 #include "Sdbz/GameRollback.h"
 #include "Sdbz/EeBlockProf.h"
 #include "Sdbz/MemCensus.h"
+#include "Sdbz/EeCallGraph.h"
 #include "Sdbz/EeHooks.h"
 #include "Sdbz/PcInput.h"
 #include "Sdbz/SdbzDeterminism.h" // rollback.* Lua table (Phase-0 determinism harness)
@@ -301,6 +302,9 @@ namespace
 			MemCensus::Start(std::move(ranges), m.find('r') != std::string::npos, m.find('w') != std::string::npos);
 		});
 		rd.set_function("census_stop", []() { MemCensus::Stop(); });
+		rd.set_function("callgraph_start", []() { EeCallGraph::Start(); });
+		rd.set_function("callgraph_stop", []() { EeCallGraph::Stop(); });
+		rd.set_function("callgraph_dump", [](std::string path) { return EeCallGraph::DumpFile(path); });
 		rd.set_function("census_dump", [](std::string path) { return MemCensus::DumpFile(path); });
 		rd.set_function("block_prof_stop", []() { EeBlockProf::Stop(); });
 		rd.set_function("block_prof_dump", [](std::string path) { return EeBlockProf::DumpFile(path); });
