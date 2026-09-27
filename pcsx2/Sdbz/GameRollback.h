@@ -6,6 +6,7 @@
 #include "common/Pcsx2Defs.h"
 
 #include <string>
+#include <vector>
 
 // Manifest-driven in-engine rollback for a PS2 game (pcsx2/Sdbz/ARCHITECTURE.md).
 //
@@ -49,7 +50,8 @@ namespace GameRollback
 	std::string LinkBadge();
 	// Game task profiler: inclusive EE cycles + host time per task function, split normal / re-simulated frames.
 	// call_pc = the dispatcher's jalr (task fn in fn_reg), ret_pc = the instruction after it (FUC 0x211230/0x211238, $v1).
-	bool TaskProfStart(u32 call_pc, u32 ret_pc, u32 fn_reg);
+	// vm_fns: task functions whose data+8 is a Seq VM: their cost is split per script (keyed by the script base).
+	bool TaskProfStart(u32 call_pc, u32 ret_pc, u32 fn_reg, std::vector<u32> vm_fns = {});
 	void TaskProfStop();
 	std::string TaskProfReport(u32 top_n);
 	void SetFileWatch(bool on);
