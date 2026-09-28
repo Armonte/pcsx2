@@ -252,7 +252,7 @@ const char* GameList::EntryCompatibilityRatingToString(CompatibilityRating ratin
 
 bool GameList::IsScannableFilename(const std::string_view path)
 {
-	return // VMManager::IsDiscFileName(path) ||
+	return VMManager::IsDiscFileName(path) || // integration needs discs (PS2 ISOs); pcsx2x6 had disabled disc scanning
 		VMManager::IsElfFileName(path) ||
 		VMManager::isArcadeManifest(path);
 }
